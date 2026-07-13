@@ -1,0 +1,202 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: system-ui, 'Segoe UI', 'Noto Sans KR', sans-serif;
+  --font-serif: Georgia, 'Noto Serif KR', serif;
+
+  /* Surface Hierarchy */
+  --color-surface: #f7fafc;
+  --color-surface-dim: #e1e9ed;
+  --color-surface-container-lowest: #ffffff;
+  --color-surface-container-low: #f0f5f8;
+  --color-surface-container: #e7eff3;
+  --color-surface-container-high: #dfe8ed;
+  --color-surface-container-highest: #d7e5eb;
+
+  /* Primary */
+  --color-primary: #585e6c;
+  --color-primary-dim: #4c5260;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #dce2f0;
+
+  /* Secondary */
+  --color-secondary: #5d5f65;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #e3e5ea;
+
+  /* Tertiary / Highlight */
+  --color-tertiary-fixed: #fcb259;
+  --color-on-tertiary-fixed: #3a2e00;
+
+  /* Error / Unknown highlight */
+  --color-error: #9f403d;
+  --color-error-container: #fe8983;
+  --color-on-error: #ffffff;
+
+  /* Text */
+  --color-on-surface: #283439;
+  --color-on-surface-variant: #6b7a82;
+  --color-outline: #8a969d;
+  --color-outline-variant: #c4cdd2;
+}
+
+:root {
+  --background: #f7fafc;
+  --foreground: #283439;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: system-ui, 'Segoe UI', 'Noto Sans KR', sans-serif;
+}
+
+:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-primary) 70%, transparent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-outline-variant);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-outline);
+}
+
+/* Typography utilities */
+.font-editorial {
+  font-family: Georgia, 'Noto Serif KR', serif;
+}
+
+.font-functional {
+  font-family: system-ui, 'Segoe UI', 'Noto Sans KR', sans-serif;
+}
+
+/* Glass effect */
+.glass {
+  background: rgba(231, 239, 243, 0.7);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* Ghost border */
+.ghost-border {
+  border: 1px solid rgba(196, 205, 210, 0.15);
+}
+
+/* Highlight styles */
+.highlight-important {
+  background-color: rgba(252, 178, 89, 0.35);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+.highlight-unknown {
+  background-color: rgba(254, 137, 131, 0.35);
+  border-radius: 2px;
+  padding: 0 2px;
+}
+
+/* Ambient shadow for modals */
+.shadow-ambient {
+  box-shadow: 0 20px 40px rgba(40, 52, 57, 0.05);
+}
+
+/* Gradient button */
+.btn-gradient {
+  background: linear-gradient(135deg, #585e6c 0%, #4c5260 100%);
+}
+
+.chat-markdown .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.35rem 0;
+}
+
+.chat-markdown code {
+  font-family: system-ui, 'Segoe UI', 'Noto Sans KR', sans-serif;
+}
+
+.pdf-page-shell {
+  position: relative;
+  contain: layout paint style;
+  content-visibility: auto;
+  contain-intrinsic-size: 900px 1270px;
+}
+
+.pdf-page-shell .react-pdf__Page {
+  position: relative;
+}
+
+.pdf-page-shell canvas {
+  display: block;
+}
+
+.pdf-page-shell .react-pdf__Page__textContent {
+  user-select: text;
+  cursor: text;
+  z-index: 2;
+}
+
+.pdf-highlight-layer {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+}
+
+.pdf-highlight-layer--interactive {
+  pointer-events: auto;
+}
+
+.pdf-highlight-box {
+  position: absolute;
+  border-radius: 2px;
+  mix-blend-mode: multiply;
+  border: 0;
+  padding: 0;
+  z-index: 4;
+}
+
+.pdf-highlight-box--interactive {
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.pdf-highlight-box--interactive:hover {
+  outline: 1px solid rgba(40, 52, 57, 0.28);
+}
+
+.pdf-highlight-box--selected {
+  outline: 2px solid rgba(40, 52, 57, 0.45);
+}
+
+.pdf-highlight-box--important {
+  background: rgba(252, 178, 89, 0.32);
+}
+
+.pdf-highlight-box--unknown {
+  background: rgba(254, 137, 131, 0.28);
+}
