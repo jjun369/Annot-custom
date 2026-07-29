@@ -2,11 +2,14 @@ import path from 'path';
 
 import { getProviderRuntime } from '@/lib/ai-providers';
 import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
-import { AIProvider } from '@/types';
+import { AUTO_MODEL_ID, normalizeModelPreference } from '@/lib/ai-providers/model-policy';
+import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
+import { AIProvider, ReasoningEffort } from '@/types';
 
 export interface PaperAiInput {
   pdfPath: string;
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   provider?: AIProvider;
   prompt: string;
 }
@@ -14,14 +17,13 @@ export interface PaperAiInput {
 export async function runPaperAiTask(input: PaperAiInput): Promise<{ content: string; model: string }> {
   const provider = input.provider ?? DEFAULT_AI_PROVIDER;
   const runtime = getProviderRuntime(provider);
-  const models = input.model ? null : await runtime.listModels();
-  const model = input.model || models?.[0]?.id;
-  if (!model) {
-    throw new Error('사용할 수 있는 AI 모델을 찾지 못했습니다. 설정에서 연결 상태를 확인해 주세요.');
-  }
+  const model = input.model
+    ? normalizeModelPreference(input.model)
+    : AUTO_MODEL_ID;
   const folderPath = path.posix.dirname(input.pdfPath.replace(/\\/g, '/'));
   const result = await runtime.runTurn({
     model,
+    reasoningEffort: normalizeReasoningEffort(input.reasoningEffort),
     folderPath: folderPath === '.' ? '' : folderPath,
     sessionKind: 'pdf',
     prompt: input.prompt,

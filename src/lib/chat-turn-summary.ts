@@ -1,10 +1,11 @@
 import { ProviderRuntime } from '@/lib/ai-providers/types';
-import { AIProvider, ChatMessage, Session, SessionTurnSummary } from '@/types';
+import { AIProvider, ChatMessage, ReasoningEffort, Session, SessionTurnSummary } from '@/types';
 
 interface GenerateSessionTurnSummariesInput {
   runtime: ProviderRuntime;
   provider: AIProvider;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   session: Session;
 }
 
@@ -107,6 +108,7 @@ export async function generateSessionTurnSummaries({
   runtime,
   provider,
   model,
+  reasoningEffort,
   session,
 }: GenerateSessionTurnSummariesInput): Promise<SessionTurnSummary[]> {
   const pairs = collectTurnPairs(session.messages);
@@ -141,6 +143,7 @@ export async function generateSessionTurnSummaries({
   try {
     const result = await runtime.runTurn({
       model,
+      reasoningEffort,
       folderPath: session.folderPath,
       prompt,
       sessionKind: session.sessionKind,

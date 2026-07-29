@@ -1,10 +1,17 @@
-import { SessionKind, AIProvider } from '@/types';
+import { SessionKind, AIProvider, ReasoningEffort } from '@/types';
+
+export interface ProviderReasoningLevel {
+  effort: ReasoningEffort;
+  description?: string;
+}
 
 export interface ProviderModel {
   id: string;
   owned_by: string;
   created: number;
   display_name?: string;
+  default_reasoning_level?: ReasoningEffort;
+  supported_reasoning_levels?: ProviderReasoningLevel[];
 }
 
 export interface ProviderStatus {
@@ -38,6 +45,7 @@ export interface ProviderTurnEvent {
 export interface ProviderTurnInput {
   providerSessionId?: string;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   folderPath: string;
   sessionKind: SessionKind;
   prompt: string;

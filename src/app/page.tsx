@@ -9,6 +9,8 @@ import { FolderView } from '@/components/workspace/FolderView';
 import { ChatPanel } from '@/components/workspace/ChatPanel';
 import { Topbar } from '@/components/layout/Topbar';
 import { findNode, getParentFolderPath } from '@/lib/tree-utils';
+import { PageDockMark } from '@/components/common/PageDockMark';
+import { OnboardingDialog } from '@/components/common/OnboardingDialog';
 
 const PdfViewer = dynamic(
   () => import('@/components/workspace/PdfViewer').then((mod) => mod.PdfViewer),
@@ -281,7 +283,7 @@ export default function AppPage() {
             ...current,
             treeRoot: {
               id: 'root',
-              name: 'Annot',
+              name: 'PageDock Library',
               type: 'folder',
               path: '',
               children: [],
@@ -353,6 +355,7 @@ export default function AppPage() {
   return (
     <WorkspaceContext value={contextValue}>
       <div className="h-full flex flex-col">
+        <OnboardingDialog />
         <Topbar />
         <div className="flex-1 flex overflow-hidden">
           {/* Tree Explorer */}
@@ -374,8 +377,8 @@ export default function AppPage() {
               // Nothing selected — empty state
               <div className="flex-1 flex items-center justify-center">
                 <div className="text-center">
-                  <div className="text-5xl mb-4 text-outline-variant">A.</div>
-                  <h2 className="text-lg font-semibold text-on-surface mb-1">Annot</h2>
+                  <PageDockMark size={56} className="mx-auto mb-4 rounded-xl opacity-90" />
+                  <h2 className="text-lg font-semibold text-on-surface mb-1">PageDock</h2>
                   <p className="font-editorial text-sm text-on-surface-variant italic">
                     왼쪽 탐색기에서 폴더를 선택해 시작하세요.
                   </p>

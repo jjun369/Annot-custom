@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { runPaperAiTask } from '@/lib/paper-ai';
 import { addPaperTranslation, deletePaperTranslation } from '@/lib/paper-metadata';
 import { extractPdfTextByPage, PdfTextPage } from '@/lib/pdf-text';
-import { AIProvider, PaperTranslation } from '@/types';
+import { AIProvider, PaperTranslation, ReasoningEffort } from '@/types';
 
 function splitPageText(text: string, maxCharacters = 12000): string[] {
   const normalized = text.replace(/\r/g, '').trim();
@@ -27,6 +27,7 @@ async function translateFullPdf(
   pdfPath: string,
   model?: string,
   provider?: AIProvider,
+  reasoningEffort?: ReasoningEffort,
 ): Promise<{ sourceMarkdown: string; translatedMarkdown: string; bilingualMarkdown: string; model?: string }> {
   let pages: PdfTextPage[] = [];
   try {
@@ -38,6 +39,7 @@ async function translateFullPdf(
       pdfPath,
       model,
       provider,
+      reasoningEffort,
       prompt: [
         '현재 PDF 논문 전체를 페이지와 절 구조를 유지한 한영 대조 Markdown으로 번역하세요.',
         '각 페이지는 `## 페이지 N`, 원문은 `### 원문`, 번역은 `### 한국어 번역`으로 표시하세요.',
@@ -71,6 +73,7 @@ async function translateFullPdf(
         pdfPath,
         model,
         provider,
+        reasoningEffort,
         prompt: [
           `현재 PDF의 ${page.page}페이지 ${chunks.length > 1 ? `${index + 1}/${chunks.length}번째 원문 블록` : '원문'}을 번역하세요.`,
           '자연스럽고 정확한 한국어로 번역하고, 수식·기호·인용 번호·전문 용어의 의미를 보존하세요.',
@@ -125,6 +128,7 @@ export async function POST(req: NextRequest) {
       kind?: 'selection' | 'full';
       sourceText?: string;
       model?: string;
+      reasoningEffort?: ReasoningEffort;
       provider?: AIProvider;
     };
     if (!body.pdfPath?.trim() || (body.kind !== 'selection' && body.kind !== 'full')) {
@@ -135,7 +139,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (body.kind === 'full') {
-      const result = await translateFullPdf(body.pdfPath, body.model, body.provider);
+      const result = await translateFullPdf(body.pdfPath, body.model, body.provider, body.reasoningEffort);
       return NextResponse.json({
         kind: 'full',
         title: '전체 논문 한영 대조 번역',
@@ -161,6 +165,7 @@ export async function POST(req: NextRequest) {
     const result = await runPaperAiTask({
       pdfPath: body.pdfPath,
       model: body.model,
+      reasoningEffort: body.reasoningEffort,
       provider: body.provider,
       prompt,
     });

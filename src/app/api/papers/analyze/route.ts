@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from 'next/server';
 
 import { extractJsonObject, runPaperAiTask } from '@/lib/paper-ai';
 import { updatePaperMetadata } from '@/lib/paper-metadata';
-import { AIProvider } from '@/types';
+import { AIProvider, ReasoningEffort } from '@/types';
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json() as {
       pdfPath?: string;
       model?: string;
+      reasoningEffort?: ReasoningEffort;
       provider?: AIProvider;
     };
     if (!body.pdfPath?.trim()) {
@@ -18,6 +19,7 @@ export async function POST(req: NextRequest) {
     const result = await runPaperAiTask({
       pdfPath: body.pdfPath,
       model: body.model,
+      reasoningEffort: body.reasoningEffort,
       provider: body.provider,
       prompt: [
         '현재 PDF 논문을 직접 읽고 한국어로 분석하세요.',

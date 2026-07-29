@@ -1,9 +1,11 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useWorkspace } from '@/lib/workspace-store';
 import { Highlight } from '@/types';
 import { getHighlightRects, mergeHighlights, normalizeHighlightRects, type HighlightRect } from '@/lib/highlight-utils';
+import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
+import { readStoredReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
 import { MarkdownPreviewDialog } from '@/components/common/MarkdownPreviewDialog';
 import {
   Minus,
@@ -588,7 +590,7 @@ export function PdfViewer() {
       setHighlights(nextHighlights);
       setSelectedHighlightKey(null);
       setSelectionNotice(data.warning
-        ? `${highlightMode === 'important' ? '중요' : '확인 필요'} 하이라이트를 Annot에 저장했습니다. PDF 원본 반영은 보류되었습니다.`
+        ? `${highlightMode === 'important' ? '중요' : '확인 필요'} 하이라이트를 PageDock에 저장했습니다. PDF 원본 반영은 보류되었습니다.`
         : `${highlightMode === 'important' ? '중요' : '확인 필요'} 하이라이트를 저장했습니다.`);
     } catch (error) {
       const message = error instanceof Error ? error.message : '하이라이트를 저장하지 못했습니다.';
@@ -767,6 +769,37 @@ export function PdfViewer() {
     setExportDialogOpen(false);
   };
 
+  const handlePageClick = (
+    event: ReactMouseEvent<HTMLDivElement>,
+    pageHighlights: Highlight[],
+  ) => {
+    if (highlightMode || eraseMode) return;
+
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.toString().trim()) {
+      return;
+    }
+
+    const pageRect = event.currentTarget.getBoundingClientRect();
+    if (pageRect.width <= 0 || pageRect.height <= 0) return;
+    const point = {
+      x: (event.clientX - pageRect.left) / pageRect.width,
+      y: (event.clientY - pageRect.top) / pageRect.height,
+    };
+    const matchedHighlight = [...pageHighlights].reverse().find((highlight) => (
+      getHighlightRects(highlight).some((rect) => (
+        point.x >= rect.x &&
+        point.x <= rect.x + rect.width &&
+        point.y >= rect.y &&
+        point.y <= rect.y + rect.height
+      ))
+    ));
+
+    if (matchedHighlight) {
+      handleHighlightClick(matchedHighlight);
+    }
+  };
+
   const handleTranslate = async (kind: 'selection' | 'full') => {
     const sourceText = kind === 'selection' ? window.getSelection()?.toString().trim() || '' : '';
     if (kind === 'selection' && !sourceText) {
@@ -784,7 +817,8 @@ export function PdfViewer() {
           pdfPath: activePdfPath,
           kind,
           sourceText,
-          model: window.localStorage.getItem('annot-last-model') || undefined,
+          model: normalizeModelPreference(window.localStorage.getItem('annot-last-model')),
+          reasoningEffort: readStoredReasoningEffort(),
         }),
       });
       const data = await res.json();
@@ -843,6 +877,7 @@ export function PdfViewer() {
         data-page-number={targetPage}
         className="pdf-page-shell overflow-hidden rounded-xl shadow-ambient"
         style={{ minHeight: `${pageHeight}px`, width: `${pageWidth}px` }}
+        onClick={(event) => handlePageClick(event, pageHighlights)}
         onMouseUp={() => {
           const pageShell = pageShellRefs.current[targetPage];
 
@@ -887,21 +922,15 @@ export function PdfViewer() {
         ) : (
           <div className="bg-surface-container-lowest" style={{ minHeight: `${pageHeight}px` }} />
         )}
-        {shouldRenderPage && <div className={`pdf-highlight-layer ${!highlightMode && !eraseMode ? 'pdf-highlight-layer--interactive' : ''}`}>
+        {shouldRenderPage && <div className="pdf-highlight-layer" aria-hidden="true">
           {pageHighlights.map((highlight) => {
             const rects = getHighlightRects(highlight);
             const highlightKey = highlight.annotationId || highlight.id;
             const isSelected = highlightKey === selectedHighlightKey;
 
             return rects.map((rect, index) => (
-              <button
-                type="button"
+              <span
                 key={`${highlight.id}-${index}`}
-                onClick={(event) => {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  handleHighlightClick(highlight);
-                }}
                 className={`pdf-highlight-box pdf-highlight-box--${highlight.type} ${
                   !highlightMode && !eraseMode ? 'pdf-highlight-box--interactive' : ''
                 } ${isSelected ? 'pdf-highlight-box--selected' : ''}`}
@@ -1413,8 +1442,8 @@ export function PdfViewer() {
             <div className="mt-4 flex items-center justify-between gap-3">
               <p className="text-[11px] text-on-surface-variant">
                 {selectedHighlight.annotationId
-                  ? '메모는 PDF 주석과 Annot 기록에 함께 저장됩니다.'
-                  : 'PDF 원본에 아직 반영되지 않아 Annot 기록에 저장합니다.'}
+                  ? '메모는 PDF 주석과 PageDock 기록에 함께 저장됩니다.'
+                  : 'PDF 원본에 아직 반영되지 않아 PageDock 기록에 저장합니다.'}
               </p>
               <div className="flex items-center gap-2">
                 <button

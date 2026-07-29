@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { appendMessage, getSession, updateSession } from '@/lib/annot-sessions';
 import { getProviderRuntime } from '@/lib/ai-providers';
+import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
+import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
+import type { ReasoningEffort } from '@/types';
 
 export async function POST(req: NextRequest) {
   try {
@@ -10,12 +13,14 @@ export async function POST(req: NextRequest) {
       sessionId,
       prompt,
       model,
+      reasoningEffort,
       currentPdfPath,
     } = body as {
       folderPath?: string;
       sessionId?: string;
       prompt?: string;
       model?: string;
+      reasoningEffort?: ReasoningEffort;
       currentPdfPath?: string | null;
     };
 
@@ -40,7 +45,13 @@ export async function POST(req: NextRequest) {
       content: prompt.trim(),
       timestamp: new Date().toISOString(),
     };
-    const resolvedModel = model || session.model || 'gpt-5.4-mini';
+    const sessionModel = normalizeModelPreference(session.model);
+    const resolvedModel = normalizeModelPreference(model || sessionModel);
+    const sessionReasoningEffort = normalizeReasoningEffort(session.reasoningEffort);
+    const resolvedReasoningEffort = normalizeReasoningEffort(reasoningEffort || sessionReasoningEffort);
+    const providerSessionId = resolvedModel === sessionModel && resolvedReasoningEffort === sessionReasoningEffort
+      ? session.providerSessionId
+      : undefined;
     const runtime = getProviderRuntime(session.provider);
     const encoder = new TextEncoder();
 
@@ -53,8 +64,9 @@ export async function POST(req: NextRequest) {
         void (async () => {
           try {
             const turn = await runtime.runTurn({
-              providerSessionId: session.providerSessionId,
+              providerSessionId,
               model: resolvedModel,
+              reasoningEffort: resolvedReasoningEffort,
               folderPath,
               prompt: prompt.trim(),
               sessionKind: session.sessionKind,
@@ -71,6 +83,7 @@ export async function POST(req: NextRequest) {
               content: turn.content,
               timestamp: new Date().toISOString(),
               model: resolvedModel,
+              reasoningEffort: resolvedReasoningEffort,
             };
 
             const nextMessages = appendMessage(

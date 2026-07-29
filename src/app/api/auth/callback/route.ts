@@ -5,7 +5,7 @@ export async function GET() {
 <html>
 <head>
   <meta charset="utf-8">
-  <title>Codex 로그인 필요 — Annot</title>
+  <title>Codex 로그인 필요 — PageDock</title>
   <style>
     body {
       font-family: 'Manrope', -apple-system, BlinkMacSystemFont, sans-serif;
@@ -47,8 +47,8 @@ export async function GET() {
 <body>
   <div class="card">
     <h1>브라우저 로그인을 사용하지 않습니다</h1>
-    <p>Annot은 이 컴퓨터에 이미 연결된 Codex 로그인을 사용합니다. Codex에 로그인한 뒤 설정으로 돌아와 연결 상태를 새로고침하세요.</p>
-    <div class="brand">Annot &mdash; PDF 논문 연구 도구</div>
+    <p>PageDock 설정에서 공식 Codex 브라우저 로그인을 완료한 뒤 연결 상태를 새로고침하세요.</p>
+    <div class="brand">PageDock &mdash; AI PDF 공부 도구</div>
   </div>
 </body>
 </html>`;

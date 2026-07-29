@@ -14,7 +14,7 @@ export async function GET(req: NextRequest) {
     return new NextResponse(Readable.toWeb(data as Readable) as ReadableStream, {
       headers: {
         'Content-Type': 'application/zip',
-        'Content-Disposition': `attachment; filename="annot-backup-${date}.zip"`,
+        'Content-Disposition': `attachment; filename="pagedock-backup-${date}.zip"`,
         'Cache-Control': 'no-store',
       },
     });

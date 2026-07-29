@@ -11,6 +11,7 @@ import { restoreSessions } from '@/lib/annot-sessions';
 import { replacePaperMetadata } from '@/lib/paper-metadata';
 import { replaceSidecarHighlights } from '@/lib/highlight-sidecar';
 import { Highlight, PaperMetadata, Session } from '@/types';
+import { APP_VERSION } from '@/lib/app-info';
 
 const BACKUP_VERSION = 1;
 const BACKUP_RETENTION = 7;
@@ -85,7 +86,7 @@ export async function createPortableBackup(includePdfs = true): Promise<Buffer> 
     format: 'annot-portable-backup',
     version: BACKUP_VERSION,
     createdAt: new Date().toISOString(),
-    appVersion: '0.2.0-custom',
+    appVersion: APP_VERSION,
     includesPdfs: includePdfs,
     files: records,
   };
@@ -132,7 +133,7 @@ export async function createPortableBackupStream(includePdfs = true): Promise<No
     format: 'annot-portable-backup',
     version: BACKUP_VERSION,
     createdAt: new Date().toISOString(),
-    appVersion: '0.2.0-custom',
+    appVersion: APP_VERSION,
     includesPdfs: includePdfs,
     files: records,
   };
@@ -160,11 +161,11 @@ export async function createAutomaticBackup(): Promise<{ fileName: string; size:
   // while keeping seven full PDF copies would multiply storage use dramatically.
   const backupDirectory = path.join(getWorkspaceRoot(), '.annot', 'backups');
   await fs.mkdir(backupDirectory, { recursive: true });
-  const fileName = `annot-auto-${timestampForName()}.zip`;
+  const fileName = `pagedock-auto-${timestampForName()}.zip`;
   const size = await writePortableBackupFile(path.join(backupDirectory, fileName), false);
 
   const entries = (await fs.readdir(backupDirectory, { withFileTypes: true }))
-    .filter((entry) => entry.isFile() && /^annot-auto-.*\.zip$/i.test(entry.name))
+    .filter((entry) => entry.isFile() && /^(?:pagedock|annot)-auto-.*\.zip$/i.test(entry.name))
     .map((entry) => entry.name)
     .sort((a, b) => b.localeCompare(a));
   await Promise.all(entries.slice(BACKUP_RETENTION).map((name) => (
@@ -238,7 +239,7 @@ function runProcess(command: string, args: string[]): Promise<void> {
 }
 
 async function extractBackupArchive(archivePath: string, destination: string): Promise<void> {
-  const configured = process.env.ANNOT_PYTHON_BIN || process.env.PYTHON_BIN;
+  const configured = process.env.PAGEDOCK_PYTHON_BIN || process.env.ANNOT_PYTHON_BIN || process.env.PYTHON_BIN;
   const candidates = [
     ...(configured ? [configured] : []),
     ...(process.platform === 'win32' ? ['py', 'python'] : ['python3', 'python']),
@@ -270,7 +271,7 @@ async function importExtractedBackup(extractionRoot: string, manifest: BackupMan
   skippedPaths: string[];
 }> {
   if (manifest.format !== 'annot-portable-backup' || manifest.version > BACKUP_VERSION || !Array.isArray(manifest.files)) {
-    throw new Error('지원하지 않는 Annot 백업 형식입니다.');
+    throw new Error('지원하지 않는 PageDock 백업 형식입니다.');
   }
 
   const root = getWorkspaceRoot();
@@ -399,7 +400,7 @@ export async function importPortableBackupFile(archivePath: string): Promise<{
   skipped: number;
   skippedPaths: string[];
 }> {
-  const extractionRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'annot-backup-'));
+  const extractionRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pagedock-backup-'));
   try {
     await extractBackupArchive(archivePath, extractionRoot);
     const manifest = JSON.parse(await fs.readFile(path.join(extractionRoot, 'manifest.json'), 'utf8')) as BackupManifest;
@@ -437,10 +438,10 @@ export async function importPortableBackup(data: Buffer): Promise<{
 }> {
   const zip = await JSZip.loadAsync(data, { checkCRC32: true });
   const manifestFile = zip.file('manifest.json');
-  if (!manifestFile) throw new Error('Annot 백업 설명 파일이 없습니다.');
+  if (!manifestFile) throw new Error('PageDock 백업 설명 파일이 없습니다.');
   const manifest = JSON.parse(await manifestFile.async('string')) as BackupManifest;
   if (manifest.format !== 'annot-portable-backup' || manifest.version > BACKUP_VERSION) {
-    throw new Error('지원하지 않는 Annot 백업 형식입니다.');
+    throw new Error('지원하지 않는 PageDock 백업 형식입니다.');
   }
 
   const root = getWorkspaceRoot();

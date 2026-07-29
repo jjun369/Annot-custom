@@ -1,23 +1,45 @@
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync, readdirSync } from 'fs';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
 
-const CONFIG_FILE = path.join(os.homedir(), '.annot', 'config.json');
+import { DEFAULT_LIBRARY_FOLDER_NAME } from '@/lib/app-info';
 
-interface AnnotConfig {
+const LEGACY_CONFIG_FILE = path.join(os.homedir(), '.annot', 'config.json');
+const CONFIG_FILE = process.env.PAGEDOCK_CONFIG_DIR
+  ? path.join(process.env.PAGEDOCK_CONFIG_DIR, 'config.json')
+  : path.join(process.env.APPDATA || os.homedir(), 'PageDock', 'config.json');
+
+interface PageDockConfig {
   workspaceRoot?: string;
 }
 
-export function readConfiguredWorkspaceRoot(): string | null {
+function readConfigFile(filePath: string): string | null {
   try {
-    const parsed = JSON.parse(readFileSync(CONFIG_FILE, 'utf8')) as AnnotConfig;
+    const parsed = JSON.parse(readFileSync(filePath, 'utf8')) as PageDockConfig;
     return typeof parsed.workspaceRoot === 'string' && path.isAbsolute(parsed.workspaceRoot)
       ? path.normalize(parsed.workspaceRoot)
       : null;
   } catch {
     return null;
   }
+}
+
+export function readConfiguredWorkspaceRoot(): string | null {
+  return readConfigFile(CONFIG_FILE) || readConfigFile(LEGACY_CONFIG_FILE);
+}
+
+export function getDefaultWorkspaceRoot(): string {
+  const legacyRoot = path.join(os.homedir(), 'Annot');
+  try {
+    if (existsSync(legacyRoot) && readdirSync(legacyRoot).length > 0) return legacyRoot;
+  } catch {
+    // A damaged legacy directory should not block a fresh PageDock library.
+  }
+
+  const documentsDirectory = process.env.PAGEDOCK_DOCUMENTS_DIR
+    || path.join(os.homedir(), 'Documents');
+  return path.join(documentsDirectory, DEFAULT_LIBRARY_FOLDER_NAME);
 }
 
 export async function writeConfiguredWorkspaceRoot(workspaceRoot: string): Promise<void> {

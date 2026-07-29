@@ -30,7 +30,7 @@ finally:
 function pythonCandidates(): string[] {
   const home = os.homedir();
   return buildExecutableCandidates(
-    [process.env.ANNOT_PYTHON_BIN, process.env.PYTHON_BIN, process.env.PYTHON],
+    [process.env.PAGEDOCK_PYTHON_BIN, process.env.ANNOT_PYTHON_BIN, process.env.PYTHON_BIN, process.env.PYTHON],
     'python',
     [
       path.join(home, 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python'),
@@ -48,7 +48,7 @@ function pythonCandidates(): string[] {
 
 async function resolvePython(): Promise<{ command: string; prefix: string[] }> {
   const candidates = [
-    ...buildExecutableCandidates([process.env.ANNOT_PYTHON_BIN, process.env.PYTHON_BIN], 'python3', []),
+    ...buildExecutableCandidates([process.env.PAGEDOCK_PYTHON_BIN, process.env.ANNOT_PYTHON_BIN, process.env.PYTHON_BIN], 'python3', []),
     ...pythonCandidates(),
     ...buildExecutableCandidates([process.env.ANNOT_PYTHON_LAUNCHER], 'py', [path.join(process.env.SystemRoot || 'C:\\Windows', 'py')]),
   ];

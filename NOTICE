@@ -1,0 +1,5 @@
+PageDock is derived from Annot (https://github.com/rkka02/Annot),
+which is distributed under the Apache License 2.0.
+
+This distribution includes modifications for Windows desktop packaging,
+managed library workflows, provider setup, and additional study features.

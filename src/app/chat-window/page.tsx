@@ -105,7 +105,7 @@ function ChatWindowContent() {
           </div>
         ) : (
           <div className="flex h-full items-center justify-center p-8 text-center text-sm text-on-surface-variant">
-            원래 Annot 창에서 폴더나 PDF를 선택해 주세요.
+            원래 PageDock 창에서 폴더나 PDF를 선택해 주세요.
           </div>
         )}
       </main>

@@ -9,6 +9,9 @@ import {
   ResolvedCommand,
   resolveExecutable,
 } from '@/lib/command-runtime';
+import { isAutoModel } from '@/lib/ai-providers/model-policy';
+import { isAutoReasoningEffort, normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
+import type { ReasoningEffort } from '@/types';
 
 export interface ExecResult {
   codexSessionId: string;
@@ -32,10 +35,29 @@ interface RunTurnOptions {
 interface RunTurnInput {
   codexSessionId?: string;
   model: string;
+  reasoningEffort?: ReasoningEffort;
   folderPath: string;
   sessionKind: 'folder' | 'pdf';
   prompt: string;
   currentPdfPath?: string | null;
+  ephemeral?: boolean;
+}
+
+export interface CodexCatalogModel {
+  id: string;
+  owned_by: string;
+  created: number;
+  display_name?: string;
+  default_reasoning_level?: ReasoningEffort;
+  supported_reasoning_levels?: Array<{
+    effort: ReasoningEffort;
+    description?: string;
+  }>;
+}
+
+export interface CodexCliAuthStatus {
+  authenticated: boolean;
+  authMethod?: string;
 }
 
 interface ParsedEvent {
@@ -60,6 +82,26 @@ interface ParsedEvent {
 
 let resolvedCodexExecutablePromise: Promise<ResolvedCommand> | null = null;
 
+async function getResolvedCodexExecutable(): Promise<ResolvedCommand> {
+  if (!resolvedCodexExecutablePromise) {
+    resolvedCodexExecutablePromise = resolveCodexExecutable();
+  }
+  try {
+    return await resolvedCodexExecutablePromise;
+  } catch (error) {
+    resolvedCodexExecutablePromise = null;
+    throw error;
+  }
+}
+
+export function resetCodexExecutableCache(): void {
+  resolvedCodexExecutablePromise = null;
+}
+
+export async function resolveCodexExecutableFresh(): Promise<ResolvedCommand> {
+  return await resolveCodexExecutable();
+}
+
 function buildPrompt({
   folderPath,
   sessionKind,
@@ -68,7 +110,7 @@ function buildPrompt({
 }: Omit<RunTurnInput, 'codexSessionId' | 'model'>): string {
   const workspaceRoot = getWorkspaceRoot();
   const contextLines = [
-    'Annot session context:',
+    'PageDock session context:',
     `- Workspace root: ${workspaceRoot}`,
     `- Current session folder: ${folderPath || '.'}`,
     `- Session type: ${sessionKind === 'pdf' ? 'PDF-focused reading session' : 'Folder-wide research session'}`,
@@ -103,6 +145,7 @@ function getCodexExecutableCandidates(): string[] {
     path.join(home, '.bun', 'bin', 'codex'),
     path.join(home, '.codex', 'bin', 'codex'),
     path.join(home, 'AppData', 'Roaming', 'npm', 'codex'),
+    path.join(process.env.LOCALAPPDATA || '', 'Programs', 'OpenAI', 'Codex', 'bin', 'codex'),
     path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'codex'),
     path.join('/Applications', 'Codex.app', 'Contents', 'Resources', 'codex'),
     path.join('/opt/homebrew/bin', 'codex'),
@@ -131,6 +174,9 @@ function createCodexArgs(input: RunTurnInput): string[] {
   if (input.codexSessionId) {
     baseArgs.push('resume', '--json', '--skip-git-repo-check', input.codexSessionId);
   } else {
+    if (input.ephemeral) {
+      baseArgs.push('--ephemeral');
+    }
     baseArgs.push(
       '--json',
       '--skip-git-repo-check',
@@ -141,12 +187,136 @@ function createCodexArgs(input: RunTurnInput): string[] {
     );
   }
 
-  if (input.model) {
+  if (!isAutoModel(input.model)) {
     baseArgs.push('--model', input.model);
+  }
+  if (!isAutoReasoningEffort(input.reasoningEffort)) {
+    baseArgs.push('-c', `model_reasoning_effort="${input.reasoningEffort}"`);
   }
 
   baseArgs.push(buildPrompt(input));
   return baseArgs;
+}
+
+function describeCodexSpawnError(error: Error): Error {
+  const code = (error as NodeJS.ErrnoException).code;
+  if (code === 'EACCES' || /access is denied/i.test(error.message)) {
+    return new Error(
+      'Codex CLI를 실행할 권한이 없습니다. WindowsApps에 포함된 실행 파일 대신 ' +
+      'standalone Codex CLI를 설치하거나 CODEX_BIN에 실행 가능한 codex.exe 경로를 지정해 주세요.',
+    );
+  }
+  return error;
+}
+
+function collectCatalogRecords(payload: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(payload)) {
+    return payload.filter((item): item is Record<string, unknown> => (
+      typeof item === 'object' && item !== null
+    ));
+  }
+
+  if (!payload || typeof payload !== 'object') return [];
+  const record = payload as Record<string, unknown>;
+  for (const key of ['models', 'data', 'catalog']) {
+    if (Array.isArray(record[key])) {
+      return collectCatalogRecords(record[key]);
+    }
+  }
+  return [];
+}
+
+function parseCatalogModels(stdout: string): CodexCatalogModel[] {
+  const payload = JSON.parse(stdout) as unknown;
+  const models: CodexCatalogModel[] = [];
+  const seen = new Set<string>();
+  for (const record of collectCatalogRecords(payload)) {
+    if (record.visibility === 'hide') continue;
+    const id = [record.slug, record.id, record.model]
+      .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    const displayName = [record.display_name, record.displayName, record.name]
+      .find((value): value is string => typeof value === 'string' && value.trim().length > 0);
+    const defaultReasoningLevel = normalizeReasoningEffort(record.default_reasoning_level);
+    const supportedReasoningLevels: Array<{ effort: ReasoningEffort; description?: string }> = [];
+    if (Array.isArray(record.supported_reasoning_levels)) {
+      for (const value of record.supported_reasoning_levels) {
+        if (!value || typeof value !== 'object') continue;
+        const level = value as Record<string, unknown>;
+        const effort = normalizeReasoningEffort(level.effort);
+        if (effort === 'auto') continue;
+        supportedReasoningLevels.push({
+          effort,
+          description: typeof level.description === 'string' ? level.description : undefined,
+        });
+      }
+    }
+    models.push({
+      id,
+      owned_by: 'codex',
+      created: 0,
+      display_name: displayName || id,
+      default_reasoning_level: defaultReasoningLevel === 'auto' ? undefined : defaultReasoningLevel,
+      supported_reasoning_levels: supportedReasoningLevels,
+    });
+  }
+  return models;
+}
+
+export async function listCodexModelsFromCli(): Promise<CodexCatalogModel[]> {
+  const codexExecutable = await getResolvedCodexExecutable();
+  return await new Promise<CodexCatalogModel[]>((resolve, reject) => {
+    const child = spawn(
+      codexExecutable.command,
+      [...codexExecutable.argsPrefix, 'debug', 'models'],
+      { stdio: ['ignore', 'pipe', 'pipe'], env: process.env },
+    );
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.on('error', (error) => reject(describeCodexSpawnError(error)));
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `codex debug models failed with exit code ${code}`));
+        return;
+      }
+      try {
+        resolve(parseCatalogModels(stdout));
+      } catch (error) {
+        reject(error);
+      }
+    });
+  });
+}
+
+export async function getCodexCliAuthStatus(): Promise<CodexCliAuthStatus> {
+  const codexExecutable = await getResolvedCodexExecutable();
+  return await new Promise<CodexCliAuthStatus>((resolve, reject) => {
+    const child = spawn(
+      codexExecutable.command,
+      [...codexExecutable.argsPrefix, 'login', 'status'],
+      { stdio: ['ignore', 'pipe', 'pipe'], env: process.env },
+    );
+    let output = '';
+    child.stdout.on('data', (chunk) => { output += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { output += chunk.toString(); });
+    child.on('error', (error) => reject(describeCodexSpawnError(error)));
+    child.on('close', (code) => {
+      if (code !== 0) {
+        resolve({ authenticated: false });
+        return;
+      }
+      const normalized = output.trim().toLowerCase();
+      const authMethod = normalized.includes('api key')
+        ? 'API key'
+        : normalized.includes('chatgpt')
+          ? 'ChatGPT'
+          : 'Codex CLI';
+      resolve({ authenticated: true, authMethod });
+    });
+  });
 }
 
 function truncateForEvent(value: string, maxLength = 600): string {
@@ -258,11 +428,7 @@ function emitParsedEvent(
 }
 
 export async function runCodexTurn(input: RunTurnInput, options: RunTurnOptions = {}): Promise<ExecResult> {
-  if (!resolvedCodexExecutablePromise) {
-    resolvedCodexExecutablePromise = resolveCodexExecutable();
-  }
-
-  const codexExecutable = await resolvedCodexExecutablePromise;
+  const codexExecutable = await getResolvedCodexExecutable();
   const args = createCodexArgs(input);
 
   return new Promise<ExecResult>((resolve, reject) => {
@@ -307,7 +473,7 @@ export async function runCodexTurn(input: RunTurnInput, options: RunTurnOptions 
     });
 
     child.on('error', (error) => {
-      reject(error);
+      reject(describeCodexSpawnError(error));
     });
 
     child.on('close', (code) => {

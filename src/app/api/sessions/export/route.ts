@@ -4,6 +4,9 @@ import { getProviderRuntime } from '@/lib/ai-providers';
 import { getSession, updateSession } from '@/lib/annot-sessions';
 import { generateSessionTurnSummaries } from '@/lib/chat-turn-summary';
 import { buildSessionSummaryMarkdown } from '@/lib/session-summary-markdown';
+import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
+import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
+import type { ReasoningEffort } from '@/types';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -15,10 +18,12 @@ export async function POST(req: NextRequest) {
       folderPath,
       sessionId,
       model,
+      reasoningEffort,
     } = body as {
       folderPath?: string;
       sessionId?: string;
       model?: string;
+      reasoningEffort?: ReasoningEffort;
     };
 
     if (!folderPath?.trim() || !sessionId?.trim()) {
@@ -30,12 +35,14 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Session not found' }, { status: 404 });
     }
 
-    const resolvedModel = model || session.model || 'gpt-5.4-mini';
+    const resolvedModel = normalizeModelPreference(model || session.model);
+    const resolvedReasoningEffort = normalizeReasoningEffort(reasoningEffort || session.reasoningEffort);
     const runtimeProvider = getProviderRuntime(session.provider);
     const turnSummaries = await generateSessionTurnSummaries({
       runtime: runtimeProvider,
       provider: session.provider,
       model: resolvedModel,
+      reasoningEffort: resolvedReasoningEffort,
       session,
     });
 

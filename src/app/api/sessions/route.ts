@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { buildSessionTitle, createSession, getSession, listSessions, updateSession } from '@/lib/annot-sessions';
 import { DEFAULT_AI_PROVIDER, parseAIProvider } from '@/lib/ai-providers/config';
-import { AIProvider, SessionKind } from '@/types';
+import { AIProvider, ReasoningEffort, SessionKind } from '@/types';
 
 function parseSessionKind(value: string | null): SessionKind | undefined {
   if (value === 'folder' || value === 'pdf') {
@@ -46,10 +46,11 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { folderPath, title, model } = body as {
+    const { folderPath, title, model, reasoningEffort } = body as {
       folderPath?: string;
       title?: string;
       model?: string;
+      reasoningEffort?: ReasoningEffort;
       provider?: AIProvider;
       sessionKind?: SessionKind;
       pdfPath?: string | null;
@@ -72,6 +73,7 @@ export async function POST(req: NextRequest) {
       title?.trim() || buildSessionTitle(folderPath, sessionKind, pdfPath),
       {
         model,
+        reasoningEffort,
         provider,
         sessionKind,
         pdfPath,
@@ -96,6 +98,7 @@ export async function PUT(req: NextRequest) {
       provider,
       providerSessionId,
       model,
+      reasoningEffort,
     } = body as {
       folderPath?: string;
       id?: string;
@@ -104,6 +107,7 @@ export async function PUT(req: NextRequest) {
       provider?: AIProvider;
       providerSessionId?: string;
       model?: string;
+      reasoningEffort?: ReasoningEffort;
     };
 
     if (!folderPath || !id) {
@@ -116,6 +120,7 @@ export async function PUT(req: NextRequest) {
       provider,
       providerSessionId,
       model,
+      reasoningEffort,
     });
 
     return NextResponse.json(session);

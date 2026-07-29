@@ -16,9 +16,9 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const file = formData.get('file');
     if (!(file instanceof File) || !file.name.toLowerCase().endsWith('.zip')) {
-      return NextResponse.json({ error: 'Annot ZIP 백업 파일을 선택해 주세요.' }, { status: 400 });
+      return NextResponse.json({ error: 'PageDock ZIP 백업 파일을 선택해 주세요.' }, { status: 400 });
     }
-    const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'annot-upload-'));
+    const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'pagedock-upload-'));
     const archivePath = path.join(temporaryDirectory, 'backup.zip');
     try {
       await pipeline(

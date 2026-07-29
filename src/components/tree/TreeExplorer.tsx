@@ -7,6 +7,7 @@ import { FolderPlus, FilePlus, PanelLeftClose, PanelLeftOpen } from 'lucide-reac
 import { countItems, findNode, getParentFolderPath } from '@/lib/tree-utils';
 import { useFeedback } from '@/components/common/FeedbackProvider';
 import { useRef, useState } from 'react';
+import { TreeNode } from '@/types';
 
 export function TreeExplorer() {
   const {
@@ -65,32 +66,42 @@ export function TreeExplorer() {
   };
 
   const handleUploadChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+    const files = Array.from(event.target.files || []);
     event.target.value = '';
-    if (!file) return;
+    if (files.length === 0) return;
 
     setIsUploading(true);
     try {
-      const formData = new FormData();
-      formData.set('file', file);
-      formData.set('folderPath', targetFolderPath);
+      let lastImported: TreeNode | null = null;
+      let duplicateCount = 0;
+      for (const file of files) {
+        const formData = new FormData();
+        formData.set('file', file);
+        formData.set('folderPath', targetFolderPath);
 
-      const res = await fetch('/api/papers', {
-        method: 'POST',
-        body: formData,
-      });
-      const data = await res.json();
-      if (!res.ok || data?.error) {
-        throw new Error(typeof data?.error === 'string' ? data.error : 'PDF를 추가하지 못했습니다.');
+        const res = await fetch('/api/papers', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (!res.ok || data?.error) {
+          throw new Error(typeof data?.error === 'string' ? data.error : `${file.name}을 추가하지 못했습니다.`);
+        }
+        if (data.duplicate) duplicateCount += 1;
+        lastImported = data as TreeNode;
       }
 
       const nextTree = await refreshTree();
-      if (nextTree) {
-        const nextNode = findNode(nextTree, data.path);
+      if (nextTree && lastImported) {
+        const nextNode = findNode(nextTree, lastImported.path);
         if (nextNode) {
           selectNode(nextNode);
         }
       }
+      const importedCount = files.length - duplicateCount;
+      notify(
+        duplicateCount > 0
+          ? `PDF ${importedCount}개를 라이브러리에 복사했고, 중복 ${duplicateCount}개는 기존 파일을 열었습니다.`
+          : `PDF ${importedCount}개를 PageDock Library에 복사했습니다.`,
+        'success',
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : 'PDF를 추가하지 못했습니다.';
       notify(message, 'error');
@@ -127,6 +138,7 @@ export function TreeExplorer() {
           ref={fileInputRef}
           type="file"
           accept="application/pdf,.pdf"
+          multiple
           className="hidden"
           onChange={(event) => void handleUploadChange(event)}
         />
@@ -171,6 +183,7 @@ export function TreeExplorer() {
             ref={fileInputRef}
             type="file"
             accept="application/pdf,.pdf"
+            multiple
             className="hidden"
             onChange={(event) => void handleUploadChange(event)}
           />

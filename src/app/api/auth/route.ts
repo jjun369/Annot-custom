@@ -4,7 +4,7 @@ import { NextResponse } from 'next/server';
 export async function GET() {
   return NextResponse.json(
     {
-      error: 'This app no longer starts a browser OAuth flow. Annot reuses the existing Codex login on this machine.',
+      error: 'PageDock uses the official Codex CLI browser login flow.',
     },
     { status: 410 }
   );

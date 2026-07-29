@@ -59,7 +59,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({
         highlights: sidecarHighlights,
         embedded: false,
-        warning: 'PDF 원본 주석을 읽지 못해 Annot 기록을 표시합니다.',
+        warning: 'PDF 원본 주석을 읽지 못해 PageDock 기록을 표시합니다.',
       }, {
         headers: {
           'Cache-Control': 'no-store',

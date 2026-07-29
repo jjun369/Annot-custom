@@ -64,7 +64,13 @@ export function buildExecutableCandidates(
     .filter(Boolean)
     .flatMap((value) => expandExecutablePath(value));
 
-  return [...new Set([...envResolved, ...pathCandidates, ...commonCandidates])];
+  return [...new Set([...envResolved, ...pathCandidates, ...commonCandidates])]
+    .sort((left, right) => {
+      if (process.platform !== 'win32') return 0;
+      const leftIsWindowsApps = /\\WindowsApps\\/i.test(left);
+      const rightIsWindowsApps = /\\WindowsApps\\/i.test(right);
+      return Number(leftIsWindowsApps) - Number(rightIsWindowsApps);
+    });
 }
 
 export async function resolveExecutable(candidates: string[]): Promise<string | null> {

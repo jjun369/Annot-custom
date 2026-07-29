@@ -6,6 +6,7 @@ import { useWorkspace } from '@/lib/workspace-store';
 import { useFeedback } from '@/components/common/FeedbackProvider';
 import Link from 'next/link';
 import { PaperMetadata, TreeNode } from '@/types';
+import { PageDockMark } from '@/components/common/PageDockMark';
 
 interface SearchResult {
   pdf: TreeNode;
@@ -85,7 +86,7 @@ export function Topbar() {
     if (activeSessionId) params.set('sessionId', activeSessionId);
     const popup = window.open(
       `/chat-window?${params.toString()}`,
-      'annot-detached-chat',
+      'pagedock-detached-chat',
       'popup=yes,width=560,height=860,resizable=yes,scrollbars=no',
     );
     if (!popup) {
@@ -100,10 +101,8 @@ export function Topbar() {
     <header className="h-12 px-4 flex items-center justify-between shrink-0 bg-surface">
       {/* Left: Brand */}
       <div className="flex items-center gap-3">
-        <div className="w-7 h-7 rounded-md bg-on-surface text-surface-container-lowest flex items-center justify-center font-bold text-[11px]">
-          A.
-        </div>
-        <span className="text-sm font-bold text-on-surface tracking-tight">Annot</span>
+        <PageDockMark size={28} className="rounded-md" />
+        <span className="text-sm font-bold text-on-surface tracking-tight">PageDock</span>
       </div>
 
       {/* Center: Breadcrumb (if session active) */}

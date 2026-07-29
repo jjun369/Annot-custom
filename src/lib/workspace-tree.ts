@@ -1,4 +1,5 @@
 import { promises as fs } from 'fs';
+import { createHash } from 'crypto';
 import path from 'path';
 
 import {
@@ -57,6 +58,37 @@ async function ensureUniqueFilePath(dirPath: string, fileName: string): Promise<
       return candidatePath;
     }
   }
+}
+
+async function findDuplicatePdf(buffer: Buffer): Promise<string | null> {
+  const root = getWorkspaceRoot();
+  const expectedHash = createHash('sha256').update(buffer).digest('hex');
+  async function walk(directory: string): Promise<string | null> {
+    let entries;
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true });
+    } catch {
+      return null;
+    }
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const absolutePath = path.join(directory, entry.name);
+      if (entry.isDirectory()) {
+        const match = await walk(absolutePath);
+        if (match) return match;
+        continue;
+      }
+      if (!entry.isFile() || !entry.name.toLowerCase().endsWith('.pdf')) continue;
+      const stats = await fs.stat(absolutePath);
+      if (stats.size !== buffer.byteLength) continue;
+      const digest = createHash('sha256').update(await fs.readFile(absolutePath)).digest('hex');
+      if (digest === expectedHash) {
+        return path.relative(root, absolutePath).split(path.sep).join('/');
+      }
+    }
+    return null;
+  }
+  return await walk(root);
 }
 
 async function ensureDirectory(relativePath: string): Promise<void> {
@@ -143,18 +175,29 @@ export async function createWorkspaceFolder(parentPath: string, folderName: stri
   };
 }
 
-export async function saveUploadedPdf(folderPath: string, file: File): Promise<TreeNode> {
+export async function saveUploadedPdf(folderPath: string, file: File): Promise<TreeNode & { duplicate?: boolean }> {
   await ensureWorkspaceRoot();
 
   const originalName = sanitizeSegment(file.name, 'file');
   const fileName = originalName.toLowerCase().endsWith('.pdf') ? originalName : `${originalName}.pdf`;
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const duplicatePath = await findDuplicatePdf(buffer);
+  if (duplicatePath) {
+    return {
+      id: `pdf:${duplicatePath}`,
+      name: path.posix.basename(duplicatePath),
+      type: 'pdf',
+      path: duplicatePath,
+      duplicate: true,
+    };
+  }
+
   const absoluteFolder = folderPath ? resolveFolderPath(folderPath) : getWorkspaceRoot();
 
   await fs.mkdir(absoluteFolder, { recursive: true });
 
   const absolutePath = await ensureUniqueFilePath(absoluteFolder, fileName);
-  const buffer = Buffer.from(await file.arrayBuffer());
-  await fs.writeFile(absolutePath, buffer);
+  await fs.writeFile(absolutePath, buffer, { flag: 'wx' });
 
   const storedName = path.basename(absolutePath);
   const relativePath = folderPath ? `${folderPath}/${storedName}` : storedName;

@@ -7,6 +7,7 @@ import {
   finalizeResolvedCommand,
   resolveExecutable,
 } from '@/lib/command-runtime';
+import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
 
 const CODEX_HOME = process.env.CODEX_HOME || path.join(os.homedir(), '.codex');
 const CODEX_AUTH_FILE = path.join(CODEX_HOME, 'auth.json');
@@ -14,7 +15,6 @@ const CODEX_VERSION_FILE = path.join(CODEX_HOME, 'version.json');
 const OPENAI_AUTH_ISSUER = 'https://auth.openai.com';
 const CHATGPT_CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
-const DEFAULT_CLIENT_VERSION = '0.110.0';
 const TOKEN_REFRESH_BUFFER_MS = 60_000;
 
 const AUTH_CLAIM_PATH = 'https://api.openai.com/auth';
@@ -63,6 +63,11 @@ interface CodexModelRecord {
   display_name?: string;
   visibility?: string;
   priority?: number;
+  default_reasoning_level?: string;
+  supported_reasoning_levels?: Array<{
+    effort?: string;
+    description?: string;
+  }>;
 }
 
 interface CodexModelsResponse {
@@ -351,7 +356,7 @@ export async function getCodexSession(): Promise<CodexSession | null> {
   };
 }
 
-export async function getCodexClientVersion(): Promise<string> {
+export async function getCodexClientVersion(): Promise<string | null> {
   const explicitVersion = process.env.CODEX_CLIENT_VERSION?.trim();
   if (explicitVersion) return explicitVersion;
 
@@ -368,7 +373,7 @@ export async function getCodexClientVersion(): Promise<string> {
     // ignore and use fallback
   }
 
-  return DEFAULT_CLIENT_VERSION;
+  return null;
 }
 
 let detectedCodexVersionPromise: Promise<string | null> | null = null;
@@ -384,6 +389,7 @@ async function detectInstalledCodexVersion(): Promise<string | null> {
         path.join(home, '.local', 'bin', 'codex'),
         path.join(home, '.codex', 'bin', 'codex'),
         path.join(home, 'AppData', 'Roaming', 'npm', 'codex'),
+        path.join(process.env.LOCALAPPDATA || '', 'Programs', 'OpenAI', 'Codex', 'bin', 'codex'),
         path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'codex'),
         path.join('/Applications', 'Codex.app', 'Contents', 'Resources', 'codex'),
       ],
@@ -414,8 +420,11 @@ export async function fetchCodexModels() {
   if (!session) return null;
 
   const clientVersion = await getCodexClientVersion();
+  const query = clientVersion
+    ? `?client_version=${encodeURIComponent(clientVersion)}`
+    : '';
   const response = await fetch(
-    `${CHATGPT_CODEX_BASE_URL}/models?client_version=${encodeURIComponent(clientVersion)}`,
+    `${CHATGPT_CODEX_BASE_URL}/models${query}`,
     { headers: buildCodexHeaders(session), cache: 'no-store' },
   );
 
@@ -433,6 +442,15 @@ export async function fetchCodexModels() {
       owned_by: 'codex',
       created: 0,
       display_name: model.display_name || model.slug,
+      default_reasoning_level: normalizeReasoningEffort(model.default_reasoning_level) === 'auto'
+        ? undefined
+        : normalizeReasoningEffort(model.default_reasoning_level),
+      supported_reasoning_levels: (model.supported_reasoning_levels || [])
+        .map((level) => ({
+          effort: normalizeReasoningEffort(level.effort),
+          description: level.description,
+        }))
+        .filter((level) => level.effort !== 'auto'),
     }));
 
   return models;

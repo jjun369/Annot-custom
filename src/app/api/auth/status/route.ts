@@ -7,12 +7,12 @@ export async function GET() {
   return NextResponse.json(status);
 }
 
-// DELETE /api/auth/status — Managed by Codex, so Annot does not clear it.
+// DELETE /api/auth/status — Managed by Codex, so PageDock does not clear it.
 export async function DELETE() {
   return NextResponse.json(
     {
       success: false,
-      error: 'Annot uses the existing Codex login on this machine. Sign out from Codex if you want to disconnect it here.',
+      error: 'PageDock uses the Codex login on this machine. Sign out from Codex to disconnect it.',
     },
     { status: 400 }
   );

@@ -1,13 +1,17 @@
 import { promises as fs } from 'fs';
 import { randomUUID } from 'crypto';
-import os from 'os';
 import path from 'path';
 
 import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
-import { AIProvider, ChatMessage, Session, SessionKind, SessionTurnSummary } from '@/types';
-import { readConfiguredWorkspaceRoot } from '@/lib/library-config';
+import { isLegacyImplicitModel, normalizeModelPreference } from '@/lib/ai-providers/model-policy';
+import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
+import { AIProvider, ChatMessage, ReasoningEffort, Session, SessionKind, SessionTurnSummary } from '@/types';
+import { getDefaultWorkspaceRoot, readConfiguredWorkspaceRoot } from '@/lib/library-config';
 
-const WORKSPACE_ROOT = process.env.ANNOT_ROOT || readConfiguredWorkspaceRoot() || path.join(os.homedir(), 'Annot');
+const WORKSPACE_ROOT = process.env.PAGEDOCK_ROOT
+  || process.env.ANNOT_ROOT
+  || readConfiguredWorkspaceRoot()
+  || getDefaultWorkspaceRoot();
 
 export type StoredSession = Session;
 
@@ -25,6 +29,7 @@ interface SessionListOptions {
 
 interface CreateSessionOptions {
   model?: string;
+  reasoningEffort?: ReasoningEffort;
   sessionKind?: SessionKind;
   pdfPath?: string | null;
   provider?: AIProvider;
@@ -151,7 +156,9 @@ function normalizeSession(folderPath: string, session: StoredSessionRecord): Sto
     ? normalizePdfPath(session.pdfPath)
     : undefined;
   const provider = session.provider ?? DEFAULT_AI_PROVIDER;
-  const providerSessionId = session.providerSessionId ?? session.codexSessionId;
+  const providerSessionId = isLegacyImplicitModel(session.model)
+    ? undefined
+    : session.providerSessionId ?? session.codexSessionId;
 
   return {
     id: session.id,
@@ -176,7 +183,8 @@ function normalizeSession(folderPath: string, session: StoredSessionRecord): Sto
         typeof summary.createdAt === 'string'
       ))
       : [],
-    model: session.model,
+    model: normalizeModelPreference(session.model),
+    reasoningEffort: normalizeReasoningEffort(session.reasoningEffort),
   };
 }
 
@@ -186,7 +194,10 @@ async function reconcileSession(folderPath: string, session: StoredSession): Pro
   let changed = (
     normalizedSession.folderPath !== session.folderPath ||
     normalizedSession.sessionKind !== session.sessionKind ||
-    normalizedSession.pdfPath !== session.pdfPath
+    normalizedSession.pdfPath !== session.pdfPath ||
+    normalizedSession.model !== session.model ||
+    normalizedSession.reasoningEffort !== session.reasoningEffort ||
+    normalizedSession.providerSessionId !== session.providerSessionId
   );
 
   if (nextSession.sessionKind === 'folder' && !nextSession.pdfPath) {
@@ -282,6 +293,7 @@ async function writeSessions(folderPath: string, sessions: StoredSession[]): Pro
     messages: session.messages,
     turnSummaries: session.turnSummaries ?? [],
     model: session.model,
+    reasoningEffort: session.reasoningEffort,
   }));
   const temporaryPath = `${sessionsFile}.${process.pid}.${randomUUID()}.tmp`;
   await fs.writeFile(temporaryPath, JSON.stringify(cleanedSessions, null, 2), 'utf8');
@@ -369,7 +381,8 @@ export async function createSession(
     updatedAt: now,
     messages: [],
     turnSummaries: [],
-    model: options.model,
+    model: normalizeModelPreference(options.model),
+    reasoningEffort: normalizeReasoningEffort(options.reasoningEffort),
   };
 
   const sessions = await listSessions(folderPath);
@@ -381,7 +394,7 @@ export async function createSession(
 export async function updateSession(
   folderPath: string,
   sessionId: string,
-  updates: Partial<Pick<StoredSession, 'messages' | 'title' | 'provider' | 'providerSessionId' | 'model' | 'turnSummaries'>>
+  updates: Partial<Pick<StoredSession, 'messages' | 'title' | 'provider' | 'providerSessionId' | 'model' | 'reasoningEffort' | 'turnSummaries'>>
 ): Promise<StoredSession> {
   const sessions = await listSessions(folderPath);
   const index = sessions.findIndex((session) => session.id === sessionId);
@@ -392,6 +405,12 @@ export async function updateSession(
   const nextSession: StoredSession = {
     ...sessions[index],
     ...updates,
+    model: updates.model === undefined
+      ? sessions[index].model
+      : normalizeModelPreference(updates.model),
+    reasoningEffort: updates.reasoningEffort === undefined
+      ? sessions[index].reasoningEffort
+      : normalizeReasoningEffort(updates.reasoningEffort),
     updatedAt: new Date().toISOString(),
   };
 

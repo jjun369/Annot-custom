@@ -9,6 +9,8 @@ export interface PortablePreferences {
   aiProvider?: AIProvider;
   chatFontSize?: number;
   chatPanelWidth?: number;
+  onboardingCompleted?: boolean;
+  libraryImportExplained?: boolean;
   updatedAt?: string;
 }
 
@@ -35,6 +37,8 @@ export async function updatePortablePreferences(updates: PortablePreferences): P
   if (next.aiProvider !== 'codex' && next.aiProvider !== 'claude') delete next.aiProvider;
   if (typeof next.chatFontSize === 'number') next.chatFontSize = Math.min(20, Math.max(11, Math.round(next.chatFontSize)));
   if (typeof next.chatPanelWidth === 'number') next.chatPanelWidth = Math.min(720, Math.max(320, Math.round(next.chatPanelWidth)));
+  if (typeof next.onboardingCompleted !== 'boolean') delete next.onboardingCompleted;
+  if (typeof next.libraryImportExplained !== 'boolean') delete next.libraryImportExplained;
   const filePath = preferencesFile();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   const temporary = `${filePath}.${randomUUID()}.tmp`;

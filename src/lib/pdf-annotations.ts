@@ -267,7 +267,7 @@ try:
             color = UNKNOWN_COLOR if candidate["type"] == "unknown" else IMPORTANT_COLOR
             annotation.set_colors(stroke=color)
             annotation.set_info(
-                title="Annot",
+                title="PageDock",
                 subject=candidate["type"],
                 content=encode_content(candidate["text"], candidate["note"]),
             )
@@ -339,7 +339,7 @@ try:
                             color = UNKNOWN_COLOR if next_type == "unknown" else IMPORTANT_COLOR
                             annot.set_colors(stroke=color)
                             annot.set_info(
-                                title="Annot",
+                                title="PageDock",
                                 subject=next_type,
                                 content=encode_content(next_text, next_note),
                             )
@@ -369,6 +369,7 @@ function getPythonCandidates(): string[] {
   const home = os.homedir();
   return buildExecutableCandidates(
     [
+      process.env.PAGEDOCK_PYTHON_BIN,
       process.env.ANNOT_PYTHON_BIN,
       process.env.PYTHON_BIN,
       process.env.PYTHON,
@@ -392,6 +393,7 @@ async function resolvePythonCommand(): Promise<ResolvedPythonCommand> {
   const candidates = [
     ...buildExecutableCandidates(
       [
+        process.env.PAGEDOCK_PYTHON_BIN,
         process.env.ANNOT_PYTHON_BIN,
         process.env.PYTHON_BIN,
       ],
@@ -413,7 +415,7 @@ async function resolvePythonCommand(): Promise<ResolvedPythonCommand> {
   const executable = await resolveExecutable([...new Set(candidates)]);
   if (!executable) {
     throw new Error(
-      'Could not find a Python 3 executable. Set ANNOT_PYTHON_BIN to the full path to python if needed.',
+      'Could not find a Python 3 executable. Set PAGEDOCK_PYTHON_BIN to the full path to python if needed.',
     );
   }
 

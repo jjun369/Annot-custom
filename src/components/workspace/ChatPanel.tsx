@@ -7,11 +7,19 @@ import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
+import { AUTO_MODEL_ID, getAutoModelLabel, normalizeModelPreference } from '@/lib/ai-providers/model-policy';
+import {
+  AUTO_REASONING_EFFORT,
+  getReasoningEffortLabel,
+  normalizeReasoningEffort,
+  readStoredReasoningEffort,
+  writeStoredReasoningEffort,
+} from '@/lib/ai-providers/reasoning-policy';
 import { MarkdownPreviewDialog } from '@/components/common/MarkdownPreviewDialog';
 import { buildSessionSummaryMarkdown, getSessionSummaryMarkdownFileName } from '@/lib/session-summary-markdown';
 import { useWorkspace } from '@/lib/workspace-store';
 import { AI_PROVIDER_EVENT, readStoredAIProvider } from '@/lib/provider-preferences';
-import { AIProvider, ChatMessage, Session, SessionKind, SessionTurnSummary } from '@/types';
+import { AIProvider, ChatMessage, ReasoningEffort, Session, SessionKind, SessionTurnSummary } from '@/types';
 import {
   CHAT_FONT_SIZE_EVENT,
   DEFAULT_CHAT_FONT_SIZE,
@@ -19,12 +27,18 @@ import {
 } from '@/lib/chat-preferences';
 
 const MAX_INPUT_HEIGHT = 180;
+const FALLBACK_CODEX_REASONING_LEVELS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 interface AvailableModel {
   id: string;
   owned_by: string;
   created: number;
   display_name?: string;
+  default_reasoning_level?: ReasoningEffort;
+  supported_reasoning_levels?: Array<{
+    effort: ReasoningEffort;
+    description?: string;
+  }>;
 }
 
 interface ToolUseEvent {
@@ -85,6 +99,7 @@ interface SessionUiState {
   summaryStatusMessage: string;
   provider: AIProvider;
   selectedModel?: string;
+  selectedReasoningEffort: ReasoningEffort;
   title?: string;
 }
 
@@ -105,6 +120,8 @@ function createDefaultSessionUiState(): SessionUiState {
     summaryStatus: 'idle',
     summaryStatusMessage: '',
     provider: DEFAULT_AI_PROVIDER,
+    selectedModel: AUTO_MODEL_ID,
+    selectedReasoningEffort: AUTO_REASONING_EFFORT,
   };
 }
 
@@ -124,7 +141,8 @@ export function ChatPanel() {
   const [sessionLoading, setSessionLoading] = useState(false);
   const [, setSessionUiMap] = useState<Record<string, SessionUiState>>({});
   const [models, setModels] = useState<AvailableModel[]>([]);
-  const [selectedModel, setSelectedModel] = useState('');
+  const [selectedModel, setSelectedModel] = useState(AUTO_MODEL_ID);
+  const [selectedReasoningEffort, setSelectedReasoningEffort] = useState<ReasoningEffort>(readStoredReasoningEffort());
   const [customModel, setCustomModel] = useState('');
   const [selectedProvider, setSelectedProvider] = useState<AIProvider>(readStoredAIProvider());
   const [showModelPicker, setShowModelPicker] = useState(false);
@@ -161,6 +179,7 @@ export function ChatPanel() {
     messages,
     turnSummaries,
     model: selectedModel || undefined,
+    reasoningEffort: selectedReasoningEffort,
   }), [
     activePdf,
     activeSessionFolder,
@@ -169,6 +188,7 @@ export function ChatPanel() {
     activeSessionPdfPath,
     messages,
     selectedModel,
+    selectedReasoningEffort,
     selectedProvider,
     sessionTitle,
     turnSummaries,
@@ -197,6 +217,20 @@ export function ChatPanel() {
 
     return count;
   }, [messages]);
+  const selectedModelConfig = useMemo(
+    () => models.find((model) => model.id === selectedModel),
+    [models, selectedModel],
+  );
+  const reasoningLevels = useMemo(() => {
+    if (selectedProvider !== 'codex') return [];
+    const catalogLevels = selectedModelConfig?.supported_reasoning_levels
+      ?.map((level) => level.effort)
+      .filter((effort) => effort !== AUTO_REASONING_EFFORT) ?? [];
+    return catalogLevels.length > 0 ? catalogLevels : FALLBACK_CODEX_REASONING_LEVELS;
+  }, [selectedModelConfig, selectedProvider]);
+  const defaultReasoningLabel = selectedModelConfig?.default_reasoning_level
+    ? getReasoningEffortLabel(selectedModelConfig.default_reasoning_level)
+    : null;
   const buildSessionQuery = (
     folderPath: string,
     sessionKind: SessionKind,
@@ -249,6 +283,7 @@ export function ChatPanel() {
     if (state.selectedModel) {
       setSelectedModel(state.selectedModel);
     }
+    setSelectedReasoningEffort(state.selectedReasoningEffort);
   }, []);
 
   const resetVisibleSessionState = useCallback(() => {
@@ -262,6 +297,7 @@ export function ChatPanel() {
     setSummaryStatusMessage('');
     setSessionTitle('');
     setSelectedProvider(readStoredAIProvider());
+    setSelectedReasoningEffort(readStoredReasoningEffort());
   }, []);
 
   const commitSessionUiState = useCallback((
@@ -316,8 +352,20 @@ export function ChatPanel() {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
   useEffect(() => {
-    if (selectedModel) window.localStorage.setItem('annot-last-model', selectedModel);
+    if (selectedModel) window.localStorage.setItem('annot-last-model', normalizeModelPreference(selectedModel));
   }, [selectedModel]);
+  useEffect(() => {
+    writeStoredReasoningEffort(selectedReasoningEffort);
+  }, [selectedReasoningEffort]);
+  useEffect(() => {
+    if (
+      selectedProvider === 'codex' &&
+      selectedReasoningEffort !== AUTO_REASONING_EFFORT &&
+      !reasoningLevels.includes(selectedReasoningEffort)
+    ) {
+      setSelectedReasoningEffort(AUTO_REASONING_EFFORT);
+    }
+  }, [reasoningLevels, selectedProvider, selectedReasoningEffort]);
   useEffect(() => {
     const syncProvider = () => {
       if (!activeSessionIdRef.current) {
@@ -406,6 +454,7 @@ export function ChatPanel() {
             provider: data.provider || current.provider || readStoredAIProvider() || DEFAULT_AI_PROVIDER,
             sessionLoading: false,
             selectedModel: typeof data.model === 'string' && data.model ? data.model : current.selectedModel,
+            selectedReasoningEffort: normalizeReasoningEffort(data.reasoningEffort),
             title: typeof data.title === 'string' ? data.title : current.title,
           }));
         }
@@ -519,6 +568,7 @@ export function ChatPanel() {
         folderPath: activeSessionFolder,
         title: fallbackTitle,
         model: selectedModel || undefined,
+        reasoningEffort: selectedReasoningEffort,
         provider: selectedProvider,
         sessionKind: activeSessionKind,
         pdfPath: activeSessionKind === 'pdf' ? activeSessionPdfPath : null,
@@ -670,6 +720,9 @@ export function ChatPanel() {
         summaryStatus: 'idle',
         summaryStatusMessage: '',
         selectedModel: event.model || fallbackModel,
+        selectedReasoningEffort: normalizeReasoningEffort(
+          event.session?.reasoningEffort ?? current.selectedReasoningEffort,
+        ),
         provider: event.provider || current.provider,
         title: event.session?.title || current.title,
       }));
@@ -724,6 +777,7 @@ export function ChatPanel() {
         summaryStatus: 'idle',
         summaryStatusMessage: '',
         selectedModel: selectedModel || current.selectedModel,
+        selectedReasoningEffort,
       }));
 
       const res = await fetch('/api/chat', {
@@ -733,9 +787,10 @@ export function ChatPanel() {
           folderPath: activeSessionFolder,
           sessionId,
           prompt: userMessage.content,
-            model: selectedModel,
-            currentPdfPath: activeSessionKind === 'pdf'
-              ? (activeSessionPdfPath || activePdf?.path || null)
+          model: selectedModel,
+          reasoningEffort: selectedReasoningEffort,
+          currentPdfPath: activeSessionKind === 'pdf'
+            ? (activeSessionPdfPath || activePdf?.path || null)
             : (activePdf?.path || null),
         }),
       });
@@ -814,6 +869,7 @@ export function ChatPanel() {
   };
 
   const displayName = (modelId: string) => {
+    if (modelId === AUTO_MODEL_ID) return getAutoModelLabel(selectedProvider);
     const model = models.find((m) => m.id === modelId);
     if (model?.display_name) return model.display_name;
     return modelId.replace(/-\d{4}-\d{2}-\d{2}$/, '');
@@ -859,6 +915,7 @@ export function ChatPanel() {
           folderPath: activeSessionFolder,
           sessionId: activeSessionId,
           model: selectedModel || undefined,
+          reasoningEffort: selectedReasoningEffort,
         }),
       });
       const data = await res.json();
@@ -938,33 +995,33 @@ export function ChatPanel() {
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
-      <div className="px-4 py-3 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-2 min-w-0">
+      <div className="flex shrink-0 flex-wrap items-center gap-2 px-3 py-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2">
           <h2 className="text-xs font-bold uppercase tracking-wider text-on-surface-variant">{sessionLabel}</h2>
           {renderSummaryStatus()}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex w-full min-w-0 items-center gap-1">
           <button
             onClick={() => void handleOpenSummaryExport()}
             disabled={!activeSessionId || exportableTurnCount === 0 || summaryStatus === 'generating'}
-            className="flex items-center gap-1 rounded-md bg-surface-container px-2.5 py-1.5 text-[11px] font-medium text-on-surface-variant transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-surface-container text-[11px] font-medium text-on-surface-variant transition-colors hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-50"
             title="대화 요약 Markdown 미리보기"
           >
             <FileDown size={11} strokeWidth={2} />
-            내보내기
+            <span className="sr-only">내보내기</span>
           </button>
           {/* Model selector */}
-          <div className="relative" ref={pickerRef}>
+          <div className="relative min-w-0 flex-1" ref={pickerRef}>
             <button
               onClick={() => setShowModelPicker(!showModelPicker)}
-              className="flex min-w-28 items-center justify-between gap-2 rounded-md bg-emerald-100 px-3 py-1.5 text-[11px] font-semibold text-emerald-700 hover:bg-emerald-200 transition-colors"
+              className="flex h-7 w-full min-w-0 items-center justify-between gap-1 rounded-md bg-emerald-100 px-2 text-[11px] font-semibold text-emerald-700 transition-colors hover:bg-emerald-200"
             >
               {modelsLoading ? (
                 <Loader2 size={10} className="animate-spin" />
               ) : (
                 <>
-                  {selectedModel ? displayName(selectedModel) : '모델'}
-                  <ChevronDown size={10} strokeWidth={2.5} />
+                  <span className="truncate">{selectedModel ? displayName(selectedModel) : '모델'}</span>
+                  <ChevronDown size={10} strokeWidth={2.5} className="shrink-0" />
                 </>
               )}
             </button>
@@ -993,7 +1050,7 @@ export function ChatPanel() {
                       setSelectedModel(customModel.trim());
                       setShowModelPicker(false);
                     }}
-                    placeholder="예: gpt-5.6"
+                    placeholder="예: 공급자가 지원하는 모델 ID"
                     className="w-full rounded border border-outline-variant/30 bg-surface px-2 py-1.5 text-[11px] text-on-surface outline-none focus:border-outline"
                   />
                   <button
@@ -1011,6 +1068,26 @@ export function ChatPanel() {
               </div>
             )}
           </div>
+
+          {selectedProvider === 'codex' && (
+            <select
+              data-testid="reasoning-effort-select"
+              value={selectedReasoningEffort}
+              onChange={(event) => setSelectedReasoningEffort(normalizeReasoningEffort(event.target.value))}
+              className="h-7 min-w-0 flex-1 rounded-md border-0 bg-violet-100 px-2 text-[11px] font-semibold text-violet-700 outline-none hover:bg-violet-200 focus:ring-2 focus:ring-violet-300"
+              aria-label="추론 수준"
+              title="추론 수준이 높을수록 더 오래 생각하며 사용량이 늘어날 수 있습니다."
+            >
+              <option value={AUTO_REASONING_EFFORT}>
+                추론 자동{defaultReasoningLabel ? ` (기본 ${defaultReasoningLabel})` : ''}
+              </option>
+              {reasoningLevels.map((effort) => (
+                <option key={effort} value={effort}>
+                  추론 {getReasoningEffortLabel(effort)}
+                </option>
+              ))}
+            </select>
+          )}
 
           <button
             onClick={() => void fetchModels(selectedProvider)}
@@ -1084,7 +1161,7 @@ export function ChatPanel() {
                         <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">
                           질문
                         </div>
-                        <p className="mt-1 text-xs text-on-surface whitespace-pre-wrap break-words">
+                        <p className="selectable-text mt-1 text-xs text-on-surface whitespace-pre-wrap break-words">
                           {summary.question}
                         </p>
                       </div>
@@ -1092,7 +1169,7 @@ export function ChatPanel() {
                         <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">
                           답변 요약
                         </div>
-                        <p className="mt-1 text-xs text-on-surface whitespace-pre-wrap break-words">
+                        <p className="selectable-text mt-1 text-xs text-on-surface whitespace-pre-wrap break-words">
                           {summary.answerSummary}
                         </p>
                       </div>
@@ -1117,7 +1194,7 @@ export function ChatPanel() {
             {msg.role === 'user' ? (
               <div className="flex justify-end">
                 <div className="max-w-[90%] bg-primary text-on-primary px-3.5 py-2.5 rounded-2xl rounded-tr-sm">
-                  <p style={userFontStyle}>{msg.content}</p>
+                  <p className="selectable-text whitespace-pre-wrap break-words" style={userFontStyle}>{msg.content}</p>
                 </div>
               </div>
             ) : (
@@ -1127,7 +1204,7 @@ export function ChatPanel() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div
-                    className="chat-markdown font-editorial text-on-surface"
+                    className="chat-markdown selectable-text font-editorial text-on-surface"
                     style={assistantFontStyle}
                   >
                     <ReactMarkdown
@@ -1205,7 +1282,7 @@ export function ChatPanel() {
                     실시간 출력
                   </div>
                   {thinkingDraft ? (
-                    <pre className="whitespace-pre-wrap break-words text-[11px] text-on-surface-variant font-functional">
+                    <pre className="selectable-text whitespace-pre-wrap break-words text-[11px] text-on-surface-variant font-functional">
                       {thinkingDraft}
                     </pre>
                   ) : (

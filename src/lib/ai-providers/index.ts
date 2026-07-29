@@ -1,8 +1,9 @@
 import { getClaudeAuthStatus, probeClaudeConnection, runClaudeTurn } from '@/lib/claude-code';
-import { fetchCodexModels, getCodexAuthStatus, sendCodexChat } from '@/lib/codex-auth';
-import { runCodexTurn } from '@/lib/codex-exec';
+import { fetchCodexModels, getCodexAuthStatus } from '@/lib/codex-auth';
+import { getCodexCliAuthStatus, listCodexModelsFromCli, runCodexTurn } from '@/lib/codex-exec';
 import { AIProvider } from '@/types';
 import { DEFAULT_AI_PROVIDER } from './config';
+import { AUTO_MODEL_ID, withAutoModel } from './model-policy';
 
 import {
   ProviderModel,
@@ -15,30 +16,57 @@ import {
 const codexRuntime: ProviderRuntime = {
   id: 'codex',
   async listModels(): Promise<ProviderModel[]> {
-    const models = await fetchCodexModels();
-    if (!models) {
-      throw new Error('Not authenticated. Sign in to Codex on this machine first.');
+    try {
+      const cliModels = await listCodexModelsFromCli();
+      if (cliModels.length > 0) {
+        return withAutoModel('codex', cliModels);
+      }
+    } catch {
+      // Older Codex clients do not expose `codex debug models`.
     }
-    return models;
+
+    try {
+      const models = await fetchCodexModels();
+      return withAutoModel('codex', models ?? []);
+    } catch {
+      // Automatic mode still works because Codex chooses its recommended model
+      // when Annot omits the --model flag.
+      return withAutoModel('codex', []);
+    }
   },
   async getStatus() {
+    const fileStatus = await getCodexAuthStatus();
+    try {
+      const cliStatus = await getCodexCliAuthStatus();
+      if (cliStatus.authenticated) {
+        return {
+          provider: 'codex',
+          ...fileStatus,
+          ...cliStatus,
+          authenticated: true,
+        };
+      }
+    } catch {
+      // Fall back to file-based status for older or unavailable CLI installs.
+    }
     return {
       provider: 'codex',
-      ...(await getCodexAuthStatus()),
+      ...fileStatus,
     };
   },
   async validateConnection() {
-    const models = await codexRuntime.listModels();
-    const model = models[0]?.id || 'gpt-5.4-mini';
-    const result = await sendCodexChat(
-      [{ role: 'user', content: 'Reply with exactly OK.' }],
-      model,
-    );
+    const result = await runCodexTurn({
+      model: AUTO_MODEL_ID,
+      folderPath: '',
+      sessionKind: 'folder',
+      prompt: 'Reply with exactly OK.',
+      ephemeral: true,
+    });
 
     return {
       provider: 'codex',
       ok: /^ok\b/i.test(result.content.trim()),
-      model: result.model || model,
+      model: AUTO_MODEL_ID,
       response: result.content.trim(),
       message: 'Codex responded successfully.',
     };
@@ -51,6 +79,7 @@ const codexRuntime: ProviderRuntime = {
       {
         codexSessionId: input.providerSessionId,
         model: input.model,
+        reasoningEffort: input.reasoningEffort,
         folderPath: input.folderPath,
         sessionKind: input.sessionKind,
         prompt: input.prompt,
@@ -69,7 +98,7 @@ const codexRuntime: ProviderRuntime = {
 const claudeRuntime: ProviderRuntime = {
   id: 'claude',
   async listModels(): Promise<ProviderModel[]> {
-    return [
+    return withAutoModel('claude', [
       {
         id: 'sonnet',
         owned_by: 'anthropic',
@@ -82,7 +111,7 @@ const claudeRuntime: ProviderRuntime = {
         created: 0,
         display_name: 'Opus',
       },
-    ];
+    ]);
   },
   async getStatus() {
     return {
@@ -91,7 +120,7 @@ const claudeRuntime: ProviderRuntime = {
     };
   },
   async validateConnection() {
-    const result = await probeClaudeConnection('sonnet');
+    const result = await probeClaudeConnection();
 
     return {
       provider: 'claude',

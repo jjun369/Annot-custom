@@ -16,6 +16,8 @@ import {
 } from 'lucide-react';
 
 import { useFeedback } from '@/components/common/FeedbackProvider';
+import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
+import { readStoredReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
 import { PaperMetadata, PaperTranslation, TreeNode } from '@/types';
 
 interface PaperInspectorProps {
@@ -173,7 +175,8 @@ export function PaperInspector({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           pdfPath: pdf.path,
-          model: window.localStorage.getItem('annot-last-model') || undefined,
+          model: normalizeModelPreference(window.localStorage.getItem('annot-last-model')),
+          reasoningEffort: readStoredReasoningEffort(),
         }),
       });
       const data = await res.json();

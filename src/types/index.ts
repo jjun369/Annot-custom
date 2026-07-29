@@ -14,6 +14,7 @@ export interface TreeNode {
 
 export type SessionKind = 'folder' | 'pdf';
 export type AIProvider = 'codex' | 'claude';
+export type ReasoningEffort = 'auto' | 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
 export interface Session {
   id: string;
@@ -28,6 +29,7 @@ export interface Session {
   messages: ChatMessage[];
   turnSummaries?: SessionTurnSummary[];
   model?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface ChatMessage {

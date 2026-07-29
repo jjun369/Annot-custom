@@ -1,24 +1,24 @@
 @echo off
 setlocal
 cd /d "%~dp0"
-title Annot
+title PageDock
 
 if not exist node_modules (
-  echo [Annot] Installing required packages...
+  echo [PageDock] Installing developer packages...
   call npm.cmd install
   if errorlevel 1 goto :error
 )
 
-echo [Annot] Updating the optimized build...
+echo [PageDock] Building the web application...
 call npm.cmd run build
 if errorlevel 1 goto :error
 
-echo [Annot] Starting at http://localhost:3000
+echo [PageDock] Starting at http://localhost:3000
 call npm.cmd run start
 goto :eof
 
 :error
 echo.
-echo Annot could not start. Review the message above.
+echo PageDock could not start. Review the message above.
 pause
 exit /b 1

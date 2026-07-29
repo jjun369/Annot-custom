@@ -9,6 +9,7 @@ import {
   ResolvedCommand,
   resolveExecutable,
 } from '@/lib/command-runtime';
+import { AUTO_MODEL_ID, isAutoModel } from '@/lib/ai-providers/model-policy';
 
 export interface ClaudeCodeAuthStatus {
   authenticated: boolean;
@@ -94,7 +95,7 @@ function buildPrompt({
 }: Omit<ClaudeRunTurnInput, 'providerSessionId' | 'model'>): string {
   const workspaceRoot = getWorkspaceRoot();
   const contextLines = [
-    'Annot session context:',
+    'PageDock session context:',
     `- Workspace root: ${workspaceRoot}`,
     `- Current session folder: ${folderPath || '.'}`,
     `- Session type: ${sessionKind === 'pdf' ? 'PDF-focused reading session' : 'Folder-wide research session'}`,
@@ -167,7 +168,7 @@ function createClaudeArgs(input: ClaudeRunTurnInput): string[] {
     args.push('--resume', input.providerSessionId);
   }
 
-  if (input.model) {
+  if (!isAutoModel(input.model)) {
     args.push('--model', input.model);
   }
 
@@ -336,8 +337,8 @@ export async function runClaudeTurn(
   };
 }
 
-export async function probeClaudeConnection(model = 'sonnet'): Promise<{ model: string; response: string }> {
-  const result = await executeClaudeCommand([
+export async function probeClaudeConnection(model?: string): Promise<{ model: string; response: string }> {
+  const args = [
     '--print',
     '--verbose',
     '--output-format',
@@ -346,13 +347,15 @@ export async function probeClaudeConnection(model = 'sonnet'): Promise<{ model: 
     '--no-session-persistence',
     '--tools',
     '',
-    '--model',
-    model,
-    'Reply with exactly OK.',
-  ]);
+  ];
+  if (!isAutoModel(model)) {
+    args.push('--model', model!);
+  }
+  args.push('Reply with exactly OK.');
+  const result = await executeClaudeCommand(args);
 
   return {
-    model,
+    model: model || AUTO_MODEL_ID,
     response: result.content.trim(),
   };
 }

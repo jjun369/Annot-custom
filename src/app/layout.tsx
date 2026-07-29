@@ -6,8 +6,9 @@ import "react-pdf/dist/Page/AnnotationLayer.css";
 import { FeedbackProvider } from "@/components/common/FeedbackProvider";
 
 export const metadata: Metadata = {
-  title: "Annot — AI 논문 연구 도구",
+  title: "PageDock — AI PDF 공부 도구",
   description: "PDF를 읽고, 표시하고, AI와 함께 연구하세요.",
+  icons: { icon: '/pagedock-mark.svg' },
 };
 
 export default function RootLayout({

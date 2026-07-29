@@ -4,6 +4,7 @@ import { useState, useEffect, useRef } from 'react';
 import { ArrowLeft, CheckCircle2, Download, FolderSync, Loader2, LogIn, Palette, RefreshCw, RotateCcw, Server, Trash2, Upload } from 'lucide-react';
 import Link from 'next/link';
 import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
+import { AUTO_MODEL_ID, getAutoModelLabel } from '@/lib/ai-providers/model-policy';
 import {
   DEFAULT_CHAT_FONT_SIZE,
   MAX_CHAT_FONT_SIZE,
@@ -14,6 +15,9 @@ import {
 import { readStoredAIProvider, writeStoredAIProvider } from '@/lib/provider-preferences';
 import { AIProvider } from '@/types';
 import { useFeedback } from '@/components/common/FeedbackProvider';
+import { CodexSetupCard } from '@/components/common/CodexSetupCard';
+import { PdfEngineSetupCard } from '@/components/common/PdfEngineSetupCard';
+import { APP_VERSION } from '@/lib/app-info';
 
 interface ProviderStatus {
   provider: AIProvider;
@@ -212,7 +216,7 @@ export default function SettingsPage() {
       });
       const data = await res.json();
       if (!res.ok || data?.error) throw new Error(data?.error || '경로를 저장하지 못했습니다.');
-      setBackupMessage('라이브러리 경로를 저장했습니다. Annot을 다시 시작하면 적용됩니다.');
+      setBackupMessage('라이브러리 경로를 저장했습니다. PageDock을 다시 시작하면 적용됩니다.');
     } catch (error) {
       setBackupMessage(error instanceof Error ? error.message : '경로를 저장하지 못했습니다.');
     } finally {
@@ -268,6 +272,7 @@ export default function SettingsPage() {
           </div>
 
           <div className="bg-surface-container-lowest rounded-lg p-5 space-y-5">
+            {candidateProvider === 'codex' && <CodexSetupCard />}
             <div className="flex items-center justify-between gap-4">
               <div>
                 <p className="text-sm font-medium text-on-surface">기본 AI</p>
@@ -378,7 +383,11 @@ export default function SettingsPage() {
                 <p className="font-medium">{validationResult.message}</p>
                 {(validationResult.model || validationResult.response) && (
                   <p className="mt-1 text-xs opacity-80">
-                    {validationResult.model && <>사용 모델: {validationResult.model}. </>}
+                    {validationResult.model && <>
+                      사용 모델: {validationResult.model === AUTO_MODEL_ID
+                        ? getAutoModelLabel(validationResult.provider)
+                        : validationResult.model}.{' '}
+                    </>}
                     {validationResult.response && <>확인 응답: {validationResult.response}</>}
                   </p>
                 )}
@@ -409,7 +418,7 @@ export default function SettingsPage() {
               <p className="mt-2 text-xs text-on-surface-variant">
                 {libraryInfo?.oneDriveLikely
                   ? 'OneDrive 경로를 사용 중입니다. 이 폴더를 “이 장치에 항상 유지”로 설정해 주세요.'
-                  : '여러 노트북에서 사용하려면 ANNOT_ROOT를 개인 OneDrive 안의 폴더로 지정하세요.'}
+                  : '여러 노트북에서 사용하려면 PageDock Library를 개인 OneDrive 안의 폴더로 지정하세요.'}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -483,7 +492,7 @@ export default function SettingsPage() {
             <Server size={16} strokeWidth={2} className="text-on-surface-variant" />
             <h2 className="text-sm font-semibold text-on-surface uppercase tracking-wider">실행 환경</h2>
           </div>
-          <div className="bg-surface-container-lowest rounded-lg p-5">
+          <div className="bg-surface-container-lowest rounded-lg p-5 space-y-4">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-on-surface">로컬 실행 모드</p>
@@ -493,6 +502,11 @@ export default function SettingsPage() {
                 <div className="w-2 h-2 rounded-full bg-emerald-500" />
                 <span className="text-xs font-medium text-emerald-700">정상</span>
               </div>
+            </div>
+            <PdfEngineSetupCard />
+            <div className="border-t border-outline-variant/20 pt-4 text-xs leading-5 text-on-surface-variant">
+              <p><span className="font-semibold text-on-surface">PageDock {APP_VERSION}</span> · Windows 데스크톱 배포판</p>
+              <p className="mt-1">Annot 프로젝트를 기반으로 수정했으며 Apache License 2.0을 따릅니다.</p>
             </div>
           </div>
         </section>
