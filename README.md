@@ -10,6 +10,8 @@ PageDock은 Windows와 Apple Silicon(M1 이후) macOS를 지원하도록 구성�
 - Codex는 공식 앱 또는 CLI를 감지하고 `codex login`의 ChatGPT 브라우저 OAuth를 사용합니다. API 키는 지식 정리에 사용하지 않습니다.
 - Python 3이 있으면 PyMuPDF는 PageDock 사용자 설정 폴더의 전용 가상 환경에 설치됩니다. 기본 PDF 읽기는 Python 없이도 사용할 수 있습니다.
 
+친구에게 전달하는 방법과 첫 실행 절차는 [macOS 친구 테스트 안내](./docs/MACOS_FRIEND_TEST_KO.md)를 참고하세요.
+
 개인 메모를 위키로 정리하는 기능은 [지식 정리 한국어 사용 설명서](./docs/KNOWLEDGE_USER_GUIDE_KO.md)를 참고하세요.
 
 PageDock은 PDF를 한곳에 모아 읽고, 표시하고, 논문·특허를 프로젝트별로 조사하며, 선택적으로 AI와 함께 공부하는 Windows용 로컬 작업 공간입니다.

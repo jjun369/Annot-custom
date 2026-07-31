@@ -8,6 +8,7 @@ const required = [
   'docs/PRODUCT_DIRECTION.md', 'docs/ARCHITECTURE.md', 'docs/DATA_MODEL.md',
   'docs/features/TECHNOLOGY_RESEARCH.md', 'docs/ROADMAP.md', 'docs/CURRENT_STATE.md',
   'docs/KNOWLEDGE_USER_GUIDE_KO.md', 'docs/features/PERSONAL_KNOWLEDGE.md',
+  'docs/MACOS_FRIEND_TEST_KO.md',
   'docs/decisions/0001-electron-local-first.md', 'docs/decisions/0002-stable-document-identity.md',
   'docs/decisions/0003-search-ai-and-public-sources.md', 'docs/decisions/0004-backup-and-credentials.md',
   'docs/decisions/0005-release-separation.md', 'docs/decisions/0006-knowledge-inbox-codex-review.md',
