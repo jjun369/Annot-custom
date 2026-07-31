@@ -6,8 +6,10 @@ import { useWorkspace } from '@/lib/workspace-store';
 import { FolderPlus, FilePlus, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import { countItems, findNode, getParentFolderPath } from '@/lib/tree-utils';
 import { useFeedback } from '@/components/common/FeedbackProvider';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { TreeNode } from '@/types';
+
+export const REQUEST_PDF_UPLOAD_EVENT = 'pagedock:request-pdf-upload';
 
 export function TreeExplorer() {
   const {
@@ -25,6 +27,12 @@ export function TreeExplorer() {
   const [isUploading, setIsUploading] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const requestUpload = () => fileInputRef.current?.click();
+    window.addEventListener(REQUEST_PDF_UPLOAD_EVENT, requestUpload);
+    return () => window.removeEventListener(REQUEST_PDF_UPLOAD_EVENT, requestUpload);
+  }, []);
 
   const targetFolderPath = getParentFolderPath(selectedNode);
   const stats = treeRoot ? countItems(treeRoot) : { folders: 0, pdfs: 0 };
@@ -213,7 +221,10 @@ export function TreeExplorer() {
         ) : (
           <div className="mx-1 mt-2 rounded-xl border border-dashed border-outline-variant/35 bg-surface-container-low px-3 py-5 text-center">
             <p className="text-xs font-medium text-on-surface">라이브러리가 비어 있습니다</p>
-            <p className="mt-1 text-[10px] leading-4 text-on-surface-variant">위의 PDF 추가 버튼으로 첫 문서를 넣어보세요.</p>
+            <p className="mt-1 text-[11px] leading-4 text-on-surface-variant">첫 PDF를 복사해 공부를 시작해 보세요.</p>
+            <button type="button" onClick={handleUploadClick} className="mt-3 inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary">
+              <FilePlus size={13} /> PDF 추가
+            </button>
           </div>
         )}
       </nav>

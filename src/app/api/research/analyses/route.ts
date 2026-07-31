@@ -42,6 +42,17 @@ export async function POST(request: NextRequest) {
       model: body.model || 'auto',
       reasoningEffort: body.reasoningEffort || 'auto',
       imagePaths: Array.isArray(body.imagePaths) ? body.imagePaths : undefined,
+    }).catch(async (error) => {
+      await saveAnalysisReport({
+        id: reportId,
+        documentId: body.documentId!,
+        projectId: body.projectId,
+        profileId: body.profileId!,
+        status: 'failed',
+        model: body.model || 'auto',
+        reasoningEffort: body.reasoningEffort || 'auto',
+        error: error instanceof Error ? error.message : '분석 준비 중 오류가 발생했습니다.',
+      }).catch(() => undefined);
     });
     return NextResponse.json(queued, { status: 202 });
   } catch (error) {

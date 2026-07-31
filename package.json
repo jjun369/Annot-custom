@@ -1,6 +1,6 @@
 {
   "name": "pagedock",
-  "version": "0.4.1",
+  "version": "0.4.3",
   "description": "A local-first PDF study workspace with optional AI assistance.",
   "author": "PageDock contributors",
   "private": true,
@@ -12,7 +12,6 @@
     "build": "next build",
     "assets:icons": "node scripts/build-icons.mjs",
     "build:desktop": "npm run build && npm run assets:icons && electron-builder --win nsis",
-    "build:mac:test": "npm run build && npm run assets:icons && electron-builder --mac dmg zip --arm64 --publish never",
     "docs:check": "node scripts/check-docs.mjs",
     "verify:release": "npm run docs:check && npm run lint && tsc --noEmit --incremental false && npm run test && npm run build && npm run assets:icons",
     "release:desktop": "npm run build && npm run assets:icons && electron-builder --win nsis --publish always",

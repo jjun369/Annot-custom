@@ -1,6 +1,6 @@
 # Personal knowledge inbox
 
-Status: Experimental working-tree implementation after PageDock 0.4.1.
+Status: Experimental implementation included in the PageDock 0.4.3 working tree.
 
 ## User goal
 

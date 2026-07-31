@@ -136,7 +136,7 @@ export function Topbar() {
             if (event.target === event.currentTarget) setSearchOpen(false);
           }}
         >
-          <div className="w-full max-w-2xl overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest shadow-ambient">
+          <div role="dialog" aria-modal="true" aria-label="통합 검색" className="w-full max-w-2xl overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest shadow-ambient">
             <div className="flex items-center gap-3 border-b border-outline-variant/20 px-4 py-3">
               <Search size={18} className="text-outline" />
               <input

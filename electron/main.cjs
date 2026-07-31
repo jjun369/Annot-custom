@@ -5,7 +5,7 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 
-const { app, BrowserWindow, dialog, Menu, session, shell } = require('electron');
+const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 
 const isDevelopment = process.argv.includes('--dev') || !app.isPackaged;
@@ -143,6 +143,7 @@ function createWindow(url) {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      preload: path.join(__dirname, 'preload.cjs'),
     },
   });
 
@@ -171,6 +172,19 @@ function createWindow(url) {
   void mainWindow.loadURL(url);
 }
 
+function configureDesktopIpc() {
+  ipcMain.handle('pagedock:select-directory', async () => {
+    const options = {
+      title: 'PageDock Library 폴더 선택',
+      properties: ['openDirectory', 'createDirectory'],
+    };
+    const result = mainWindow
+      ? await dialog.showOpenDialog(mainWindow, options)
+      : await dialog.showOpenDialog(options);
+    return result.canceled ? null : result.filePaths[0] || null;
+  });
+}
+
 function configureApplicationMenu() {
   if (process.platform !== 'darwin') {
     Menu.setApplicationMenu(null);
@@ -190,6 +204,12 @@ function configureApplicationMenu() {
         { role: 'unhide' },
         { type: 'separator' },
         { role: 'quit' },
+      ],
+    },
+    {
+      label: '파일',
+      submenu: [
+        { role: 'close' },
       ],
     },
     {
@@ -283,6 +303,7 @@ app.on('activate', () => {
 });
 
 void app.whenReady().then(async () => {
+  configureDesktopIpc();
   configureApplicationMenu();
   try {
     const url = isDevelopment

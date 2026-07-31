@@ -5,6 +5,7 @@ import {
   getPaperMetadataBatch,
   updatePaperMetadata,
 } from '@/lib/paper-metadata';
+import { refreshDocumentSearchIndex } from '@/lib/research-db';
 
 export async function GET(req: NextRequest) {
   try {
@@ -45,7 +46,9 @@ export async function PATCH(req: NextRequest) {
     if (!pdfPath?.trim()) {
       return NextResponse.json({ error: 'PDF 경로가 필요합니다.' }, { status: 400 });
     }
-    return NextResponse.json(await updatePaperMetadata(pdfPath, updates));
+    const metadata = await updatePaperMetadata(pdfPath, updates);
+    await refreshDocumentSearchIndex(pdfPath);
+    return NextResponse.json(metadata);
   } catch (error) {
     const message = error instanceof Error ? error.message : '논문 정보를 저장하지 못했습니다.';
     return NextResponse.json({ error: message }, { status: 500 });

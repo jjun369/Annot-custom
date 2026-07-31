@@ -68,7 +68,7 @@ export function OnboardingDialog() {
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-[#182326]/45 p-4 backdrop-blur-sm">
-      <section className="w-full max-w-xl overflow-hidden rounded-2xl border border-outline-variant/25 bg-surface-container-lowest shadow-2xl">
+      <section role="dialog" aria-modal="true" aria-label="PageDock 첫 실행 안내" className="w-full max-w-xl overflow-hidden rounded-2xl border border-outline-variant/25 bg-surface-container-lowest shadow-2xl">
         <div className="h-1 bg-surface-container-high">
           <div className="h-full bg-primary transition-all" style={{ width: `${((step + 1) / 3) * 100}%` }} />
         </div>
@@ -76,7 +76,7 @@ export function OnboardingDialog() {
           {step === 0 && (
             <div className="text-center">
               <PageDockMark size={68} className="mx-auto rounded-2xl" />
-              <h1 className="mt-5 text-2xl font-bold tracking-tight text-on-surface">PageDock에 오신 것을 환영합니다</h1>
+              <h1 id="pagedock-onboarding-title" className="mt-5 text-2xl font-bold tracking-tight text-on-surface">PageDock에 오신 것을 환영합니다</h1>
               <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-on-surface-variant">
                 흩어진 PDF를 한곳에 모아 읽고, 표시하고, 필요할 때 AI와 함께 공부하는 로컬 작업 공간입니다.
               </p>
@@ -107,12 +107,16 @@ export function OnboardingDialog() {
                 <ShieldCheck size={15} className="mt-0.5 shrink-0 text-emerald-600" />
                 앱을 삭제해도 라이브러리와 공부 기록은 자동으로 삭제하지 않습니다.
               </div>
+              <p className="mt-3 text-xs leading-5 text-on-surface-variant">기본 PDF 읽기와 메모는 추가 설치 없이 사용할 수 있습니다. 원본 PDF에 하이라이트를 반영할 때만 PDF 도구가 필요합니다.</p>
               {pdfEngineMessage && <p className="mt-3 text-xs leading-5 text-on-surface-variant">{pdfEngineMessage}</p>}
-              <div className="mt-7 flex justify-between">
+              <div className="mt-7 flex flex-wrap items-center justify-between gap-2">
                 <button type="button" onClick={() => setStep(0)} className="px-3 py-2 text-sm text-on-surface-variant">이전</button>
-                <button type="button" disabled={pdfEngineBusy} onClick={() => void preparePdfEngine()} className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-60">
-                  {pdfEngineBusy ? 'PDF 도구 준비 중...' : '확인했어요'} {!pdfEngineBusy && <ArrowRight size={15} />}
-                </button>
+                <div className="flex gap-2">
+                  <button type="button" disabled={pdfEngineBusy} onClick={() => setStep(2)} className="rounded-xl px-4 py-2.5 text-sm font-semibold text-on-surface-variant hover:bg-surface-container">나중에</button>
+                  <button type="button" disabled={pdfEngineBusy} onClick={() => void preparePdfEngine()} className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary disabled:opacity-60">
+                    {pdfEngineBusy ? 'PDF 도구 준비 중...' : 'PDF 도구 준비'} {!pdfEngineBusy && <ArrowRight size={15} />}
+                  </button>
+                </div>
               </div>
             </div>
           )}

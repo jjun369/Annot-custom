@@ -13,6 +13,7 @@ import { replaceSidecarHighlights } from '@/lib/highlight-sidecar';
 import { Highlight, PaperMetadata, Session } from '@/types';
 import { APP_VERSION } from '@/lib/app-info';
 import { getCommonPythonCandidateBases } from '@/lib/platform-paths';
+import { buildExecutableCandidates, resolveExecutable } from '@/lib/command-runtime';
 import { exportResearchData, importResearchData } from '@/lib/research-db';
 
 const BACKUP_VERSION = 2;
@@ -261,23 +262,20 @@ function runProcess(command: string, args: string[]): Promise<void> {
 async function extractBackupArchive(archivePath: string, destination: string): Promise<void> {
   const configured = process.env.PAGEDOCK_PYTHON_BIN || process.env.ANNOT_PYTHON_BIN || process.env.PYTHON_BIN;
   const candidates = [
-    ...(configured ? [configured] : []),
-    ...getCommonPythonCandidateBases(),
-    ...(process.platform === 'win32' ? ['py', 'python'] : ['python3', 'python']),
+    ...buildExecutableCandidates([configured], process.platform === 'win32' ? 'python' : 'python3', getCommonPythonCandidateBases()),
+    ...buildExecutableCandidates([], 'python', []),
+    ...(process.platform === 'win32' ? buildExecutableCandidates([], 'py', []) : []),
   ];
-  let lastError: unknown = null;
-  for (const candidate of candidates) {
-    try {
-      const args = /(^|[\\/])py(\.exe)?$/i.test(candidate)
-        ? ['-3', '-c', PYTHON_ZIP_EXTRACT_SCRIPT, archivePath, destination]
-        : ['-c', PYTHON_ZIP_EXTRACT_SCRIPT, archivePath, destination];
-      await runProcess(candidate, args);
-      return;
-    } catch (error) {
-      lastError = error;
-    }
+  const executable = await resolveExecutable([...new Set(candidates)]);
+  if (!executable) {
+    const error = new Error('백업을 처리할 Python 실행 파일을 찾지 못했습니다.');
+    error.name = 'BackupPythonUnavailableError';
+    throw error;
   }
-  throw new Error(lastError instanceof Error ? lastError.message : '백업을 처리할 Python 실행 파일을 찾지 못했습니다.');
+  const args = /(^|[\\/])py(\.exe)?$/i.test(executable)
+    ? ['-3', '-c', PYTHON_ZIP_EXTRACT_SCRIPT, archivePath, destination]
+    : ['-c', PYTHON_ZIP_EXTRACT_SCRIPT, archivePath, destination];
+  await runProcess(executable, args);
 }
 
 interface DeferredSidecar {
@@ -432,15 +430,33 @@ async function importExtractedBackup(extractionRoot: string, manifest: BackupMan
   return { imported, renamed, skipped, skippedPaths };
 }
 
-export async function importPortableBackupFile(archivePath: string): Promise<{
+export async function importPortableBackupFile(
+  archivePath: string,
+  options: { forceInProcessFallback?: boolean } = {},
+): Promise<{
   imported: number;
   renamed: number;
   skipped: number;
   skippedPaths: string[];
 }> {
+  await createAutomaticBackup();
   const extractionRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'pagedock-backup-'));
   try {
-    await extractBackupArchive(archivePath, extractionRoot);
+    if (options.forceInProcessFallback) {
+      const fallback = await importPortableBackup(await fs.readFile(archivePath));
+      return { ...fallback, skippedPaths: [] };
+    }
+    try {
+      await extractBackupArchive(archivePath, extractionRoot);
+    } catch (error) {
+      if (!(error instanceof Error) || error.name !== 'BackupPythonUnavailableError') throw error;
+      const stats = await fs.stat(archivePath);
+      if (stats.size > 512 * 1024 * 1024) {
+        throw new Error('512MB가 넘는 백업은 PDF 도구를 준비한 뒤 가져와 주세요. 작은 백업은 Python 없이도 복원할 수 있습니다.');
+      }
+      const fallback = await importPortableBackup(await fs.readFile(archivePath));
+      return { ...fallback, skippedPaths: [] };
+    }
     const manifest = JSON.parse(await fs.readFile(path.join(extractionRoot, 'manifest.json'), 'utf8')) as BackupManifest;
     return await importExtractedBackup(path.join(extractionRoot, 'library'), manifest);
   } finally {

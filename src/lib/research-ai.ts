@@ -133,6 +133,7 @@ export async function analyzeResearchDocument(input: {
     `Focus areas: ${profile.focusAreas.join(', ')}`,
     `Questions: ${profile.questions.join(' | ')}`,
     `Metrics: ${profile.metrics.join(', ')}`,
+    `Terminology: ${Object.entries(profile.terminology).map(([term, variants]) => `${term} = ${variants.join(', ')}`).join(' | ') || 'not specified'}`,
     patent?.claimsText ? `Claims text:\n${patent.claimsText.slice(0, 30000)}` : 'Claims text: not available',
     '',
     'Source excerpts:',

@@ -15,15 +15,17 @@ Electron shell
 
 Electron packages the web server and opens a desktop window. Runtime data lives in PageDock Library, never the installation directory. The local server is loopback-only. Existing JSON remains the compatibility layer while research relationships, chunks, projects, patents, reports, and evidence use SQLite.
 
-PDF ingestion computes SHA-256, creates or finds a `documentId`, and keeps the current relative path plus aliases. Workspace scans repair a missing path when exactly one matching hash exists. Ambiguous matches become visible conflicts.
+The sandboxed Electron renderer exposes one narrow preload capability for choosing a library directory with the native operating-system dialog. It does not expose arbitrary filesystem, shell, credential, or process access to the web UI.
+
+PDF ingestion computes SHA-256, creates or finds a `documentId`, and keeps the current relative path plus aliases. Workspace scans repair a missing path when exactly one matching hash exists. Ambiguous matches become visible conflicts. Replacing the contents at an existing path creates a blocking `content-changed` conflict; PageDock retains the previous identity hash until the user explicitly accepts the current file as a new version.
 
 Codex authentication and model selection follow the official CLI. `자동` does not pin a model version. Analysis sends only the selected document chunks and selected page images, validates returned evidence against real chunks/pages, and stores the structured report locally.
 
-Source credentials are stored outside the library in the user's PageDock application-data directory. Windows DPAPI protects secrets on Windows; macOS stores the corresponding values in Keychain and keeps only non-secret markers in PageDock JSON. They are excluded from backup and logs.
+Source credentials are stored outside the library in the user's PageDock application-data directory. Windows DPAPI protects secrets. They are excluded from backup and logs. Historical macOS Keychain compatibility code is not part of the supported release contract and may be removed during later maintenance.
 
-Windows packages use NSIS x64. The first macOS port targets Apple Silicon arm64 with an unsigned DMG and ZIP kept as private CI artifacts. The Mac shell keeps the loopback Next server alive when the last window closes, recreates the window from the Dock, and provides native edit/window menus. Public Mac distribution, automatic updates, Developer ID signing, and Apple notarization remain gated on real-device testing and signing credentials.
+PageDock packages and releases only Windows 10/11 x64 through NSIS. Build verification, smoke testing, code signing, updates, and installer-size work target Windows only. The abandoned experimental Apple Silicon port is retained only as repository history; no Mac artifact is supported or distributed.
 
-Backups use a v2 manifest. PDFs and legacy JSON are ordinary archive files; SQLite is exported to normalized research JSON and merged during restore. v1 import remains supported.
+Backups use a v2 manifest. PDFs and legacy JSON are ordinary archive files; SQLite is exported to normalized research JSON and merged during restore. v1 import remains supported. Restore first creates a metadata-only safety snapshot. Python performs streaming extraction when available; archives up to 512MB also have an in-process fallback so a fresh friend PC is not blocked before PDF-tool setup.
 
 Deferred: WebView2 shell, embeddings/vector database, cloud sync, and company AI adapters.
 

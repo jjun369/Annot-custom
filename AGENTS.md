@@ -13,6 +13,7 @@ Before changing code, read these files in order:
 - Preserve user PDFs and all existing `.annot` JSON formats. Never delete or rewrite user data without an explicit, tested migration and rollback path.
 - Treat paths and filenames as mutable attributes. `documentId` is the stable identity of a registered document.
 - Keep the app local-first. Credentials, personal email addresses, proprietary documents, PDF originals, and company information must never enter source control, logs, fixtures, or documentation.
+- Treat Windows 10/11 x64 as the only supported desktop platform. Do not spend project time on macOS/Linux builds, tests, packaging, signing, or compatibility unless the product direction is explicitly changed by a later ADR.
 - Only automatically download lawful public copies after user approval. Do not implement paywall bypasses, Sci-Hub, mirror discovery, or publisher credential collection.
 - Legal status is informational; PageDock does not make freedom-to-operate determinations.
 - Inspect `git status` and run existing checks before editing. Preserve unrelated user changes.

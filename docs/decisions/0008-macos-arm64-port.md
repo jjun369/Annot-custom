@@ -1,5 +1,7 @@
 # ADR 0008: Apple Silicon macOS port and protected credentials
 
+Status: Superseded by ADR 0009. Retained for historical context only; do not implement or distribute this target.
+
 Status: Accepted for private friend testing
 
 PageDock adds an Apple Silicon arm64 desktop target without replacing the existing Electron/Next.js architecture or changing user-data formats. The first artifact is an unsigned, unnotarized DMG plus ZIP built on a macOS CI runner and retained as a private workflow artifact. It is never published automatically to the public release repository. Mac App Store packaging is deferred because its mandatory sandbox conflicts with the current arbitrary library access and external Codex/Python process model.

@@ -14,9 +14,9 @@ interface AppHeaderProps {
 }
 
 const NAV_ITEMS = [
-  { id: 'knowledge' as const, href: '/knowledge', label: '지식', icon: BookOpenText },
   { id: 'library' as const, href: '/', label: '라이브러리', icon: BookOpen },
   { id: 'research' as const, href: '/research', label: '리서치', icon: Telescope },
+  { id: 'knowledge' as const, href: '/knowledge', label: '지식', icon: BookOpenText },
 ];
 
 export function AppHeader({ active, actions, onSearch }: AppHeaderProps) {

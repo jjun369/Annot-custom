@@ -324,13 +324,13 @@ export default function KnowledgePage() {
   }
 
   async function restoreRevision(topic: KnowledgeTopic, revision: number): Promise<void> {
-    if (!window.confirm(`'${topic.title}' 문서를 revision ${revision} 내용으로 복원할까요? 현재 상태도 이력에 남습니다.`)) return;
+    if (!window.confirm(`'${topic.title}' 문서를 버전 ${revision} 내용으로 복원할까요? 현재 상태도 이력에 남습니다.`)) return;
     const result = await responseJson<{ topic: KnowledgeTopic }>(await fetch('/api/knowledge/topics', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topicId: topic.id, revision }),
     }));
     await refresh();
     setSelectedTopicId(result.topic.id);
-    setMessage({ text: `revision ${revision}의 내용으로 새 revision ${result.topic.revision}을 만들었습니다.` });
+    setMessage({ text: `버전 ${revision}의 내용으로 새 버전 ${result.topic.revision}을 만들었습니다.` });
   }
 
   async function editTopic(
@@ -344,16 +344,16 @@ export default function KnowledgePage() {
     }));
     await refresh();
     setSelectedTopicId(result.topic.id);
-    setMessage({ text: `직접 수정 내용을 revision ${result.topic.revision}로 저장했습니다.` });
+    setMessage({ text: `직접 수정 내용을 버전 ${result.topic.revision}로 저장했습니다.` });
   }
 
   async function trashRevision(topic: KnowledgeTopic, revision: number): Promise<void> {
-    if (!window.confirm(`'${topic.title}'의 revision ${revision}을 휴지통으로 옮길까요? 휴지통에서 다시 복원할 수 있습니다.`)) return;
+    if (!window.confirm(`'${topic.title}'의 버전 ${revision}을 휴지통으로 옮길까요? 휴지통에서 다시 복원할 수 있습니다.`)) return;
     await responseJson(await fetch('/api/knowledge/revision-trash', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ topicId: topic.id, revision }),
     }));
     await Promise.all([refresh(), refreshRevisionTrash()]);
-    setMessage({ text: `revision ${revision}을 휴지통으로 옮겼습니다.` });
+    setMessage({ text: `버전 ${revision}을 휴지통으로 옮겼습니다.` });
   }
 
   async function restoreTrashRevision(trashId: string): Promise<void> {
@@ -361,16 +361,16 @@ export default function KnowledgePage() {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashId }),
     }));
     await Promise.all([refresh(), refreshRevisionTrash()]);
-    setMessage({ text: 'revision을 휴지통에서 되돌렸습니다.' });
+    setMessage({ text: '버전을 휴지통에서 되돌렸습니다.' });
   }
 
   async function deleteTrashRevision(trashId: string): Promise<void> {
-    if (!window.confirm('이 revision을 영구 삭제할까요? 이 작업은 되돌릴 수 없습니다.')) return;
+    if (!window.confirm('이 버전을 영구 삭제할까요? 이 작업은 되돌릴 수 없습니다.')) return;
     await responseJson(await fetch('/api/knowledge/revision-trash', {
       method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ trashId }),
     }));
     await Promise.all([refresh(), refreshRevisionTrash()]);
-    setMessage({ text: 'revision을 영구 삭제했습니다.' });
+    setMessage({ text: '버전을 영구 삭제했습니다.' });
   }
 
   function formatBytes(value: number): string {
@@ -384,7 +384,7 @@ export default function KnowledgePage() {
       <AppHeader active="knowledge" />
       <div className="flex min-h-0 flex-1">
         <aside className="w-60 shrink-0 border-r border-outline-variant/25 bg-surface-container-lowest p-3">
-          <div className="px-2 pb-3 pt-2"><div className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">Personal knowledge</div><h1 className="mt-1 text-lg font-bold">지식 정리</h1><p className="mt-1 text-[11px] leading-5 text-on-surface-variant">메모는 던지고, 중요한 변경만 확인하세요.</p></div>
+          <div className="px-2 pb-3 pt-2"><div className="text-[11px] font-bold tracking-[0.12em] text-primary">개인 지식</div><h1 className="mt-1 text-lg font-bold">지식 정리</h1><p className="mt-1 text-xs leading-5 text-on-surface-variant">메모는 던지고, 중요한 변경만 확인하세요.</p></div>
           <nav className="space-y-1">{([
             ['inbox', '수집함', Inbox, inboxNotes.length],
             ['review', '검토함', Merge, pendingReviews.length],
@@ -396,7 +396,7 @@ export default function KnowledgePage() {
             <p className="mt-1">{authNeedsAttention ? authCheckError : 'API 키 과금은 사용하지 않습니다. 정리할 원문과 관련 후보 문서는 OpenAI 모델에 전달됩니다.'}</p>
             <div className="mt-2 grid gap-1.5"><button onClick={() => void refreshCodex()} className="w-full rounded-lg bg-white/70 px-3 py-2 font-bold">로그인 상태 확인</button>{!oauthReady && codexStatus?.installed && <button onClick={() => void loginCodex()} disabled={loginBusy} className="w-full rounded-lg bg-primary px-3 py-2 font-bold text-on-primary disabled:opacity-40">{loginBusy ? '로그인 기다리는 중…' : 'ChatGPT 다시 연결'}</button>}</div>
           </div>
-          <div className="mt-3 rounded-xl bg-surface-container-low p-3 text-[10px] leading-5 text-on-surface-variant"><div className="font-bold">지식 저장소</div><div className="mt-1">활성 {formatBytes(storeInfo.activeBytes)} · revision 휴지통 {storeInfo.revisionTrashCount}개 ({formatBytes(storeInfo.revisionTrashBytes)})</div></div>
+          <div className="mt-3 rounded-xl bg-surface-container-low p-3 text-[11px] leading-5 text-on-surface-variant"><div className="font-bold">지식 저장소</div><div className="mt-1">활성 {formatBytes(storeInfo.activeBytes)} · 버전 휴지통 {storeInfo.revisionTrashCount}개 ({formatBytes(storeInfo.revisionTrashBytes)})</div></div>
         </aside>
 
         <section className="min-w-0 flex-1 overflow-y-auto"><div className="mx-auto max-w-6xl p-6 lg:p-8">

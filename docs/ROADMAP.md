@@ -12,15 +12,18 @@
 - Experimental knowledge inbox with immutable source notes, review-gated Codex topic proposals, conflict surfacing, and a revisioned personal wiki.
 - Knowledge safety hardening with cancellable/time-bounded single-flight processing, first-error batch stop, verified v1 rollback copies, visible bounded-context warnings, collapsed long diffs, and Markdown result preview.
 - Lightweight knowledge operations with local draft recovery, next-ten processing, demand-driven OAuth status, direct user revisions, recoverable revision trash, conflict resolution notes, bounded list rendering, and storage-size visibility.
-- Apple Silicon macOS port source with arm64 DMG/ZIP packaging, native menu/Dock lifecycle, platform-aware Codex and PDF setup, macOS Keychain protection, and a private test-artifact workflow.
+- Explicit external-content-change approval and full compensation for failed internal PDF rename/move operations.
+- Friend-focused first-run actions, native library-folder selection, masked account identifiers, minimum-window research layout, project maintenance, manual patent entry, Unpaywall DOI lookup, terminology editing, and expanded local FTS.
+- Restore safety snapshot and a Python-free fallback for backup archives up to 512MB.
 
 ## Planned
 
 - Extend KIPRIS Plus citation and EPO OPS family/legal-event normalization.
 - Improve PDF metadata extraction and background indexing progress/cancellation.
+- Add Codex-assisted query expansion and optional result reranking with the current FTS result as a no-AI fallback.
+- Replace the bounded in-memory backup fallback with a fully streaming Node extractor for very large archives.
 - Add selected-page figure analysis UI and richer claim/paragraph anchors.
 - Code signing and a hardened public installer release workflow.
-- Validate the unsigned macOS artifact on a real M-series Mac, then add Developer ID signing, notarization, and signed Mac updates if friend testing succeeds.
 - Improve knowledge candidate retrieval, add topic merge/split and Markdown export, and evaluate persisted queue counters only if interrupted real-world batches prove the need.
 
 ## Deferred
@@ -32,5 +35,6 @@
 
 ## Excluded
 
+- macOS/Linux builds, packaging, signing, compatibility work, and distribution. PageDock supports Windows 10/11 x64 only.
 - Paywall bypasses, Sci-Hub/mirror discovery, publisher credential collection.
 - Legal freedom-to-operate judgments.

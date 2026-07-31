@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { mkdtemp, mkdir, rename, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readdir, rename, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import JSZip from 'jszip';
@@ -39,6 +39,31 @@ describe('stable document identity', () => {
     expect(synced.conflicts).toBeGreaterThan(0);
     expect((await db.listDocumentConflicts()).some((item) => item.kind === 'duplicate')).toBe(true);
   });
+
+  test('requires explicit approval when a PDF is replaced at the same path', async () => {
+    const relativePath = 'papers/replaced-in-explorer.pdf';
+    const absolutePath = path.join(root, ...relativePath.split('/'));
+    const originalContent = Buffer.from('%PDF-1.4\noriginal document\n%%EOF');
+    const replacementContent = Buffer.from('%PDF-1.4\ncompletely different replacement document\n%%EOF');
+    await writeFile(absolutePath, originalContent);
+    const original = await db.ensureDocumentForPath(relativePath);
+
+    await writeFile(absolutePath, replacementContent);
+    const pending = await db.ensureDocumentForPath(relativePath);
+    expect(pending.id).toBe(original.id);
+    expect(pending.sha256).toBe(createHash('sha256').update(originalContent).digest('hex'));
+    expect(pending.missing).toBe(true);
+
+    const conflict = (await db.listDocumentConflicts()).find((item) => (
+      item.documentId === original.id && item.kind === 'content-changed'
+    ));
+    expect(conflict).toBeDefined();
+    await db.resolveDocumentConflict(conflict!.id, 'accept-current-file');
+
+    const accepted = await db.getDocumentById(original.id);
+    expect(accepted?.sha256).toBe(createHash('sha256').update(replacementContent).digest('hex'));
+    expect(accepted?.missing).toBe(false);
+  });
 });
 
 describe('research relationships and search', () => {
@@ -47,6 +72,14 @@ describe('research relationships and search', () => {
       displayTitle: 'Samsung CIS small pixel isolation', kind: 'patent', tags: ['삼성', 'DTI'],
     });
     await db.replaceDocumentChunks(document.id, [{ page: 1, text: '0.7 μm 이하 이미지센서의 crosstalk 저감 구조' }]);
+    await db.upsertPatentMetadata({
+      documentId: document.id,
+      assignees: ['Samsung Electronics'],
+      inventors: [],
+      citations: [],
+      claimsText: 'A storage node coupled to a floating diffusion region.',
+      updatedAt: new Date().toISOString(),
+    });
     const first = await db.createProject({ name: '삼성 CIS', profileId: 'profile-cis-pa' });
     const second = await db.createProject({ name: 'HDR 구조', profileId: 'profile-cis-pa' });
     await db.setProjectDocument(first.id, document.id, true);
@@ -54,6 +87,21 @@ describe('research relationships and search', () => {
     expect(new Set(await db.getDocumentProjectIds(document.id))).toEqual(new Set([first.id, second.id]));
     expect((await db.searchDocuments('crosstalk', first.id))[0]?.document.id).toBe(document.id);
     expect((await db.searchDocuments('이미지센서', second.id))[0]?.document.id).toBe(document.id);
+    expect((await db.searchDocuments('storage node', first.id))[0]?.document.id).toBe(document.id);
+  });
+
+  test('indexes personal notes and tags stored with a local PDF', async () => {
+    const relativePath = 'papers/searchable-personal-note.pdf';
+    await writeFile(path.join(root, ...relativePath.split('/')), Buffer.from('%PDF-1.4\nsearch note fixture\n%%EOF'));
+    const document = await db.ensureDocumentForPath(relativePath);
+    const { updatePaperMetadata } = await import('@/lib/paper-metadata');
+    await updatePaperMetadata(relativePath, {
+      noteMarkdown: '후면 산란 억제 공정 아이디어',
+      personalTags: ['공정검토'],
+    });
+    await db.refreshDocumentSearchIndex(relativePath);
+    expect((await db.searchDocuments('후면 산란'))[0]?.document.id).toBe(document.id);
+    expect((await db.searchDocuments('공정검토'))[0]?.document.id).toBe(document.id);
   });
 });
 
@@ -74,11 +122,23 @@ describe('portable backup v2', () => {
     expect(zip.file('library/.annot/research-export.json')).not.toBeNull();
     expect(zip.file('library/.annot/knowledge-revision-trash.json')).not.toBeNull();
   });
+
+  test('restores a small backup without Python after creating a safety snapshot', async () => {
+    const { createPortableBackup, importPortableBackupFile } = await import('@/lib/library-backup');
+    const uploadDirectory = await mkdtemp(path.join(tmpdir(), 'pagedock-backup-upload-test-'));
+    const archivePath = path.join(uploadDirectory, 'backup.zip');
+    await writeFile(archivePath, await createPortableBackup(false));
+    const result = await importPortableBackupFile(archivePath, { forceInProcessFallback: true });
+    expect(result.imported).toBeGreaterThan(0);
+    const safetySnapshots = await readdir(path.join(root, '.annot', 'backups'));
+    expect(safetySnapshots.some((name) => name.endsWith('.zip'))).toBe(true);
+  });
 });
 
 describe('Windows-safe filenames', () => {
   test('removes reserved filename characters and trailing dots', async () => {
     const { sanitizeFilenamePart } = await import('@/lib/research-index');
     expect(sanitizeFilenamePart('A: title? <test>.  ', 100)).toBe('A title test');
+    expect(sanitizeFilenamePart('CON', 100)).toBe('_CON');
   });
 });

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 import {
+  createExternalDocument,
   getDocumentById,
   getDocumentProjectIds,
   getPatentMetadata,
@@ -12,6 +13,40 @@ import {
 } from '@/lib/research-db';
 import { suggestResearchFilename } from '@/lib/research-index';
 import type { PatentMetadata, ResearchDocument } from '@/types';
+
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json() as {
+      title?: string;
+      publicationNumber?: string;
+      sourceUrl?: string;
+      projectId?: string;
+    };
+    const publicationNumber = body.publicationNumber?.trim();
+    if (!publicationNumber) {
+      return NextResponse.json({ error: '특허 공개번호 또는 출원번호가 필요합니다.' }, { status: 400 });
+    }
+    const document = await createExternalDocument({
+      displayTitle: body.title?.trim() || publicationNumber,
+      kind: 'patent',
+      sourceUrl: body.sourceUrl?.trim() || undefined,
+      sourceProvider: 'manual',
+    });
+    await upsertPatentMetadata({
+      documentId: document.id,
+      publicationNumber,
+      assignees: [],
+      inventors: [],
+      citations: [],
+      claimsText: '',
+      updatedAt: new Date().toISOString(),
+    });
+    if (body.projectId) await setProjectDocument(body.projectId, document.id, true);
+    return NextResponse.json({ document: await getDocumentById(document.id) }, { status: 201 });
+  } catch (error) {
+    return NextResponse.json({ error: error instanceof Error ? error.message : '특허 자료를 추가하지 못했습니다.' }, { status: 500 });
+  }
+}
 
 export async function GET(request: NextRequest) {
   try {

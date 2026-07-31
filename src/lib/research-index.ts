@@ -59,7 +59,7 @@ export async function indexResearchDocument(documentId: string): Promise<{ pages
 }
 
 export function sanitizeFilenamePart(value: string, maxLength: number): string {
-  return value
+  const sanitized = value
     .normalize('NFKC')
     .replace(/[<>:"/\\|?*\u0000-\u001F]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -67,6 +67,9 @@ export function sanitizeFilenamePart(value: string, maxLength: number): string {
     .trim()
     .slice(0, maxLength)
     .trim();
+  return /^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(?:\.|$)/i.test(sanitized)
+    ? `_${sanitized}`
+    : sanitized;
 }
 
 export async function suggestResearchFilename(documentId: string): Promise<{ fileName: string; confident: boolean }> {

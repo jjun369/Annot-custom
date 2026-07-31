@@ -10,10 +10,12 @@ import {
   FolderKanban,
   Loader2,
   Plus,
+  Pencil,
   RefreshCw,
   Search,
   Sparkles,
   Tags,
+  Trash2,
   X,
 } from 'lucide-react';
 import Link from 'next/link';
@@ -36,7 +38,7 @@ interface BootstrapData {
   projects: ResearchProject[];
   profiles: AnalysisProfile[];
   conflicts: number;
-  conflictItems: Array<{ id: string; documentId?: string; path: string; kind: string; details: string; createdAt: string }>;
+  conflictItems: DocumentConflictItem[];
   sources: {
     unpaywallEmail?: string;
     openAlexConfigured: boolean;
@@ -44,6 +46,17 @@ interface BootstrapData {
     epoConfigured: boolean;
   };
 }
+
+interface DocumentConflictItem {
+  id: string;
+  documentId?: string;
+  path: string;
+  kind: string;
+  details: string;
+  createdAt: string;
+}
+
+type SearchSource = 'local' | 'crossref' | 'unpaywall' | 'openalex' | 'kipris' | 'epo' | 'patent-links';
 
 interface DocumentDetail {
   document: ResearchDocument;
@@ -85,17 +98,22 @@ export default function ResearchPage() {
   const [selectedDocumentId, setSelectedDocumentId] = useState<string>('');
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
   const [query, setQuery] = useState('');
-  const [searchSource, setSearchSource] = useState<'local' | 'crossref' | 'openalex' | 'kipris' | 'epo' | 'patent-links'>('local');
+  const [searchSource, setSearchSource] = useState<SearchSource>('local');
   const [localResults, setLocalResults] = useState<ResearchSearchResult[]>([]);
   const [onlineResults, setOnlineResults] = useState<OnlineResearchResult[]>([]);
   const [patentLinks, setPatentLinks] = useState<Array<{ provider: string; url: string }>>([]);
   const [projectDialog, setProjectDialog] = useState(false);
+  const [projectEdit, setProjectEdit] = useState<{ id: string; name: string; description: string } | null>(null);
   const [projectName, setProjectName] = useState('');
   const [projectDescription, setProjectDescription] = useState('');
   const [projectProfileId, setProjectProfileId] = useState('profile-general');
   const [profileDialog, setProfileDialog] = useState(false);
   const [profileDraft, setProfileDraft] = useState<AnalysisProfile | null>(null);
+  const [terminologyProfile, setTerminologyProfile] = useState<AnalysisProfile | null>(null);
+  const [terminologyDraft, setTerminologyDraft] = useState('');
   const [conflictDialog, setConflictDialog] = useState(false);
+  const [patentDialog, setPatentDialog] = useState(false);
+  const [manualPatent, setManualPatent] = useState({ title: '', publicationNumber: '', sourceUrl: '' });
   const [titleDraft, setTitleDraft] = useState('');
   const [kindDraft, setKindDraft] = useState<ResearchDocument['kind']>('paper');
   const [patentDraft, setPatentDraft] = useState<PatentMetadata | null>(null);
@@ -136,7 +154,6 @@ export default function ResearchPage() {
         next.documents = next.documents.map((item) => ({ ...item, projectIds: projectIds.has(item.id) ? [selectedProjectId] : [] }));
       }
       setData(next);
-      if (!selectedProjectId && next.projects[0]) setSelectedProjectId(next.projects[0].id);
     } catch (error) {
       notify(error instanceof Error ? error.message : '리서치 데이터를 불러오지 못했습니다.', 'error');
     } finally {
@@ -214,9 +231,59 @@ export default function ResearchPage() {
     } finally { setBusy(''); }
   };
 
-  const acknowledgeConflict = async (id: string) => {
+  const saveProjectEdit = async () => {
+    if (!projectEdit?.name.trim()) return;
+    setBusy('project-edit');
+    try {
+      const response = await fetch('/api/research/projects', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(projectEdit),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.error) throw new Error(payload.error || '프로젝트를 수정하지 못했습니다.');
+      setProjectEdit(null);
+      await loadBootstrap();
+      notify('프로젝트 정보를 수정했습니다.', 'success');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '프로젝트를 수정하지 못했습니다.', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
+  const removeSelectedProject = async () => {
+    if (!selectedProject) return;
+    const approved = await confirm({
+      title: '리서치 프로젝트 삭제',
+      message: `'${selectedProject.name}' 프로젝트를 삭제할까요? PDF 원본과 문서 분석은 삭제하지 않고 프로젝트 연결만 제거합니다.`,
+      confirmLabel: '프로젝트 삭제',
+      destructive: true,
+    });
+    if (!approved) return;
+    const response = await fetch(`/api/research/projects?id=${encodeURIComponent(selectedProject.id)}`, { method: 'DELETE' });
+    const payload = await response.json();
+    if (!response.ok || payload.error) {
+      notify(payload.error || '프로젝트를 삭제하지 못했습니다.', 'error');
+      return;
+    }
+    setSelectedProjectId('');
+    setSelectedDocumentId('');
+    setDetail(null);
+    await loadBootstrap();
+    notify('프로젝트 연결을 삭제했습니다. 원본 자료는 그대로 유지됩니다.', 'success');
+  };
+
+  const resolveConflict = async (item: DocumentConflictItem) => {
+    const action = item.kind === 'content-changed' ? 'accept-current-file' : 'acknowledge';
+    if (item.kind === 'content-changed') {
+      const approved = await confirm({
+        title: '변경된 PDF를 새 버전으로 연결',
+        message: '현재 경로의 PDF 내용이 이전과 다릅니다. 이 파일을 같은 문서의 새 버전으로 연결할까요? 기존 메모와 프로젝트 연결은 유지됩니다.',
+        confirmLabel: '새 버전으로 연결',
+      });
+      if (!approved) return;
+    }
     const response = await fetch('/api/research/conflicts', {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }),
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: item.id, action }),
     });
     const payload = await response.json();
     if (!response.ok || payload.error) {
@@ -258,6 +325,29 @@ export default function ResearchPage() {
     } catch (error) {
       notify(error instanceof Error ? error.message : '자료를 저장하지 못했습니다.', 'error');
     } finally { setBusy(''); }
+  };
+
+  const createManualPatent = async () => {
+    if (!manualPatent.publicationNumber.trim()) return;
+    setBusy('manual-patent');
+    try {
+      const response = await fetch('/api/research/documents', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...manualPatent, projectId: selectedProjectId || undefined }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload.error) throw new Error(payload.error || '특허 자료를 추가하지 못했습니다.');
+      setPatentDialog(false);
+      setManualPatent({ title: '', publicationNumber: '', sourceUrl: '' });
+      await loadBootstrap();
+      await loadDetail(payload.document.id);
+      notify('특허 번호와 메타데이터를 추가했습니다. PDF는 나중에 연결할 수 있습니다.', 'success');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '특허 자료를 추가하지 못했습니다.', 'error');
+    } finally {
+      setBusy('');
+    }
   };
 
   const uploadPdf = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -367,6 +457,52 @@ export default function ResearchPage() {
     setProfileDialog(true);
   };
 
+  const openTerminologyEditor = () => {
+    const profile = data?.profiles.find((item) => item.id === (selectedProject?.profileId || 'profile-general'));
+    if (!profile) return;
+    setTerminologyProfile({
+      ...profile,
+      id: profile.builtIn ? '' : profile.id,
+      name: profile.builtIn ? `${profile.name} 용어 사본` : profile.name,
+      builtIn: false,
+    });
+    setTerminologyDraft(Object.entries(profile.terminology)
+      .map(([term, variants]) => `${term} = ${variants.join(', ')}`)
+      .join('\n'));
+  };
+
+  const saveTerminology = async () => {
+    if (!terminologyProfile) return;
+    const terminology = Object.fromEntries(terminologyDraft.split(/\r?\n/)
+      .map((line) => line.split('=').map((item) => item.trim()))
+      .filter(([term, variants]) => term && variants)
+      .map(([term, variants]) => [term, variants.split(',').map((item) => item.trim()).filter(Boolean)]));
+    setBusy('terminology');
+    try {
+      const response = await fetch('/api/research/profiles', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...terminologyProfile, terminology }),
+      });
+      const profile = await response.json();
+      if (!response.ok || profile.error) throw new Error(profile.error || '용어 연결을 저장하지 못했습니다.');
+      if (selectedProjectId) {
+        const projectResponse = await fetch('/api/research/projects', {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedProjectId, profileId: profile.id }),
+        });
+        const projectPayload = await projectResponse.json();
+        if (!projectResponse.ok || projectPayload.error) throw new Error(projectPayload.error || '프로젝트에 용어 프로필을 적용하지 못했습니다.');
+      }
+      setTerminologyProfile(null);
+      await loadBootstrap();
+      notify('전문용어와 검색·분석용 표현을 저장했습니다.', 'success');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '용어 연결을 저장하지 못했습니다.', 'error');
+    } finally {
+      setBusy('');
+    }
+  };
+
   const saveProfile = async () => {
     if (!profileDraft?.name.trim()) return;
     setBusy('profile');
@@ -404,7 +540,7 @@ export default function ResearchPage() {
         ) : undefined}
       />
 
-      <div className="grid min-h-0 flex-1 grid-cols-[240px_minmax(340px,430px)_minmax(440px,1fr)]">
+      <div className="grid min-h-0 flex-1 grid-cols-[240px_minmax(300px,400px)_minmax(360px,1fr)]">
         <aside className="flex min-h-0 flex-col overflow-hidden border-r border-outline-variant/15 bg-surface-container">
           <div className="flex h-11 shrink-0 items-center justify-between px-3">
             <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-on-surface-variant">프로젝트</div>
@@ -424,7 +560,12 @@ export default function ResearchPage() {
               <div className="rounded-xl bg-surface-container-low p-3">
                 <div className="text-[9px] font-bold uppercase tracking-wider text-outline">분석 프로필</div>
                 <div className="mt-1 truncate text-xs font-semibold text-on-surface">{data?.profiles.find((item) => item.id === selectedProject.profileId)?.name}</div>
-                <button onClick={openProfileEditor} className="mt-2 text-[10px] font-semibold text-primary hover:underline">프로필 편집·복사</button>
+                <div className="mt-2 flex flex-wrap gap-2 text-[11px] font-semibold">
+                  <button onClick={openProfileEditor} className="text-primary hover:underline">프로필 편집·복사</button>
+                  <button onClick={openTerminologyEditor} className="text-primary hover:underline">용어 편집</button>
+                  <button onClick={() => setProjectEdit({ id: selectedProject.id, name: selectedProject.name, description: selectedProject.description })} className="inline-flex items-center gap-1 text-on-surface-variant hover:underline"><Pencil size={11} />정보 수정</button>
+                  <button onClick={() => void removeSelectedProject()} className="inline-flex items-center gap-1 text-error hover:underline"><Trash2 size={11} />삭제</button>
+                </div>
               </div>
             </div>
           )}
@@ -434,13 +575,15 @@ export default function ResearchPage() {
           <div className="flex gap-2">
             <div className="flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-3 shadow-sm">
               <Search size={15} className="text-outline" />
-              <input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runSearch(); }} placeholder="논문·특허·기술어 검색" className="h-10 min-w-0 flex-1 bg-transparent text-xs outline-none" />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void runSearch(); }} placeholder={searchSource === 'unpaywall' ? '공개 원문을 찾을 DOI 입력' : '논문·특허·기술어 검색'} className="h-10 min-w-0 flex-1 bg-transparent text-xs outline-none focus-visible:ring-0" />
             </div>
             <button onClick={() => void runSearch()} disabled={busy === 'search'} className="flex h-10 min-w-16 items-center justify-center rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50">{busy === 'search' ? <Loader2 size={14} className="animate-spin" /> : '검색'}</button>
           </div>
           <div className="mt-2 flex gap-1 overflow-x-auto pb-1">
             {([
-              ['local', '내 자료'], ['crossref', '논문'], ['openalex', 'OpenAlex'],
+              ['local', '내 자료'], ['crossref', '논문 · Crossref'],
+              ...(data?.sources.unpaywallEmail ? [['unpaywall', '공개 원문 · DOI'] as const] : []),
+              ...(data?.sources.openAlexConfigured ? [['openalex', 'OpenAlex'] as const] : []),
               ...(data?.sources.kiprisConfigured ? [['kipris', 'KIPRIS Plus'] as const] : []),
               ...(data?.sources.epoConfigured ? [['epo', 'EPO OPS'] as const] : []),
               ['patent-links', '특허 웹검색'],
@@ -452,6 +595,7 @@ export default function ResearchPage() {
             <h1 className="text-sm font-bold text-on-surface">{selectedProject?.name || '전체 자료'}</h1>
             <div className="flex gap-1">
               <button onClick={() => fileInputRef.current?.click()} disabled={busy === 'upload'} className="flex h-8 items-center gap-1.5 rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-2.5 text-[10px] font-semibold text-on-surface-variant shadow-sm transition-colors hover:bg-surface-container"><FileDown size={12} />PDF 추가</button>
+              <button onClick={() => setPatentDialog(true)} className="flex h-8 items-center gap-1.5 rounded-lg border border-outline-variant/20 bg-surface-container-lowest px-2.5 text-[10px] font-semibold text-on-surface-variant shadow-sm transition-colors hover:bg-surface-container"><FileSearch size={12} />특허 번호 추가</button>
               <input ref={fileInputRef} type="file" accept="application/pdf,.pdf" className="hidden" onChange={(event) => void uploadPdf(event)} />
               <button onClick={() => void loadBootstrap()} className="flex h-8 w-8 items-center justify-center rounded-lg border border-outline-variant/20 bg-surface-container-lowest text-on-surface-variant shadow-sm transition-colors hover:bg-surface-container" aria-label="새로고침"><RefreshCw size={12} /></button>
             </div>
@@ -563,10 +707,10 @@ export default function ResearchPage() {
 
       {conflictDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-6" onMouseDown={() => setConflictDialog(false)}>
-          <section className="max-h-[75vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-surface p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
+          <section role="dialog" aria-modal="true" aria-labelledby="research-conflict-title" className="max-h-[75vh] w-full max-w-xl overflow-y-auto rounded-2xl bg-surface p-5 shadow-2xl" onMouseDown={(event) => event.stopPropagation()}>
             <div className="flex items-center justify-between">
               <div>
-                <h2 className="text-base font-bold">PDF 연결 복구 확인</h2>
+                <h2 id="research-conflict-title" className="text-base font-bold">PDF 연결 복구 확인</h2>
                 <p className="mt-1 text-xs text-on-surface-variant">같은 해시가 여러 경로에 있거나 파일 내용이 달라진 항목입니다. PageDock이 임의로 원본을 바꾸지 않았습니다.</p>
               </div>
               <button onClick={() => setConflictDialog(false)} className="rounded-lg p-2 hover:bg-surface-container"><X size={16} /></button>
@@ -577,11 +721,59 @@ export default function ResearchPage() {
                   <div className="break-all text-xs font-semibold">{item.path}</div>
                   <p className="mt-1 text-[11px] leading-5">{item.details || item.kind}</p>
                   {item.documentId && <button onClick={() => { setConflictDialog(false); void loadDetail(item.documentId!); }} className="mr-3 mt-2 text-[11px] font-semibold underline">문서 확인</button>}
-                  <button onClick={() => void acknowledgeConflict(item.id)} className="mt-2 text-[11px] font-semibold underline">확인 완료로 표시</button>
+                  <button onClick={() => void resolveConflict(item)} className="mt-2 text-[11px] font-semibold underline">{item.kind === 'content-changed' ? '현재 파일을 새 버전으로 연결' : '확인 완료로 표시'}</button>
                 </article>
               ))}
               {!data?.conflictItems.length && <p className="text-xs text-on-surface-variant">확인이 필요한 항목이 없습니다.</p>}
             </div>
+          </section>
+        </div>
+      )}
+
+      {patentDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <section role="dialog" aria-modal="true" aria-labelledby="manual-patent-title" className="w-full max-w-md rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-ambient">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 id="manual-patent-title" className="text-sm font-bold">특허 번호로 자료 추가</h2>
+                <p className="mt-1 text-xs text-on-surface-variant">PDF가 없어도 번호와 원문 주소를 먼저 저장할 수 있습니다.</p>
+              </div>
+              <button type="button" onClick={() => setPatentDialog(false)} aria-label="닫기" className="rounded-lg p-2 hover:bg-surface-container"><X size={16} /></button>
+            </div>
+            <label className="mt-4 block text-xs font-semibold">공개번호 또는 출원번호<input value={manualPatent.publicationNumber} onChange={(event) => setManualPatent((current) => ({ ...current, publicationNumber: event.target.value }))} placeholder="예: US20240123456A1" className="mt-1 w-full rounded-lg border border-outline-variant/25 bg-surface-container-low px-3 py-2.5 outline-none focus:border-primary" /></label>
+            <label className="mt-3 block text-xs font-semibold">표시 제목 · 선택<input value={manualPatent.title} onChange={(event) => setManualPatent((current) => ({ ...current, title: event.target.value }))} placeholder="비워두면 특허번호를 사용합니다" className="mt-1 w-full rounded-lg border border-outline-variant/25 bg-surface-container-low px-3 py-2.5 outline-none focus:border-primary" /></label>
+            <label className="mt-3 block text-xs font-semibold">원문 URL · 선택<input value={manualPatent.sourceUrl} onChange={(event) => setManualPatent((current) => ({ ...current, sourceUrl: event.target.value }))} placeholder="KIPRIS, Espacenet 또는 Google Patents 주소" className="mt-1 w-full rounded-lg border border-outline-variant/25 bg-surface-container-low px-3 py-2.5 outline-none focus:border-primary" /></label>
+            <button type="button" onClick={() => void createManualPatent()} disabled={!manualPatent.publicationNumber.trim() || busy === 'manual-patent'} className="mt-5 w-full rounded-xl bg-primary py-2.5 text-xs font-semibold text-on-primary disabled:opacity-50">{busy === 'manual-patent' ? '추가 중...' : '특허 자료 추가'}</button>
+          </section>
+        </div>
+      )}
+
+      {projectEdit && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <section role="dialog" aria-modal="true" aria-labelledby="project-edit-title" className="w-full max-w-md rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-ambient">
+            <div className="flex items-center justify-between">
+              <h2 id="project-edit-title" className="text-sm font-bold">프로젝트 정보 수정</h2>
+              <button type="button" onClick={() => setProjectEdit(null)} aria-label="닫기" className="rounded-lg p-2 hover:bg-surface-container"><X size={16} /></button>
+            </div>
+            <label className="mt-4 block text-xs font-semibold">프로젝트 이름<input value={projectEdit.name} onChange={(event) => setProjectEdit((current) => current ? { ...current, name: event.target.value } : current)} className="mt-1 w-full rounded-lg border border-outline-variant/25 bg-surface-container-low px-3 py-2.5 outline-none focus:border-primary" /></label>
+            <label className="mt-3 block text-xs font-semibold">설명<textarea value={projectEdit.description} onChange={(event) => setProjectEdit((current) => current ? { ...current, description: event.target.value } : current)} className="mt-1 h-24 w-full resize-y rounded-lg border border-outline-variant/25 bg-surface-container-low px-3 py-2 outline-none focus:border-primary" /></label>
+            <button type="button" onClick={() => void saveProjectEdit()} disabled={!projectEdit.name.trim() || busy === 'project-edit'} className="mt-5 w-full rounded-xl bg-primary py-2.5 text-xs font-semibold text-on-primary disabled:opacity-50">{busy === 'project-edit' ? '저장 중...' : '프로젝트 저장'}</button>
+          </section>
+        </div>
+      )}
+
+      {terminologyProfile && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+          <section role="dialog" aria-modal="true" aria-labelledby="terminology-edit-title" className="w-full max-w-xl rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-ambient">
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 id="terminology-edit-title" className="text-sm font-bold">분석 프로필 용어 편집</h2>
+                <p className="mt-1 text-xs text-on-surface-variant">한 줄에 `대표 용어 = 동의어, 영문 표현` 형식으로 입력합니다.</p>
+              </div>
+              <button type="button" onClick={() => setTerminologyProfile(null)} aria-label="닫기" className="rounded-lg p-2 hover:bg-surface-container"><X size={16} /></button>
+            </div>
+            <textarea value={terminologyDraft} onChange={(event) => setTerminologyDraft(event.target.value)} placeholder={'iDCG = in-pixel dual conversion gain, dual conversion gain\nDTI = deep trench isolation'} className="mt-4 h-64 w-full resize-y rounded-xl border border-outline-variant/25 bg-surface-container-low p-3 font-mono text-xs leading-6 outline-none focus:border-primary" />
+            <button type="button" onClick={() => void saveTerminology()} disabled={busy === 'terminology'} className="mt-4 w-full rounded-xl bg-primary py-2.5 text-xs font-semibold text-on-primary disabled:opacity-50">{busy === 'terminology' ? '저장 중...' : '용어 저장 및 프로젝트에 적용'}</button>
           </section>
         </div>
       )}

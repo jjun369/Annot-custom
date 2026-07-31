@@ -41,6 +41,14 @@ function sanitizeSegment(name: string, kind: 'folder' | 'file'): string {
     throw new Error(`Invalid ${kind} name`);
   }
 
+  if (/[<>:"/\\|?*\u0000-\u001F]/.test(base) || /[. ]$/.test(base)) {
+    throw new Error('Windows에서 사용할 수 없는 문자 또는 끝의 점·공백이 포함되어 있습니다.');
+  }
+  const deviceName = base.replace(/\.[^.]*$/, '').toUpperCase();
+  if (/^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])$/.test(deviceName)) {
+    throw new Error('Windows 예약 이름은 파일이나 폴더 이름으로 사용할 수 없습니다.');
+  }
+
   return base;
 }
 
@@ -281,13 +289,19 @@ export async function renameWorkspacePdf(pdfPath: string, nextName: string): Pro
 
   await ensurePathDoesNotExist(targetAbsolutePath, 'A PDF with that name already exists');
   await fs.rename(sourceAbsolutePath, targetAbsolutePath);
+  let documentPathChanged = false;
   try {
     await movePaperMetadata(normalizedPdfPath, nextRelativePath);
     await movePdfSessions(parentPath, parentPath, normalizedPdfPath, nextRelativePath);
     await recordDocumentPathChange(normalizedPdfPath, nextRelativePath);
+    documentPathChanged = true;
     await moveSidecarHighlights(normalizedPdfPath, nextRelativePath);
   } catch (error) {
     await fs.rename(targetAbsolutePath, sourceAbsolutePath).catch(() => undefined);
+    if (documentPathChanged) {
+      await recordDocumentPathChange(nextRelativePath, normalizedPdfPath).catch(() => undefined);
+    }
+    await moveSidecarHighlights(nextRelativePath, normalizedPdfPath).catch(() => undefined);
     await movePaperMetadata(nextRelativePath, normalizedPdfPath).catch(() => undefined);
     await movePdfSessions(parentPath, parentPath, nextRelativePath, normalizedPdfPath).catch(() => undefined);
     throw error;
@@ -339,13 +353,19 @@ export async function moveWorkspacePdf(pdfPath: string, targetFolderPath: string
   const sourceFolderPath = path.posix.dirname(normalizedPdfPath) === '.'
     ? ''
     : path.posix.dirname(normalizedPdfPath);
+  let documentPathChanged = false;
   try {
     await movePaperMetadata(normalizedPdfPath, nextRelativePath);
     await movePdfSessions(sourceFolderPath, normalizedTargetFolderPath, normalizedPdfPath, nextRelativePath);
     await recordDocumentPathChange(normalizedPdfPath, nextRelativePath);
+    documentPathChanged = true;
     await moveSidecarHighlights(normalizedPdfPath, nextRelativePath);
   } catch (error) {
     await fs.rename(targetAbsolutePath, sourceAbsolutePath).catch(() => undefined);
+    if (documentPathChanged) {
+      await recordDocumentPathChange(nextRelativePath, normalizedPdfPath).catch(() => undefined);
+    }
+    await moveSidecarHighlights(nextRelativePath, normalizedPdfPath).catch(() => undefined);
     await movePaperMetadata(nextRelativePath, normalizedPdfPath).catch(() => undefined);
     await movePdfSessions(normalizedTargetFolderPath, sourceFolderPath, nextRelativePath, normalizedPdfPath).catch(() => undefined);
     throw error;

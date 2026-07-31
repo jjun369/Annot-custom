@@ -4,13 +4,14 @@ import dynamic from 'next/dynamic';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Session, TreeNode } from '@/types';
 import { WorkspaceContext, WorkspaceState } from '@/lib/workspace-store';
-import { TreeExplorer } from '@/components/tree/TreeExplorer';
+import { REQUEST_PDF_UPLOAD_EVENT, TreeExplorer } from '@/components/tree/TreeExplorer';
 import { FolderView } from '@/components/workspace/FolderView';
 import { ChatPanel } from '@/components/workspace/ChatPanel';
 import { Topbar } from '@/components/layout/Topbar';
 import { findNode, getParentFolderPath } from '@/lib/tree-utils';
 import { PageDockMark } from '@/components/common/PageDockMark';
 import { OnboardingDialog } from '@/components/common/OnboardingDialog';
+import { FilePlus } from 'lucide-react';
 
 const PdfViewer = dynamic(
   () => import('@/components/workspace/PdfViewer').then((mod) => mod.PdfViewer),
@@ -381,8 +382,15 @@ export default function AppPage() {
                   <PageDockMark size={48} className="mx-auto mb-4 rounded-xl opacity-90 shadow-sm" />
                   <h2 className="text-base font-semibold text-on-surface">라이브러리에서 시작하세요</h2>
                   <p className="mt-2 text-xs leading-5 text-on-surface-variant">
-                    왼쪽에서 폴더나 PDF를 선택하면 읽기, 메모와 AI 대화를 이어갈 수 있습니다.
+                    PDF를 PageDock Library에 복사하면 파일명이 바뀌어도 메모와 리서치 연결을 유지합니다.
                   </p>
+                  <button
+                    type="button"
+                    onClick={() => window.dispatchEvent(new Event(REQUEST_PDF_UPLOAD_EVENT))}
+                    className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-on-primary"
+                  >
+                    <FilePlus size={15} /> 첫 PDF 추가
+                  </button>
                 </div>
               </div>
             )}

@@ -346,6 +346,22 @@ async function pathExists(relativePath: string): Promise<boolean> {
   }
 }
 
+function createDocumentConflict(
+  db: DatabaseSync,
+  input: { documentId?: string; path: string; kind: string; details: string },
+): void {
+  const existing = db.prepare(`
+    SELECT id FROM document_conflicts
+    WHERE document_id IS ? AND path = ? AND kind = ? AND resolved_at IS NULL
+    LIMIT 1
+  `).get(input.documentId || null, input.path, input.kind) as SqlRow | undefined;
+  if (existing) return;
+  db.prepare(`
+    INSERT INTO document_conflicts(id, document_id, path, kind, details, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+  `).run(randomUUID(), input.documentId || null, input.path, input.kind, input.details, now());
+}
+
 async function createDocumentForFile(relativePath: string, sha256: string, fileSize: number, mtimeMs: number): Promise<ResearchDocument> {
   const db = await getResearchDb();
   const normalizedPath = normalizeRelativePath(relativePath);
@@ -405,6 +421,17 @@ export async function ensureDocumentForPath(relativePath: string): Promise<Resea
     if (existing.fileSize !== stats.size || existing.fileMtimeMs !== stats.mtimeMs) {
       const digest = await sha256File(absolutePath);
       const db = await getResearchDb();
+      if (existing.sha256 && existing.sha256 !== digest) {
+        createDocumentConflict(db, {
+          documentId: existing.id,
+          path: normalizedPath,
+          kind: 'content-changed',
+          details: '같은 경로의 PDF 내용이 달라졌습니다. 기존 메모 연결을 유지할지 확인해 주세요.',
+        });
+        db.prepare('UPDATE documents SET missing = 1, updated_at = ? WHERE id = ?')
+          .run(now(), existing.id);
+        return (await getDocumentById(existing.id))!;
+      }
       db.prepare(`UPDATE documents SET sha256 = ?, file_size = ?, file_mtime_ms = ?, missing = 0, updated_at = ? WHERE id = ?`)
         .run(digest, stats.size, stats.mtimeMs, now(), existing.id);
       return (await getDocumentById(existing.id))!;
@@ -436,8 +463,12 @@ export async function ensureDocumentForPath(relativePath: string): Promise<Resea
     const timestamp = now();
     db.prepare('INSERT OR IGNORE INTO document_aliases(document_id, path, created_at) VALUES (?, ?, ?)')
       .run(documentId, normalizedPath, timestamp);
-    db.prepare(`INSERT INTO document_conflicts(id, document_id, path, kind, details, created_at) VALUES (?, ?, ?, 'duplicate', ?, ?)`)
-      .run(randomUUID(), documentId, normalizedPath, '같은 내용의 PDF가 여러 경로에 있습니다.', timestamp);
+    createDocumentConflict(db, {
+      documentId,
+      path: normalizedPath,
+      kind: 'duplicate',
+      details: '같은 내용의 PDF가 여러 경로에 있습니다.',
+    });
     return (await getDocumentById(documentId))!;
   }
   return createDocumentForFile(normalizedPath, digest, stats.size, stats.mtimeMs);
@@ -467,11 +498,15 @@ export async function syncWorkspaceDocuments(): Promise<{ documents: ResearchDoc
   for (const pdfPath of paths) await ensureDocumentForPath(pdfPath);
   const db = await getResearchDb();
   const pathSet = new Set(paths);
+  const changedPaths = new Set((db.prepare(`
+    SELECT path FROM document_conflicts
+    WHERE kind = 'content-changed' AND resolved_at IS NULL
+  `).all() as SqlRow[]).map((row) => String(row.path)));
   const rows = db.prepare('SELECT id, current_path FROM documents WHERE current_path IS NOT NULL').all() as SqlRow[];
   const updateMissing = db.prepare('UPDATE documents SET missing = ?, updated_at = ? WHERE id = ?');
   for (const row of rows) {
     const currentPath = String(row.current_path);
-    updateMissing.run(pathSet.has(currentPath) ? 0 : 1, now(), String(row.id));
+    updateMissing.run(pathSet.has(currentPath) && !changedPaths.has(currentPath) ? 0 : 1, now(), String(row.id));
   }
   const documents = (db.prepare('SELECT * FROM documents ORDER BY updated_at DESC').all() as SqlRow[]).map(documentFromRow);
   const conflictRow = db.prepare('SELECT COUNT(*) AS count FROM document_conflicts WHERE resolved_at IS NULL').get() as SqlRow;
@@ -553,8 +588,29 @@ export async function listDocumentConflicts(): Promise<Array<{ id: string; docum
     }));
 }
 
-export async function resolveDocumentConflict(id: string): Promise<void> {
+export async function resolveDocumentConflict(
+  id: string,
+  action: 'acknowledge' | 'accept-current-file' = 'acknowledge',
+): Promise<void> {
   const db = await getResearchDb();
+  const conflict = db.prepare('SELECT * FROM document_conflicts WHERE id = ? AND resolved_at IS NULL').get(id) as SqlRow | undefined;
+  if (!conflict) throw new Error('이미 처리되었거나 존재하지 않는 확인 항목입니다.');
+  if (String(conflict.kind) === 'content-changed') {
+    if (action !== 'accept-current-file') {
+      throw new Error('내용이 바뀐 PDF는 현재 파일을 새 버전으로 사용할지 명시적으로 선택해 주세요.');
+    }
+    const documentId = typeof conflict.document_id === 'string' ? conflict.document_id : '';
+    const relativePath = String(conflict.path);
+    if (!documentId) throw new Error('연결할 문서 정보가 없습니다.');
+    const absolutePath = resolveFolderPath(relativePath);
+    const stats = await fs.stat(absolutePath);
+    const digest = await sha256File(absolutePath);
+    db.prepare(`
+      UPDATE documents
+      SET sha256 = ?, file_size = ?, file_mtime_ms = ?, missing = 0, updated_at = ?
+      WHERE id = ?
+    `).run(digest, stats.size, stats.mtimeMs, now(), documentId);
+  }
   db.prepare('UPDATE document_conflicts SET resolved_at = ? WHERE id = ?').run(now(), id);
 }
 
@@ -630,10 +686,23 @@ async function rebuildDocumentFts(documentId: string): Promise<void> {
   const document = await getDocumentById(documentId);
   if (!document) return;
   const bodyRows = db.prepare('SELECT text FROM document_chunks WHERE document_id = ? ORDER BY ordinal').all(documentId) as SqlRow[];
-  const body = [document.abstractText, ...bodyRows.map((row) => String(row.text))].join('\n');
+  const patentRow = db.prepare('SELECT claims_text FROM patent_metadata WHERE document_id = ?').get(documentId) as SqlRow | undefined;
+  const metadata = document.currentPath ? await getPaperMetadata(document.currentPath) : null;
+  const body = [
+    document.abstractText,
+    String(patentRow?.claims_text || ''),
+    metadata?.noteMarkdown || '',
+    ...bodyRows.map((row) => String(row.text)),
+  ].join('\n');
+  const tags = [...document.tags, ...(metadata?.aiKeywords || []), ...(metadata?.personalTags || [])];
   db.prepare('DELETE FROM document_fts WHERE document_id = ?').run(documentId);
   db.prepare('INSERT INTO document_fts(document_id, title, body, tags) VALUES (?, ?, ?, ?)')
-    .run(documentId, document.displayTitle, body, document.tags.join(' '));
+    .run(documentId, document.displayTitle, body, tags.join(' '));
+}
+
+export async function refreshDocumentSearchIndex(pdfPath: string): Promise<void> {
+  const document = await getDocumentByPath(pdfPath);
+  if (document) await rebuildDocumentFts(document.id);
 }
 
 function ftsQuery(value: string): string {

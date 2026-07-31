@@ -1,16 +1,8 @@
 # PageDock
 
-## macOS Apple Silicon 테스트판
+## 지원 환경
 
-PageDock은 Windows와 Apple Silicon(M1 이후) macOS를 지원하도록 구성되어 있습니다. macOS 친구 테스트판은 비공개 GitHub Actions 산출물로만 만들며 공개 Release나 자동 업데이트에 게시하지 않습니다.
-
-- Mac 테스트 빌드: `npm run build:mac:test`
-- 결과물: `dist/PageDock-버전-mac-arm64.dmg`와 자동 업데이트 검증용 ZIP
-- 현재 테스트판은 Apple Developer ID로 서명·공증되지 않았으므로 첫 실행 때 macOS 개인정보 보호 및 보안 설정에서 직접 허용해야 할 수 있습니다.
-- Codex는 공식 앱 또는 CLI를 감지하고 `codex login`의 ChatGPT 브라우저 OAuth를 사용합니다. API 키는 지식 정리에 사용하지 않습니다.
-- Python 3이 있으면 PyMuPDF는 PageDock 사용자 설정 폴더의 전용 가상 환경에 설치됩니다. 기본 PDF 읽기는 Python 없이도 사용할 수 있습니다.
-
-친구에게 전달하는 방법과 첫 실행 절차는 [macOS 친구 테스트 안내](./docs/MACOS_FRIEND_TEST_KO.md)를 참고하세요.
+PageDock은 **Windows 10/11 x64 전용**입니다. macOS와 Linux 빌드·테스트·배포는 지원하지 않습니다.
 
 개인 메모를 위키로 정리하는 기능은 [지식 정리 한국어 사용 설명서](./docs/KNOWLEDGE_USER_GUIDE_KO.md)를 참고하세요.
 
@@ -34,6 +26,7 @@ PageDock은 PDF를 한곳에 모아 읽고, 표시하고, 논문·특허를 프�
 - 같은 내용의 PDF는 SHA-256으로 감지해 중복 복사하지 않습니다.
 - 파일명이나 폴더가 바뀌어도 안정적인 문서 ID와 SHA-256으로 메모·하이라이트·프로젝트 연결을 복구합니다.
 - PDF 원본 주석 기능에 필요한 Python/PyMuPDF는 Windows의 공식 패키지 경로를 통해 자동 준비합니다.
+- PDF 도구 준비는 선택 사항이며 첫 실행에서 `나중에`를 선택해도 기본 읽기와 메모를 사용할 수 있습니다.
 - AI는 선택 사항입니다. 연결하지 않아도 PDF 읽기, 검색, 하이라이트와 메모를 사용할 수 있습니다.
 - Codex 연결을 선택하면 OpenAI 공식 Windows 설치 스크립트와 브라우저 로그인 흐름을 사용합니다.
 
@@ -44,6 +37,7 @@ PageDock은 PDF를 한곳에 모아 읽고, 표시하고, 논문·특허를 프�
 - PDF를 제외한 연구 데이터는 하루 한 번 자동 백업하며 최근 7개를 유지합니다. 리서치 DB는 이식 가능한 JSON으로 저장됩니다.
 - 전체 ZIP 내보내기에는 PDF와 메모, 하이라이트, 대화 기록이 포함됩니다.
 - 로그인 토큰은 백업 파일에 포함하지 않습니다.
+- ZIP 가져오기 전에는 PDF를 제외한 안전 백업을 자동으로 한 번 더 만듭니다. Python이 없어도 512MB 이하 백업은 복원할 수 있습니다.
 - 기존 Annot 백업 형식과 내부 `.annot` 데이터는 호환성을 위해 계속 지원합니다.
 
 ## 리서치와 AI

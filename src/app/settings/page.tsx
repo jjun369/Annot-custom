@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { CheckCircle2, Database, Download, FolderSync, Loader2, LogIn, Palette, RefreshCw, RotateCcw, Server, Trash2, Upload } from 'lucide-react';
+import { CheckCircle2, Database, Download, FolderOpen, FolderSync, Loader2, LogIn, Palette, RefreshCw, RotateCcw, Server, Trash2, Upload } from 'lucide-react';
 import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
 import { AUTO_MODEL_ID, getAutoModelLabel } from '@/lib/ai-providers/model-policy';
 import {
@@ -47,6 +47,17 @@ interface TrashRecord {
   expiresAt: string;
 }
 
+function maskAccountIdentifier(value: string): string {
+  const trimmed = value.trim();
+  const [local, domain] = trimmed.split('@');
+  if (domain) {
+    const visible = local.slice(0, Math.min(2, local.length));
+    return `${visible}${local.length > 2 ? '***' : '*'}@${domain}`;
+  }
+  if (trimmed.length <= 3) return `${trimmed.slice(0, 1)}**`;
+  return `${trimmed.slice(0, 2)}***${trimmed.slice(-1)}`;
+}
+
 export default function SettingsPage() {
   const { confirm, notify } = useFeedback();
   const [savedProvider, setSavedProvider] = useState<AIProvider>(DEFAULT_AI_PROVIDER);
@@ -90,6 +101,15 @@ export default function SettingsPage() {
   const getProviderLabel = (provider: AIProvider) => (
     provider === 'claude' ? 'Claude Code' : 'Codex'
   );
+
+  const chooseLibraryRoot = async () => {
+    if (!window.pageDockDesktop) {
+      notify('폴더 선택은 설치형 PageDock에서 사용할 수 있습니다.', 'info');
+      return;
+    }
+    const selected = await window.pageDockDesktop.selectDirectory();
+    if (selected) setRootDraft(selected);
+  };
 
   const checkProvider = async (provider: AIProvider) => {
     setIsRefreshing(true);
@@ -322,7 +342,7 @@ export default function SettingsPage() {
                     </span>
                   </div>
                   <p className="text-xs text-on-surface-variant">
-                    {providerStatus.email && <>로그인 계정: {providerStatus.email}. </>}
+                    {providerStatus.email && <>로그인 계정: {maskAccountIdentifier(providerStatus.email)}. </>}
                     {providerStatus.planType && <>구독: {providerStatus.planType}. </>}
                     {providerStatus.authMethod && <>인증: {providerStatus.authMethod}. </>}
                     {providerStatus.expiresAt && (
@@ -414,8 +434,12 @@ export default function SettingsPage() {
                 <input
                   value={rootDraft}
                   onChange={(event) => setRootDraft(event.target.value)}
+                  aria-label="PageDock Library 경로"
                   className="min-w-0 flex-1 rounded-lg border border-outline-variant/30 bg-surface-container px-3 py-2 font-mono text-xs text-on-surface-variant outline-none focus:border-outline"
                 />
+                <button type="button" onClick={() => void chooseLibraryRoot()} disabled={backupBusy} className="inline-flex items-center gap-1.5 rounded-lg bg-surface-container px-3 py-2 text-xs font-semibold text-on-surface disabled:opacity-50">
+                  <FolderOpen size={14} /> 폴더 선택
+                </button>
                 <button onClick={() => void saveLibraryRoot()} disabled={backupBusy || !rootDraft.trim()} className="rounded-lg bg-surface-container px-3 py-2 text-xs font-semibold text-on-surface disabled:opacity-50">
                   경로 저장
                 </button>
@@ -548,6 +572,7 @@ export default function SettingsPage() {
 
               <input
                 type="range"
+                aria-label="대화 글자 크기"
                 min={MIN_CHAT_FONT_SIZE}
                 max={MAX_CHAT_FONT_SIZE}
                 step={1}

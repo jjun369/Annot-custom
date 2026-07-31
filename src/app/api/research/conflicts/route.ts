@@ -8,9 +8,9 @@ export async function GET() {
 
 export async function PATCH(request: NextRequest) {
   try {
-    const body = await request.json() as { id?: string };
+    const body = await request.json() as { id?: string; action?: 'acknowledge' | 'accept-current-file' };
     if (!body.id) return NextResponse.json({ error: 'id가 필요합니다.' }, { status: 400 });
-    await resolveDocumentConflict(body.id);
+    await resolveDocumentConflict(body.id, body.action);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : '복구 확인을 완료하지 못했습니다.' }, { status: 500 });

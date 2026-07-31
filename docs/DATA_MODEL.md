@@ -15,6 +15,10 @@ Core relationships:
 
 Path rules use library-relative forward-slash paths. Internal rename updates the physical PDF, DB current path/aliases, metadata, sessions, sidecars, and selection as one operation with rollback on failure. External changes are detected during start/refresh/watch scans. An exact single hash match reconnects; multiple matches or changed content must not be guessed.
 
+If a file at the same relative path has a different SHA-256, the stored hash and `documentId` remain unchanged and a `content-changed` conflict is created. Accepting that conflict explicitly promotes the current file to a new version while preserving the document relationships. Merely dismissing the warning is not allowed. Internal rename/move compensation restores the file, metadata, sessions, database path, and sidecar content when a later step fails.
+
+FTS content includes display title, abstract, indexed PDF chunks, patent claims, document tags, AI/personal tags, and the local paper note. Updating paper metadata refreshes the associated document search index.
+
 Migration rules:
 
 - Existing PDFs and `.annot` JSON are indexed idempotently.

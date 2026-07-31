@@ -115,10 +115,6 @@ Revision 이력에서 이전 내용을 복원합니다. 복원도 새 revision�
 
 해당 위키의 `Revision 휴지통`을 열어 `되돌리기`를 누릅니다. 영구 삭제한 revision은 앱에서 복원할 수 없으므로 백업이 필요합니다.
 
-## 12. macOS Apple Silicon 테스트판
+## 12. 지원 운영체제
 
-M1 이후 Mac에서는 PageDock arm64 테스트판을 사용할 수 있습니다. Codex가 설치되어 있지 않으면 `공식 설치 안내`를 열어 공식 Codex 앱 또는 CLI를 설치하고, PageDock에서 `브라우저 로그인`을 눌러 ChatGPT OAuth를 완료합니다. 지식 정리는 API 키 인증을 계속 거부합니다.
-
-테스트판은 아직 Apple Developer ID로 서명·공증되지 않았으므로 첫 실행 때 macOS가 차단할 수 있습니다. 출처를 확인한 뒤 시스템 설정의 `개인정보 보호 및 보안`에서 직접 허용합니다. 공개 배포 전에는 이 절차 대신 서명·공증을 적용할 예정입니다.
-
-기본 PDF 읽기와 지식 위키는 Python 없이 사용할 수 있습니다. 원본 PDF에 하이라이트를 반영하려면 Python 3 설치 후 설정에서 PDF 도구를 준비합니다. PyMuPDF는 시스템 Python에 섞지 않고 PageDock 사용자 설정 폴더의 전용 환경에 저장됩니다.
+PageDock은 Windows 10/11 x64 전용입니다. macOS와 Linux 설치 파일은 제공하지 않으며 해당 운영체제의 사용·테스트 절차도 지원하지 않습니다.
