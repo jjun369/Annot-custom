@@ -1,8 +1,8 @@
 import { spawn } from 'child_process';
-import os from 'os';
 import path from 'path';
 
 import { buildExecutableCandidates, resolveExecutable } from '@/lib/command-runtime';
+import { getCommonPythonCandidateBases } from '@/lib/platform-paths';
 import { mergeHighlights, normalizeHighlightRects } from '@/lib/highlight-utils';
 import { resolveFolderPath } from '@/lib/annot-sessions';
 import { Highlight } from '@/types';
@@ -366,7 +366,6 @@ finally:
 let resolvedPythonCommandPromise: Promise<ResolvedPythonCommand> | null = null;
 
 function getPythonCandidates(): string[] {
-  const home = os.homedir();
   return buildExecutableCandidates(
     [
       process.env.PAGEDOCK_PYTHON_BIN,
@@ -374,18 +373,8 @@ function getPythonCandidates(): string[] {
       process.env.PYTHON_BIN,
       process.env.PYTHON,
     ],
-    'python',
-    [
-      path.join(home, 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python'),
-      path.join(home, 'AppData', 'Local', 'Programs', 'Python', 'Python312', 'python'),
-      path.join(home, 'AppData', 'Local', 'Programs', 'Python', 'Python311', 'python'),
-      path.join(home, 'miniconda3', 'python'),
-      path.join(home, 'anaconda3', 'python'),
-      path.join('/usr/local/bin', 'python3'),
-      path.join('/opt/homebrew/bin', 'python3'),
-      path.join('/usr/bin', 'python3'),
-      path.join(process.env.SystemRoot || 'C:\\Windows', 'py'),
-    ],
+    process.platform === 'win32' ? 'python' : 'python3',
+    getCommonPythonCandidateBases(),
   );
 }
 

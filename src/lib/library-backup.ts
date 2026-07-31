@@ -12,6 +12,7 @@ import { replacePaperMetadata } from '@/lib/paper-metadata';
 import { replaceSidecarHighlights } from '@/lib/highlight-sidecar';
 import { Highlight, PaperMetadata, Session } from '@/types';
 import { APP_VERSION } from '@/lib/app-info';
+import { getCommonPythonCandidateBases } from '@/lib/platform-paths';
 import { exportResearchData, importResearchData } from '@/lib/research-db';
 
 const BACKUP_VERSION = 2;
@@ -261,6 +262,7 @@ async function extractBackupArchive(archivePath: string, destination: string): P
   const configured = process.env.PAGEDOCK_PYTHON_BIN || process.env.ANNOT_PYTHON_BIN || process.env.PYTHON_BIN;
   const candidates = [
     ...(configured ? [configured] : []),
+    ...getCommonPythonCandidateBases(),
     ...(process.platform === 'win32' ? ['py', 'python'] : ['python3', 'python']),
   ];
   let lastError: unknown = null;

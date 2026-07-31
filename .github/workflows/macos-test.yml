@@ -1,0 +1,63 @@
+name: Build PageDock for macOS ARM64
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'mac-test-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  macos-arm64:
+    runs-on: macos-15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify source
+        run: |
+          npm run docs:check
+          npm run lint
+          npx tsc --noEmit --incremental false
+          npm run test
+
+      - name: Build unsigned friend-test artifacts
+        run: npm run build:mac:test
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+
+      - name: Verify packaged app and disk image
+        shell: bash
+        run: |
+          APP_PATH="$(find dist -maxdepth 2 -type d -name 'PageDock.app' -print -quit)"
+          test -n "$APP_PATH"
+          file "$APP_PATH/Contents/MacOS/PageDock" | grep -q arm64
+          "$APP_PATH/Contents/MacOS/PageDock" --smoke-test
+          DMG_PATH="$(find dist -maxdepth 1 -type f -name 'PageDock-*-mac-arm64.dmg' -print -quit)"
+          ZIP_PATH="$(find dist -maxdepth 1 -type f -name 'PageDock-*-mac-arm64.zip' -print -quit)"
+          test -n "$DMG_PATH"
+          test -n "$ZIP_PATH"
+          hdiutil verify "$DMG_PATH"
+
+      - name: Upload private test artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: PageDock-macOS-arm64-${{ github.ref_name }}
+          path: |
+            dist/PageDock-*-mac-arm64.dmg
+            dist/PageDock-*-mac-arm64.zip
+            dist/PageDock-*-mac-arm64.zip.blockmap
+            dist/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 14

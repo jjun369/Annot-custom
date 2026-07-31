@@ -423,7 +423,7 @@ export default function SettingsPage() {
               <p className="mt-2 text-xs text-on-surface-variant">
                 {libraryInfo?.oneDriveLikely
                   ? 'OneDrive 경로를 사용 중입니다. 이 폴더를 “이 장치에 항상 유지”로 설정해 주세요.'
-                  : '여러 노트북에서 사용하려면 PageDock Library를 개인 OneDrive 안의 폴더로 지정하세요.'}
+                  : '여러 컴퓨터에서 사용하려면 PageDock Library를 개인 OneDrive 또는 iCloud Drive 안의 폴더로 지정할 수 있습니다.'}
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -510,7 +510,7 @@ export default function SettingsPage() {
             </div>
             <PdfEngineSetupCard />
             <div className="border-t border-outline-variant/20 pt-4 text-xs leading-5 text-on-surface-variant">
-              <p><span className="font-semibold text-on-surface">PageDock {APP_VERSION}</span> · Windows 데스크톱 배포판</p>
+              <p><span className="font-semibold text-on-surface">PageDock {APP_VERSION}</span> · Windows 및 Apple Silicon macOS 데스크톱</p>
               <p className="mt-1">Annot 프로젝트를 기반으로 수정했으며 Apache License 2.0을 따릅니다.</p>
             </div>
           </div>

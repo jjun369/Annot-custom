@@ -12,6 +12,7 @@ const required = [
   'docs/decisions/0003-search-ai-and-public-sources.md', 'docs/decisions/0004-backup-and-credentials.md',
   'docs/decisions/0005-release-separation.md', 'docs/decisions/0006-knowledge-inbox-codex-review.md',
   'docs/decisions/0007-manual-knowledge-revisions-and-trash.md',
+  'docs/decisions/0008-macos-arm64-port.md',
 ];
 
 for (const file of required) await access(path.join(root, file));

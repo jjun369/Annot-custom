@@ -10,11 +10,15 @@ import {
 } from '@/lib/codex-exec';
 
 const OFFICIAL_INSTALLER_URL = 'https://raw.githubusercontent.com/openai/codex/main/scripts/install/install.ps1';
+const CODEX_SETUP_URL = 'https://chatgpt.com/codex';
 const PROCESS_TIMEOUT_MS = 15 * 60 * 1000;
 
 export interface CodexSetupStatus {
   installed: boolean;
   authenticated: boolean;
+  platform: NodeJS.Platform;
+  canAutoInstall: boolean;
+  setupUrl: string;
   version?: string;
   authMethod?: string;
   error?: string;
@@ -59,6 +63,11 @@ async function readCodexVersion(): Promise<string | undefined> {
 }
 
 export async function getCodexSetupStatus(): Promise<CodexSetupStatus> {
+  const platformDetails = {
+    platform: process.platform,
+    canAutoInstall: process.platform === 'win32',
+    setupUrl: CODEX_SETUP_URL,
+  };
   try {
     const version = await readCodexVersion();
     resetCodexExecutableCache();
@@ -67,6 +76,7 @@ export async function getCodexSetupStatus(): Promise<CodexSetupStatus> {
       authMethod: undefined,
     }));
     return {
+      ...platformDetails,
       installed: true,
       authenticated: auth.authenticated,
       authMethod: auth.authMethod,
@@ -74,6 +84,7 @@ export async function getCodexSetupStatus(): Promise<CodexSetupStatus> {
     };
   } catch (error) {
     return {
+      ...platformDetails,
       installed: false,
       authenticated: false,
       error: error instanceof Error ? error.message : 'Codex를 찾지 못했습니다.',
@@ -83,7 +94,7 @@ export async function getCodexSetupStatus(): Promise<CodexSetupStatus> {
 
 export async function installOrUpdateCodex(): Promise<CodexSetupStatus> {
   if (process.platform !== 'win32') {
-    throw new Error('PageDock의 자동 Codex 설치는 현재 Windows 10/11에서만 지원합니다.');
+    throw new Error('macOS에서는 공식 Codex 앱 또는 CLI를 설치한 뒤 PageDock에서 다시 확인해 주세요.');
   }
 
   const response = await fetch(OFFICIAL_INSTALLER_URL, {

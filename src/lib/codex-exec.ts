@@ -158,11 +158,14 @@ function getCodexExecutableCandidates(): string[] {
     path.join(home, '.npm-global', 'bin', 'codex'),
     path.join(home, '.local', 'bin', 'codex'),
     path.join(home, '.bun', 'bin', 'codex'),
+    path.join(home, '.volta', 'bin', 'codex'),
+    path.join(home, 'Library', 'pnpm', 'codex'),
     path.join(home, '.codex', 'bin', 'codex'),
     path.join(home, 'AppData', 'Roaming', 'npm', 'codex'),
     path.join(process.env.LOCALAPPDATA || '', 'Programs', 'OpenAI', 'Codex', 'bin', 'codex'),
     path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'codex'),
     path.join('/Applications', 'Codex.app', 'Contents', 'Resources', 'codex'),
+    path.join('/Applications', 'ChatGPT.app', 'Contents', 'Resources', 'codex'),
     path.join('/opt/homebrew/bin', 'codex'),
     path.join('/usr/local/bin', 'codex'),
   ]);
@@ -216,6 +219,11 @@ function createCodexArgs(input: RunTurnInput): string[] {
 function describeCodexSpawnError(error: Error): Error {
   const code = (error as NodeJS.ErrnoException).code;
   if (code === 'EACCES' || /access is denied/i.test(error.message)) {
+    if (process.platform === 'darwin') {
+      return new Error(
+        'Codex CLI 실행 권한을 확인하지 못했습니다. 공식 Codex 앱 또는 CLI를 다시 설치하고 PageDock에서 연결 상태를 새로고침해 주세요.',
+      );
+    }
     return new Error(
       'Codex CLI를 실행할 권한이 없습니다. WindowsApps에 포함된 실행 파일 대신 ' +
       'standalone Codex CLI를 설치하거나 CODEX_BIN에 실행 가능한 codex.exe 경로를 지정해 주세요.',

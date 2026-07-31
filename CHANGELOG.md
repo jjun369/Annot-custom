@@ -1,5 +1,11 @@
 # Changelog
 
+## macOS Apple Silicon port (working tree)
+
+- Added unsigned arm64 DMG/ZIP packaging and a private GitHub Actions friend-test workflow without changing the public release channel.
+- Added macOS-native menus, Dock window restoration, ICNS generation, Finder-safe Codex path detection, and ChatGPT OAuth setup guidance.
+- Added a PageDock-managed Python virtual environment for PyMuPDF, macOS Keychain protection for optional research credentials, and platform-neutral application-data paths.
+
 ## Knowledge MVP (working tree)
 
 - Added an experimental personal knowledge area with a loose-note inbox, local candidate selection, Codex-generated topic/update/conflict proposals, explicit approval, source provenance, and a revisioned Markdown wiki.

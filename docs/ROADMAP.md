@@ -12,6 +12,7 @@
 - Experimental knowledge inbox with immutable source notes, review-gated Codex topic proposals, conflict surfacing, and a revisioned personal wiki.
 - Knowledge safety hardening with cancellable/time-bounded single-flight processing, first-error batch stop, verified v1 rollback copies, visible bounded-context warnings, collapsed long diffs, and Markdown result preview.
 - Lightweight knowledge operations with local draft recovery, next-ten processing, demand-driven OAuth status, direct user revisions, recoverable revision trash, conflict resolution notes, bounded list rendering, and storage-size visibility.
+- Apple Silicon macOS port source with arm64 DMG/ZIP packaging, native menu/Dock lifecycle, platform-aware Codex and PDF setup, macOS Keychain protection, and a private test-artifact workflow.
 
 ## Planned
 
@@ -19,6 +20,7 @@
 - Improve PDF metadata extraction and background indexing progress/cancellation.
 - Add selected-page figure analysis UI and richer claim/paragraph anchors.
 - Code signing and a hardened public installer release workflow.
+- Validate the unsigned macOS artifact on a real M-series Mac, then add Developer ID signing, notarization, and signed Mac updates if friend testing succeeds.
 - Improve knowledge candidate retrieval, add topic merge/split and Markdown export, and evaluate persisted queue counters only if interrupted real-world batches prove the need.
 
 ## Deferred

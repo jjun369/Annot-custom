@@ -4,11 +4,10 @@ import os from 'os';
 import path from 'path';
 
 import { DEFAULT_LIBRARY_FOLDER_NAME } from '@/lib/app-info';
+import { getPageDockConfigDirectory } from '@/lib/platform-paths';
 
 const LEGACY_CONFIG_FILE = path.join(os.homedir(), '.annot', 'config.json');
-const CONFIG_FILE = process.env.PAGEDOCK_CONFIG_DIR
-  ? path.join(process.env.PAGEDOCK_CONFIG_DIR, 'config.json')
-  : path.join(process.env.APPDATA || os.homedir(), 'PageDock', 'config.json');
+const CONFIG_FILE = path.join(getPageDockConfigDirectory(), 'config.json');
 
 interface PageDockConfig {
   workspaceRoot?: string;

@@ -1,7 +1,8 @@
 import { spawn } from 'child_process';
 import { promises as fs } from 'fs';
-import os from 'os';
 import path from 'path';
+
+import { getPageDockConfigDirectory } from '@/lib/platform-paths';
 
 export interface ResearchSourceSettings {
   unpaywallEmail?: string;
@@ -11,35 +12,25 @@ export interface ResearchSourceSettings {
   epoClientSecret?: string;
 }
 
+type SecretKey = 'openAlexKey' | 'kiprisKey' | 'epoClientId' | 'epoClientSecret';
+
 interface StoredResearchSourceSettings {
   version: 1;
   unpaywallEmail?: string;
-  secrets?: Partial<Record<'openAlexKey' | 'kiprisKey' | 'epoClientId' | 'epoClientSecret', string>>;
+  secrets?: Partial<Record<SecretKey, string>>;
 }
 
-const SECRET_KEYS = ['openAlexKey', 'kiprisKey', 'epoClientId', 'epoClientSecret'] as const;
+const SECRET_KEYS: SecretKey[] = ['openAlexKey', 'kiprisKey', 'epoClientId', 'epoClientSecret'];
+const KEYCHAIN_SERVICE = 'app.pagedock.desktop.research';
+const KEYCHAIN_MARKER = 'keychain:';
 
 function settingsFile(): string {
-  const configDirectory = process.env.PAGEDOCK_CONFIG_DIR
-    || path.join(process.env.APPDATA || os.homedir(), 'PageDock');
-  return path.join(configDirectory, 'research-sources.json');
+  return path.join(getPageDockConfigDirectory(), 'research-sources.json');
 }
 
-function runDpapi(mode: 'protect' | 'unprotect', value: string): Promise<string> {
-  if (process.platform !== 'win32') {
-    throw new Error('자격증명 암호화는 Windows에서만 지원합니다.');
-  }
-  const operation = mode === 'protect'
-    ? '[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($inputValue), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))'
-    : '[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($inputValue), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))';
-  const script = [
-    '$ErrorActionPreference="Stop"',
-    'Add-Type -AssemblyName System.Security',
-    '$inputValue=[Console]::In.ReadToEnd()',
-    operation,
-  ].join(';');
+function runProcess(command: string, args: string[], input?: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    const child = spawn(command, args, {
       windowsHide: true,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
@@ -50,10 +41,77 @@ function runDpapi(mode: 'protect' | 'unprotect', value: string): Promise<string>
     child.on('error', reject);
     child.on('close', (code) => {
       if (code === 0) resolve(stdout.trim());
-      else reject(new Error(stderr.trim() || 'Windows 자격증명 암호화에 실패했습니다.'));
+      else reject(new Error(stderr.trim() || `자격 증명 보호 작업에 실패했습니다. (${code})`));
     });
-    child.stdin.end(value);
+    child.stdin.end(input || '');
   });
+}
+
+function runDpapi(mode: 'protect' | 'unprotect', value: string): Promise<string> {
+  const operation = mode === 'protect'
+    ? '[Convert]::ToBase64String([Security.Cryptography.ProtectedData]::Protect([Text.Encoding]::UTF8.GetBytes($inputValue), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))'
+    : '[Text.Encoding]::UTF8.GetString([Security.Cryptography.ProtectedData]::Unprotect([Convert]::FromBase64String($inputValue), $null, [Security.Cryptography.DataProtectionScope]::CurrentUser))';
+  const script = [
+    '$ErrorActionPreference="Stop"',
+    'Add-Type -AssemblyName System.Security',
+    '$inputValue=[Console]::In.ReadToEnd()',
+    operation,
+  ].join(';');
+  return runProcess('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], value);
+}
+
+async function writeKeychainSecret(key: SecretKey, value: string): Promise<void> {
+  await runProcess('/usr/bin/security', [
+    'add-generic-password',
+    '-U',
+    '-s', KEYCHAIN_SERVICE,
+    '-a', key,
+    '-w', value,
+  ]);
+}
+
+async function readKeychainSecret(key: SecretKey): Promise<string> {
+  return await runProcess('/usr/bin/security', [
+    'find-generic-password',
+    '-s', KEYCHAIN_SERVICE,
+    '-a', key,
+    '-w',
+  ]);
+}
+
+async function deleteKeychainSecret(key: SecretKey): Promise<void> {
+  await runProcess('/usr/bin/security', [
+    'delete-generic-password',
+    '-s', KEYCHAIN_SERVICE,
+    '-a', key,
+  ]).catch(() => undefined);
+}
+
+export function getResearchCredentialBackend(
+  platform: NodeJS.Platform = process.platform,
+): 'dpapi' | 'keychain' | 'unsupported' {
+  if (platform === 'win32') return 'dpapi';
+  if (platform === 'darwin') return 'keychain';
+  return 'unsupported';
+}
+
+async function protectSecret(key: SecretKey, value: string): Promise<string> {
+  const backend = getResearchCredentialBackend();
+  if (backend === 'dpapi') return await runDpapi('protect', value);
+  if (backend === 'keychain') {
+    await writeKeychainSecret(key, value);
+    return `${KEYCHAIN_MARKER}${key}`;
+  }
+  throw new Error('이 운영체제에서는 연구 서비스 자격 증명 저장을 지원하지 않습니다.');
+}
+
+async function unprotectSecret(key: SecretKey, storedValue: string): Promise<string | undefined> {
+  const backend = getResearchCredentialBackend();
+  if (backend === 'dpapi') return await runDpapi('unprotect', storedValue);
+  if (backend === 'keychain' && storedValue === `${KEYCHAIN_MARKER}${key}`) {
+    return await readKeychainSecret(key);
+  }
+  return undefined;
 }
 
 async function readStored(): Promise<StoredResearchSourceSettings> {
@@ -84,9 +142,10 @@ export async function getResearchSourceSettings(): Promise<ResearchSourceSetting
     const encrypted = stored.secrets?.[key];
     if (!encrypted) continue;
     try {
-      result[key] = await runDpapi('unprotect', encrypted);
+      const value = await unprotectSecret(key, encrypted);
+      if (value) result[key] = value;
     } catch {
-      // A credential encrypted by another Windows account is intentionally ignored.
+      // Credentials from another account or a locked keychain remain unavailable without blocking local use.
     }
   }
   return result;
@@ -103,8 +162,12 @@ export async function updateResearchSourceSettings(
   for (const key of SECRET_KEYS) {
     if (!(key in updates)) continue;
     const value = updates[key]?.trim();
-    if (!value) delete stored.secrets[key];
-    else stored.secrets[key] = await runDpapi('protect', value);
+    if (!value) {
+      if (getResearchCredentialBackend() === 'keychain') await deleteKeychainSecret(key);
+      delete stored.secrets[key];
+    } else {
+      stored.secrets[key] = await protectSecret(key, value);
+    }
   }
   await writeStored(stored);
   return getResearchSourceSettings();

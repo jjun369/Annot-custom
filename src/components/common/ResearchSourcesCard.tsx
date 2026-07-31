@@ -70,7 +70,7 @@ export function ResearchSourcesCard() {
       <div className="flex items-start gap-3 rounded-xl bg-surface-container px-4 py-3">
         <ShieldCheck size={18} className="mt-0.5 shrink-0 text-emerald-700" />
         <p className="text-xs leading-5 text-on-surface-variant">
-          비밀키는 현재 Windows 사용자 계정으로 암호화하며 백업·설치 파일·로그에 넣지 않습니다. Unpaywall 이메일만 일반 설정으로 저장됩니다.
+          비밀키는 운영체제의 보호 저장소(Windows DPAPI 또는 macOS Keychain)에 보관하며 백업·설치 파일·로그에 넣지 않습니다. Unpaywall 이메일만 일반 설정으로 저장됩니다.
         </p>
       </div>
       <div className="grid gap-4 md:grid-cols-2">

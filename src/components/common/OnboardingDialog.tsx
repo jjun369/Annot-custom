@@ -9,7 +9,7 @@ import { PageDockMark } from '@/components/common/PageDockMark';
 export function OnboardingDialog() {
   const [open, setOpen] = useState(false);
   const [step, setStep] = useState(0);
-  const [libraryRoot, setLibraryRoot] = useState('문서\\PageDock Library');
+  const [libraryRoot, setLibraryRoot] = useState('PageDock Library');
   const [pdfEngineBusy, setPdfEngineBusy] = useState(false);
   const [pdfEngineMessage, setPdfEngineMessage] = useState('');
 
@@ -44,6 +44,9 @@ export function OnboardingDialog() {
       const statusResponse = await fetch('/api/runtime/pdf-engine', { cache: 'no-store' });
       const status = await statusResponse.json();
       if (!status?.ready) {
+        if (!status?.canAutoInstall) {
+          throw new Error(status?.error || 'Python 3 설치 후 설정에서 PDF 도구를 준비할 수 있습니다.');
+        }
         const installResponse = await fetch('/api/runtime/pdf-engine', { method: 'POST' });
         const installed = await installResponse.json();
         if (!installResponse.ok || !installed?.ready) {

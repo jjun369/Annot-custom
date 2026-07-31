@@ -1,14 +1,22 @@
 import { spawn } from 'child_process';
-import os from 'os';
+import { promises as fs } from 'fs';
 import path from 'path';
 
 import { buildExecutableCandidates, resolveExecutable } from '@/lib/command-runtime';
+import {
+  getCommonPythonCandidateBases,
+  getManagedPythonExecutable,
+  getPageDockConfigDirectory,
+} from '@/lib/platform-paths';
 
 const PROCESS_TIMEOUT_MS = 10 * 60 * 1000;
 
 export interface PdfEngineStatus {
   ready: boolean;
   pythonInstalled: boolean;
+  platform: NodeJS.Platform;
+  canAutoInstall: boolean;
+  setupUrl?: string;
   pythonPath?: string;
   pymupdfVersion?: string;
   error?: string;
@@ -39,18 +47,10 @@ function runProcess(command: string, args: string[], timeoutMs = PROCESS_TIMEOUT
 }
 
 function pythonCandidates(): string[] {
-  const home = os.homedir();
-  const localPrograms = path.join(process.env.LOCALAPPDATA || path.join(home, 'AppData', 'Local'), 'Programs', 'Python');
   return buildExecutableCandidates(
     [process.env.PAGEDOCK_PYTHON_BIN, process.env.ANNOT_PYTHON_BIN, process.env.PYTHON_BIN],
-    'python',
-    [
-      path.join(localPrograms, 'Python313', 'python'),
-      path.join(localPrograms, 'Python312', 'python'),
-      path.join(localPrograms, 'Python311', 'python'),
-      path.join(home, 'miniconda3', 'python'),
-      path.join(home, 'anaconda3', 'python'),
-    ],
+    process.platform === 'win32' ? 'python' : 'python3',
+    getCommonPythonCandidateBases(),
   );
 }
 
@@ -60,8 +60,13 @@ async function findPython(): Promise<string | null> {
 
 export async function getPdfEngineStatus(): Promise<PdfEngineStatus> {
   const python = await findPython();
+  const platformDetails = {
+    platform: process.platform,
+    canAutoInstall: process.platform === 'win32' || (process.platform === 'darwin' && Boolean(python)),
+    setupUrl: process.platform === 'darwin' ? 'https://www.python.org/downloads/macos/' : undefined,
+  };
   if (!python) {
-    return { ready: false, pythonInstalled: false, error: 'Python을 찾지 못했습니다.' };
+    return { ...platformDetails, ready: false, pythonInstalled: false, error: 'Python을 찾지 못했습니다.' };
   }
   try {
     const version = await runProcess(python, [
@@ -69,6 +74,7 @@ export async function getPdfEngineStatus(): Promise<PdfEngineStatus> {
       'import fitz; print(getattr(fitz, "pymupdf_version", getattr(fitz, "VersionBind", "ready")))',
     ], 30000);
     return {
+      ...platformDetails,
       ready: true,
       pythonInstalled: true,
       pythonPath: python,
@@ -76,6 +82,7 @@ export async function getPdfEngineStatus(): Promise<PdfEngineStatus> {
     };
   } catch (error) {
     return {
+      ...platformDetails,
       ready: false,
       pythonInstalled: true,
       pythonPath: python,
@@ -85,8 +92,30 @@ export async function getPdfEngineStatus(): Promise<PdfEngineStatus> {
 }
 
 export async function installPdfEngine(): Promise<PdfEngineStatus> {
+  if (process.platform === 'darwin') {
+    let python = await findPython();
+    if (!python) {
+      throw new Error('Python 3을 먼저 설치한 뒤 다시 확인해 주세요. 기본 PDF 읽기와 메모는 계속 사용할 수 있습니다.');
+    }
+    const managedPython = getManagedPythonExecutable();
+    try {
+      await fs.access(managedPython);
+    } catch {
+      const environmentDirectory = path.join(getPageDockConfigDirectory(), 'python-env');
+      await fs.mkdir(path.dirname(environmentDirectory), { recursive: true });
+      await runProcess(python, ['-m', 'venv', environmentDirectory]);
+    }
+    python = managedPython;
+    await runProcess(python, [
+      '-m', 'pip', 'install', '--upgrade', '--disable-pip-version-check', '--no-input', 'PyMuPDF',
+    ]);
+    const status = await getPdfEngineStatus();
+    if (!status.ready) throw new Error(status.error || 'PDF 도구 준비를 확인하지 못했습니다.');
+    return status;
+  }
+
   if (process.platform !== 'win32') {
-    throw new Error('PageDock의 PDF 도구 자동 설치는 현재 Windows 10/11에서만 지원합니다.');
+    throw new Error('이 운영체제에서는 PDF 도구 자동 설치를 지원하지 않습니다.');
   }
 
   let python = await findPython();

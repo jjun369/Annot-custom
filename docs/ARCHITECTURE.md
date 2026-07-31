@@ -19,7 +19,9 @@ PDF ingestion computes SHA-256, creates or finds a `documentId`, and keeps the c
 
 Codex authentication and model selection follow the official CLI. `자동` does not pin a model version. Analysis sends only the selected document chunks and selected page images, validates returned evidence against real chunks/pages, and stores the structured report locally.
 
-Source credentials are stored outside the library in the user's PageDock AppData directory. Windows DPAPI protects secrets. They are excluded from backup and logs.
+Source credentials are stored outside the library in the user's PageDock application-data directory. Windows DPAPI protects secrets on Windows; macOS stores the corresponding values in Keychain and keeps only non-secret markers in PageDock JSON. They are excluded from backup and logs.
+
+Windows packages use NSIS x64. The first macOS port targets Apple Silicon arm64 with an unsigned DMG and ZIP kept as private CI artifacts. The Mac shell keeps the loopback Next server alive when the last window closes, recreates the window from the Dock, and provides native edit/window menus. Public Mac distribution, automatic updates, Developer ID signing, and Apple notarization remain gated on real-device testing and signing credentials.
 
 Backups use a v2 manifest. PDFs and legacy JSON are ordinary archive files; SQLite is exported to normalized research JSON and merged during restore. v1 import remains supported.
 

@@ -171,8 +171,66 @@ function createWindow(url) {
   void mainWindow.loadURL(url);
 }
 
+function configureApplicationMenu() {
+  if (process.platform !== 'darwin') {
+    Menu.setApplicationMenu(null);
+    return;
+  }
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    {
+      label: app.name,
+      submenu: [
+        { role: 'about' },
+        { type: 'separator' },
+        { role: 'services' },
+        { type: 'separator' },
+        { role: 'hide' },
+        { role: 'hideOthers' },
+        { role: 'unhide' },
+        { type: 'separator' },
+        { role: 'quit' },
+      ],
+    },
+    {
+      label: '편집',
+      submenu: [
+        { role: 'undo' },
+        { role: 'redo' },
+        { type: 'separator' },
+        { role: 'cut' },
+        { role: 'copy' },
+        { role: 'paste' },
+        { role: 'selectAll' },
+      ],
+    },
+    {
+      label: '보기',
+      submenu: [
+        { role: 'resetZoom' },
+        { role: 'zoomIn' },
+        { role: 'zoomOut' },
+        { type: 'separator' },
+        { role: 'togglefullscreen' },
+      ],
+    },
+    {
+      label: '윈도우',
+      submenu: [
+        { role: 'minimize' },
+        { role: 'zoom' },
+        { type: 'separator' },
+        { role: 'front' },
+      ],
+    },
+  ]));
+}
+
 function configureAutoUpdate() {
   if (!app.isPackaged) return;
+  // macOS friend-test artifacts are unsigned and private; enable Mac updates only
+  // after Developer ID signing, notarization, and latest-mac metadata are verified.
+  if (process.platform === 'darwin') return;
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on('update-available', async (info) => {
@@ -216,10 +274,16 @@ app.on('before-quit', () => {
   }
 });
 
-app.on('window-all-closed', () => app.quit());
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('activate', () => {
+  if (BrowserWindow.getAllWindows().length === 0 && baseUrl) createWindow(baseUrl);
+});
 
 void app.whenReady().then(async () => {
-  Menu.setApplicationMenu(null);
+  configureApplicationMenu();
   try {
     const url = isDevelopment
       ? (process.env.PAGEDOCK_DEV_URL || 'http://127.0.0.1:3000')

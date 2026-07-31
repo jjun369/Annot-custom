@@ -387,11 +387,16 @@ async function detectInstalledCodexVersion(): Promise<string | null> {
       [
         path.join(home, '.npm-global', 'bin', 'codex'),
         path.join(home, '.local', 'bin', 'codex'),
+        path.join(home, '.volta', 'bin', 'codex'),
+        path.join(home, 'Library', 'pnpm', 'codex'),
         path.join(home, '.codex', 'bin', 'codex'),
         path.join(home, 'AppData', 'Roaming', 'npm', 'codex'),
         path.join(process.env.LOCALAPPDATA || '', 'Programs', 'OpenAI', 'Codex', 'bin', 'codex'),
         path.join(process.env.LOCALAPPDATA || '', 'Microsoft', 'WindowsApps', 'codex'),
         path.join('/Applications', 'Codex.app', 'Contents', 'Resources', 'codex'),
+        path.join('/Applications', 'ChatGPT.app', 'Contents', 'Resources', 'codex'),
+        path.join('/opt/homebrew/bin', 'codex'),
+        path.join('/usr/local/bin', 'codex'),
       ],
     );
     const executable = await resolveExecutable(candidates);
