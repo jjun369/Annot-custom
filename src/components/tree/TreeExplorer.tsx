@@ -112,8 +112,8 @@ export function TreeExplorer() {
 
   if (!explorerOpen) {
     return (
-      <aside className="w-12 bg-surface-container flex flex-col shrink-0 overflow-hidden border-r border-outline-variant/10">
-        <div className="h-10 flex items-center justify-center shrink-0">
+      <aside className="flex w-12 shrink-0 flex-col overflow-hidden border-r border-outline-variant/15 bg-surface-container">
+        <div className="flex h-11 shrink-0 items-center justify-center">
           <button
             onClick={toggleExplorer}
             className="w-7 h-7 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors"
@@ -147,9 +147,9 @@ export function TreeExplorer() {
   }
 
   return (
-    <aside className="w-[240px] bg-surface-container flex flex-col shrink-0 overflow-hidden border-r border-outline-variant/10">
+    <aside className="flex w-[240px] shrink-0 flex-col overflow-hidden border-r border-outline-variant/15 bg-surface-container">
       {/* Header */}
-      <div className="h-10 px-3 flex items-center justify-between shrink-0">
+      <div className="flex h-11 shrink-0 items-center justify-between px-3">
         <div className="flex items-center gap-1">
           <button
             onClick={toggleExplorer}
@@ -158,15 +158,15 @@ export function TreeExplorer() {
           >
             <PanelLeftClose size={13} strokeWidth={2} />
           </button>
-          <span className="text-[10px] font-bold uppercase tracking-widest text-on-surface-variant">
-            탐색기
+          <span className="text-[10px] font-bold uppercase tracking-[0.16em] text-on-surface-variant">
+            라이브러리
           </span>
         </div>
         <div className="flex items-center gap-0.5">
           <button
             onClick={() => setCreateDialogOpen(true)}
             disabled={isCreatingFolder || treeLoading}
-            className="w-6 h-6 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors disabled:opacity-50"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface disabled:opacity-50"
             title="폴더 만들기"
           >
             <FolderPlus size={13} strokeWidth={2} />
@@ -174,7 +174,7 @@ export function TreeExplorer() {
           <button
             onClick={handleUploadClick}
             disabled={isUploading || treeLoading}
-            className="w-6 h-6 rounded flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors disabled:opacity-50"
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface disabled:opacity-50"
             title="PDF 추가"
           >
             <FilePlus size={13} strokeWidth={2} />
@@ -192,7 +192,7 @@ export function TreeExplorer() {
 
       {/* Tree */}
       <nav
-        className="flex-1 overflow-y-auto px-1 pb-4"
+        className="flex-1 overflow-y-auto px-2 pb-4"
         onClick={(event) => {
           if (event.target === event.currentTarget) {
             clearSelection();
@@ -211,14 +211,15 @@ export function TreeExplorer() {
             />
           ))
         ) : (
-          <div className="px-3 py-2 text-xs text-on-surface-variant">
-            아직 폴더나 PDF가 없습니다.
+          <div className="mx-1 mt-2 rounded-xl border border-dashed border-outline-variant/35 bg-surface-container-low px-3 py-5 text-center">
+            <p className="text-xs font-medium text-on-surface">라이브러리가 비어 있습니다</p>
+            <p className="mt-1 text-[10px] leading-4 text-on-surface-variant">위의 PDF 추가 버튼으로 첫 문서를 넣어보세요.</p>
           </div>
         )}
       </nav>
 
       {/* Footer stats */}
-      <div className="px-3 py-2 shrink-0">
+      <div className="shrink-0 border-t border-outline-variant/15 px-3 py-2.5">
         <div className="text-[10px] text-outline">
           폴더 {stats.folders}개 &middot; PDF {stats.pdfs}개
         </div>

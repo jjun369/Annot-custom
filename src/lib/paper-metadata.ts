@@ -12,6 +12,7 @@ interface StoredPaperMetadata extends PaperMetadata {
 }
 
 export interface PaperMetadataUpdate {
+  documentId?: string;
   aiKeywords?: string[];
   personalTags?: string[];
   summaryKo?: string;
@@ -84,6 +85,7 @@ function normalizeMetadata(pdfPath: string, value: Partial<StoredPaperMetadata>)
     ...value,
     version: METADATA_VERSION,
     pdfPath: normalizePdfPath(pdfPath),
+    documentId: typeof value.documentId === 'string' && value.documentId ? value.documentId : undefined,
     aiKeywords: uniqueStrings(value.aiKeywords),
     personalTags: uniqueStrings(value.personalTags),
     summaryKo: typeof value.summaryKo === 'string' ? value.summaryKo : '',

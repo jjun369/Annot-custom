@@ -32,6 +32,7 @@ interface CreateSessionOptions {
   reasoningEffort?: ReasoningEffort;
   sessionKind?: SessionKind;
   pdfPath?: string | null;
+  documentId?: string;
   provider?: AIProvider;
 }
 
@@ -165,6 +166,9 @@ function normalizeSession(folderPath: string, session: StoredSessionRecord): Sto
     folderPath: normalizedFolderPath,
     sessionKind,
     pdfPath: normalizedPdfPath,
+    documentId: typeof session.documentId === 'string' && session.documentId.length > 0
+      ? session.documentId
+      : undefined,
     provider,
     providerSessionId,
     title: session.title,
@@ -285,6 +289,7 @@ async function writeSessions(folderPath: string, sessions: StoredSession[]): Pro
     folderPath: session.folderPath,
     sessionKind: session.sessionKind,
     pdfPath: session.pdfPath,
+    documentId: session.documentId,
     provider: session.provider,
     providerSessionId: session.providerSessionId,
     title: session.title,
@@ -375,6 +380,7 @@ export async function createSession(
     folderPath: sanitizeRelativePath(folderPath),
     sessionKind,
     pdfPath,
+    documentId: options.documentId,
     provider,
     title,
     createdAt: now,

@@ -156,16 +156,16 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
     <div>
       <div
         className={`
-          group relative flex items-center rounded-md transition-colors
+          group relative flex items-center rounded-lg transition-colors
           ${isSelected
-            ? 'bg-surface-container-lowest text-on-surface'
-            : 'text-on-surface-variant hover:bg-surface-container-low'
+            ? 'bg-surface-container-lowest text-on-surface shadow-sm'
+            : 'text-on-surface-variant hover:bg-surface-container-high/70 hover:text-on-surface'
           }
         `}
       >
         <button
           onClick={handleClick}
-          className="flex min-w-0 flex-1 items-center gap-1 py-[5px] text-left"
+          className="flex min-w-0 flex-1 items-center gap-1 py-1.5 text-left"
           style={{ paddingLeft: `${depth * 12 + 8}px` }}
         >
           <span className="w-4 h-4 flex items-center justify-center shrink-0">

@@ -1,8 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { ArrowLeft, CheckCircle2, Download, FolderSync, Loader2, LogIn, Palette, RefreshCw, RotateCcw, Server, Trash2, Upload } from 'lucide-react';
-import Link from 'next/link';
+import { CheckCircle2, Database, Download, FolderSync, Loader2, LogIn, Palette, RefreshCw, RotateCcw, Server, Trash2, Upload } from 'lucide-react';
 import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
 import { AUTO_MODEL_ID, getAutoModelLabel } from '@/lib/ai-providers/model-policy';
 import {
@@ -17,7 +16,9 @@ import { AIProvider } from '@/types';
 import { useFeedback } from '@/components/common/FeedbackProvider';
 import { CodexSetupCard } from '@/components/common/CodexSetupCard';
 import { PdfEngineSetupCard } from '@/components/common/PdfEngineSetupCard';
+import { ResearchSourcesCard } from '@/components/common/ResearchSourcesCard';
 import { APP_VERSION } from '@/lib/app-info';
+import { AppHeader } from '@/components/layout/AppHeader';
 
 interface ProviderStatus {
   provider: AIProvider;
@@ -250,28 +251,24 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-8 py-8">
-        <Link
-          href="/"
-          className="inline-flex items-center gap-1.5 text-xs font-medium text-on-surface-variant hover:text-on-surface transition-colors mb-6"
-        >
-          <ArrowLeft size={13} strokeWidth={2} />
-          작업 공간으로 돌아가기
-        </Link>
-        <h1 className="text-3xl font-bold text-on-surface tracking-tight mb-2">설정</h1>
-        <p className="font-editorial text-on-surface-variant italic text-lg mb-10">
-          나에게 맞는 논문 연구 환경을 설정합니다.
-        </p>
+    <div className="flex h-full flex-col bg-surface">
+      <AppHeader active="settings" />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto max-w-3xl px-6 py-8 lg:px-8 lg:py-10">
+        <div className="mb-8">
+          <div className="text-[10px] font-bold uppercase tracking-[0.18em] text-primary">환경 설정</div>
+          <h1 className="mt-1 text-2xl font-bold tracking-tight text-on-surface">PageDock 설정</h1>
+          <p className="mt-2 text-sm text-on-surface-variant">AI 연결, 리서치 자료 공급자, 라이브러리와 화면 환경을 관리합니다.</p>
+        </div>
 
         {/* AI Provider */}
-        <section className="mb-10">
-          <div className="flex items-center gap-2 mb-5">
+        <section className="mb-8">
+          <div className="mb-3 flex items-center gap-2 px-1">
             <LogIn size={16} strokeWidth={2} className="text-on-surface-variant" />
-            <h2 className="text-sm font-semibold text-on-surface uppercase tracking-wider">AI 연결</h2>
+            <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-on-surface-variant">AI 연결</h2>
           </div>
 
-          <div className="bg-surface-container-lowest rounded-lg p-5 space-y-5">
+          <div className="space-y-5 rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-sm">
             {candidateProvider === 'codex' && <CodexSetupCard />}
             <div className="flex items-center justify-between gap-4">
               <div>
@@ -352,7 +349,7 @@ export default function SettingsPage() {
               <button
                 onClick={() => void handleValidateAndSave()}
                 disabled={isValidating || isRefreshing}
-                className="btn-gradient text-on-primary px-5 py-2.5 rounded-sm text-sm font-semibold flex items-center gap-2 hover:opacity-90 transition-opacity disabled:opacity-50"
+                className="btn-gradient flex items-center gap-2 rounded-lg px-4 py-2.5 text-sm font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 {isValidating ? (
                   <>
@@ -396,13 +393,21 @@ export default function SettingsPage() {
           </div>
         </section>
 
-        {/* Library and backup */}
-        <section className="mb-10">
-          <div className="flex items-center gap-2 mb-5">
-            <FolderSync size={16} strokeWidth={2} className="text-on-surface-variant" />
-            <h2 className="text-sm font-semibold text-on-surface uppercase tracking-wider">라이브러리와 백업</h2>
+        <section className="mb-8">
+          <div className="mb-3 flex items-center gap-2 px-1">
+            <Database size={16} strokeWidth={2} className="text-on-surface-variant" />
+            <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-on-surface-variant">리서치 자료 공급자</h2>
           </div>
-          <div className="bg-surface-container-lowest rounded-lg p-5 space-y-5">
+          <ResearchSourcesCard />
+        </section>
+
+        {/* Library and backup */}
+        <section className="mb-8">
+          <div className="mb-3 flex items-center gap-2 px-1">
+            <FolderSync size={16} strokeWidth={2} className="text-on-surface-variant" />
+            <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-on-surface-variant">라이브러리와 백업</h2>
+          </div>
+          <div className="space-y-5 rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-sm">
             <div>
               <p className="text-sm font-medium text-on-surface">현재 라이브러리</p>
               <div className="mt-1 flex gap-2">
@@ -487,12 +492,12 @@ export default function SettingsPage() {
         </section>
 
         {/* Server */}
-        <section className="mb-10">
-          <div className="flex items-center gap-2 mb-5">
+        <section className="mb-8">
+          <div className="mb-3 flex items-center gap-2 px-1">
             <Server size={16} strokeWidth={2} className="text-on-surface-variant" />
-            <h2 className="text-sm font-semibold text-on-surface uppercase tracking-wider">실행 환경</h2>
+            <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-on-surface-variant">실행 환경</h2>
           </div>
-          <div className="bg-surface-container-lowest rounded-lg p-5 space-y-4">
+          <div className="space-y-4 rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-sm">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-on-surface">로컬 실행 모드</p>
@@ -513,11 +518,11 @@ export default function SettingsPage() {
 
         {/* Appearance */}
         <section>
-          <div className="flex items-center gap-2 mb-5">
+          <div className="mb-3 flex items-center gap-2 px-1">
             <Palette size={16} strokeWidth={2} className="text-on-surface-variant" />
-            <h2 className="text-sm font-semibold text-on-surface uppercase tracking-wider">화면</h2>
+            <h2 className="text-xs font-bold uppercase tracking-[0.14em] text-on-surface-variant">화면</h2>
           </div>
-          <div className="bg-surface-container-lowest rounded-lg p-5 space-y-6">
+          <div className="space-y-6 rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-sm">
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-sm font-medium text-on-surface">테마</p>
@@ -563,6 +568,7 @@ export default function SettingsPage() {
             </div>
           </div>
         </section>
+      </div>
       </div>
     </div>
   );

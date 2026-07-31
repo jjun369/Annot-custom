@@ -1,12 +1,11 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Search, Settings, MessageSquare, PictureInPicture2, X, Loader2, FileText } from 'lucide-react';
+import { Search, MessageSquare, PictureInPicture2, X, Loader2, FileText } from 'lucide-react';
 import { useWorkspace } from '@/lib/workspace-store';
 import { useFeedback } from '@/components/common/FeedbackProvider';
-import Link from 'next/link';
 import { PaperMetadata, TreeNode } from '@/types';
-import { PageDockMark } from '@/components/common/PageDockMark';
+import { AppHeader } from '@/components/layout/AppHeader';
 
 interface SearchResult {
   pdf: TreeNode;
@@ -98,41 +97,16 @@ export function Topbar() {
   };
 
   return (
-    <header className="h-12 px-4 flex items-center justify-between shrink-0 bg-surface">
-      {/* Left: Brand */}
-      <div className="flex items-center gap-3">
-        <PageDockMark size={28} className="rounded-md" />
-        <span className="text-sm font-bold text-on-surface tracking-tight">PageDock</span>
-      </div>
-
-      {/* Center: Breadcrumb (if session active) */}
-      {activeSessionFolder && (
-        <div className="flex items-center gap-1.5 text-xs text-on-surface-variant">
-          {activeSessionFolder.split('/').map((segment, i, arr) => (
-            <span key={i} className="flex items-center gap-1.5">
-              {i > 0 && <span className="text-outline">/</span>}
-              <span className={i === arr.length - 1 ? 'text-on-surface font-medium' : ''}>
-                {segment}
-              </span>
-            </span>
-          ))}
-        </div>
-      )}
-
-      {/* Right: Actions */}
-      <div className="flex items-center gap-1">
-        <button
-          onClick={() => setSearchOpen(true)}
-          className="flex h-8 items-center gap-2 rounded-lg px-2 text-on-surface-variant hover:bg-surface-container-high transition-colors"
-          title="통합 검색 (Ctrl+K)"
-        >
-          <Search size={15} strokeWidth={2} />
-          <span className="hidden text-[11px] sm:inline">검색</span>
-        </button>
+    <>
+      <AppHeader
+        active="library"
+        onSearch={() => setSearchOpen(true)}
+        actions={activeSessionFolder ? (
+          <div className="mr-1 flex items-center gap-1 border-r border-outline-variant/35 pr-2">
         {activeSessionFolder && (
           <button
             onClick={detachChat}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors"
+            className="flex h-9 w-9 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface"
             title="AI 대화창 분리"
           >
             <PictureInPicture2 size={15} strokeWidth={2} />
@@ -141,25 +115,20 @@ export function Topbar() {
         {activeSessionFolder && (
           <button
             onClick={toggleChat}
-            className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+            className={`flex h-9 items-center gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors ${
               chatOpen
-                ? 'bg-primary text-on-primary'
-              : 'text-on-surface-variant hover:bg-surface-container-high'
+                ? 'bg-primary-container text-primary'
+              : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
             }`}
             aria-label="AI 대화창 열기 또는 닫기"
           >
             <MessageSquare size={15} strokeWidth={2} />
+            <span className="hidden lg:inline">AI 대화</span>
           </button>
         )}
-        <Link
-          href="/settings"
-          className="w-8 h-8 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors"
-          aria-label="설정"
-          title="설정"
-        >
-          <Settings size={15} strokeWidth={2} />
-        </Link>
-      </div>
+          </div>
+        ) : undefined}
+      />
       {searchOpen && (
         <div
           className="fixed inset-0 z-50 flex items-start justify-center bg-black/20 px-4 pt-[12vh]"
@@ -224,6 +193,6 @@ export function Topbar() {
           </div>
         </div>
       )}
-    </header>
+    </>
   );
 }

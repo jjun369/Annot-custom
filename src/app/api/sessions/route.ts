@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { buildSessionTitle, createSession, getSession, listSessions, updateSession } from '@/lib/annot-sessions';
 import { DEFAULT_AI_PROVIDER, parseAIProvider } from '@/lib/ai-providers/config';
 import { AIProvider, ReasoningEffort, SessionKind } from '@/types';
+import { ensureDocumentForPath } from '@/lib/research-db';
 
 function parseSessionKind(value: string | null): SessionKind | undefined {
   if (value === 'folder' || value === 'pdf') {
@@ -77,6 +78,9 @@ export async function POST(req: NextRequest) {
         provider,
         sessionKind,
         pdfPath,
+        documentId: sessionKind === 'pdf' && pdfPath
+          ? (await ensureDocumentForPath(pdfPath)).id
+          : undefined,
       },
     );
 

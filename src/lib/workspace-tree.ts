@@ -14,6 +14,13 @@ import {
   rewritePaperMetadataForFolderMove,
 } from '@/lib/paper-metadata';
 import { moveFolderToTrash, movePdfToTrash } from '@/lib/library-trash';
+import { moveSidecarHighlights } from '@/lib/highlight-sidecar';
+import {
+  ensureDocumentForPath,
+  getDocumentByPath,
+  recordDocumentPathChange,
+  syncWorkspaceDocuments,
+} from '@/lib/research-db';
 
 function isVisibleEntry(name: string): boolean {
   return !name.startsWith('.');
@@ -125,10 +132,12 @@ async function buildNode(relativePath: string): Promise<TreeNode> {
   const pdfChildren = entries
     .filter((entry) => entry.isFile() && isVisibleEntry(entry.name) && isPdfFile(entry.name))
     .sort((a, b) => a.name.localeCompare(b.name))
-    .map((entry) => {
+    .map(async (entry) => {
       const childPath = relativePath ? `${relativePath}/${entry.name}` : entry.name;
+      const document = await getDocumentByPath(childPath);
       return {
-        id: `pdf:${childPath}`,
+        id: document ? `document:${document.id}` : `pdf:${childPath}`,
+        documentId: document?.id,
         name: entry.name,
         type: 'pdf' as const,
         path: childPath,
@@ -140,12 +149,13 @@ async function buildNode(relativePath: string): Promise<TreeNode> {
     name: relativePath ? path.basename(relativePath) : path.basename(getWorkspaceRoot()),
     type: 'folder',
     path: relativePath,
-    children: [...await Promise.all(folderChildren), ...pdfChildren],
+    children: [...await Promise.all(folderChildren), ...await Promise.all(pdfChildren)],
   };
 }
 
 export async function getWorkspaceTree(): Promise<TreeNode> {
   await ensureWorkspaceRoot();
+  await syncWorkspaceDocuments();
   return buildNode('');
 }
 
@@ -183,8 +193,10 @@ export async function saveUploadedPdf(folderPath: string, file: File): Promise<T
   const buffer = Buffer.from(await file.arrayBuffer());
   const duplicatePath = await findDuplicatePdf(buffer);
   if (duplicatePath) {
+    const document = await ensureDocumentForPath(duplicatePath);
     return {
-      id: `pdf:${duplicatePath}`,
+      id: `document:${document.id}`,
+      documentId: document.id,
       name: path.posix.basename(duplicatePath),
       type: 'pdf',
       path: duplicatePath,
@@ -201,8 +213,10 @@ export async function saveUploadedPdf(folderPath: string, file: File): Promise<T
 
   const storedName = path.basename(absolutePath);
   const relativePath = folderPath ? `${folderPath}/${storedName}` : storedName;
+  const document = await ensureDocumentForPath(relativePath);
   return {
-    id: `pdf:${relativePath}`,
+    id: `document:${document.id}`,
+    documentId: document.id,
     name: storedName,
     type: 'pdf',
     path: relativePath,
@@ -229,6 +243,7 @@ export async function renameWorkspaceFolder(folderPath: string, nextName: string
   await fs.rename(sourceAbsolutePath, targetAbsolutePath);
   await rewritePaperMetadataForFolderMove(normalizedFolderPath, nextRelativePath);
   await rewriteSessionsForFolderMove(normalizedFolderPath, nextRelativePath);
+  await syncWorkspaceDocuments();
 
   return {
     id: `folder:${nextRelativePath}`,
@@ -262,19 +277,25 @@ export async function renameWorkspacePdf(pdfPath: string, nextName: string): Pro
   const nextRelativePath = parentPath ? `${parentPath}/${fileName}` : fileName;
   const sourceAbsolutePath = resolveFolderPath(normalizedPdfPath);
   const targetAbsolutePath = resolveFolderPath(nextRelativePath);
+  const document = await ensureDocumentForPath(normalizedPdfPath);
 
   await ensurePathDoesNotExist(targetAbsolutePath, 'A PDF with that name already exists');
   await fs.rename(sourceAbsolutePath, targetAbsolutePath);
-  await movePaperMetadata(normalizedPdfPath, nextRelativePath);
-
-  if (parentPath) {
+  try {
+    await movePaperMetadata(normalizedPdfPath, nextRelativePath);
     await movePdfSessions(parentPath, parentPath, normalizedPdfPath, nextRelativePath);
-  } else {
-    await movePdfSessions('', '', normalizedPdfPath, nextRelativePath);
+    await recordDocumentPathChange(normalizedPdfPath, nextRelativePath);
+    await moveSidecarHighlights(normalizedPdfPath, nextRelativePath);
+  } catch (error) {
+    await fs.rename(targetAbsolutePath, sourceAbsolutePath).catch(() => undefined);
+    await movePaperMetadata(nextRelativePath, normalizedPdfPath).catch(() => undefined);
+    await movePdfSessions(parentPath, parentPath, nextRelativePath, normalizedPdfPath).catch(() => undefined);
+    throw error;
   }
 
   return {
-    id: `pdf:${nextRelativePath}`,
+    id: `document:${document.id}`,
+    documentId: document.id,
     name: fileName,
     type: 'pdf',
     path: nextRelativePath,
@@ -301,10 +322,12 @@ export async function moveWorkspacePdf(pdfPath: string, targetFolderPath: string
     : fileName;
   const sourceAbsolutePath = resolveFolderPath(normalizedPdfPath);
   const targetAbsolutePath = resolveFolderPath(nextRelativePath);
+  const document = await ensureDocumentForPath(normalizedPdfPath);
 
   if (normalizedPdfPath === nextRelativePath) {
     return {
-      id: `pdf:${nextRelativePath}`,
+      id: `document:${document.id}`,
+      documentId: document.id,
       name: fileName,
       type: 'pdf',
       path: nextRelativePath,
@@ -313,15 +336,24 @@ export async function moveWorkspacePdf(pdfPath: string, targetFolderPath: string
 
   await ensurePathDoesNotExist(targetAbsolutePath, 'A PDF with that name already exists in the target folder');
   await fs.rename(sourceAbsolutePath, targetAbsolutePath);
-  await movePaperMetadata(normalizedPdfPath, nextRelativePath);
-
   const sourceFolderPath = path.posix.dirname(normalizedPdfPath) === '.'
     ? ''
     : path.posix.dirname(normalizedPdfPath);
-  await movePdfSessions(sourceFolderPath, normalizedTargetFolderPath, normalizedPdfPath, nextRelativePath);
+  try {
+    await movePaperMetadata(normalizedPdfPath, nextRelativePath);
+    await movePdfSessions(sourceFolderPath, normalizedTargetFolderPath, normalizedPdfPath, nextRelativePath);
+    await recordDocumentPathChange(normalizedPdfPath, nextRelativePath);
+    await moveSidecarHighlights(normalizedPdfPath, nextRelativePath);
+  } catch (error) {
+    await fs.rename(targetAbsolutePath, sourceAbsolutePath).catch(() => undefined);
+    await movePaperMetadata(nextRelativePath, normalizedPdfPath).catch(() => undefined);
+    await movePdfSessions(normalizedTargetFolderPath, sourceFolderPath, nextRelativePath, normalizedPdfPath).catch(() => undefined);
+    throw error;
+  }
 
   return {
-    id: `pdf:${nextRelativePath}`,
+    id: `document:${document.id}`,
+    documentId: document.id,
     name: fileName,
     type: 'pdf',
     path: nextRelativePath,

@@ -271,11 +271,12 @@ export default function AppPage() {
           if (!res.ok || data?.error) {
             throw new Error(typeof data?.error === 'string' ? data.error : '라이브러리를 불러오지 못했습니다.');
           }
-          setState((current) => ({
-            ...current,
-            treeRoot: data as TreeNode,
-            treeLoading: false,
-          }));
+          const nextTree = data as TreeNode;
+          const requestedPdfPath = new URLSearchParams(window.location.search).get('pdf');
+          const requestedPdf = requestedPdfPath ? findNode(nextTree, requestedPdfPath) : null;
+          setState((current) => requestedPdf?.type === 'pdf'
+            ? openPdfInContext({ ...current, treeRoot: nextTree, treeLoading: false }, requestedPdf)
+            : { ...current, treeRoot: nextTree, treeLoading: false });
         }
       } catch {
         if (!cancelled) {
@@ -299,7 +300,7 @@ export default function AppPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [openPdfInContext]);
 
   useEffect(() => {
     if (!isResizingChat) {
@@ -354,7 +355,7 @@ export default function AppPage() {
 
   return (
     <WorkspaceContext value={contextValue}>
-      <div className="h-full flex flex-col">
+      <div className="flex h-full flex-col bg-surface">
         <OnboardingDialog />
         <Topbar />
         <div className="flex-1 flex overflow-hidden">
@@ -362,7 +363,7 @@ export default function AppPage() {
           <TreeExplorer />
 
           {/* Main Content Area */}
-          <div ref={mainContentRef} className="flex-1 flex min-w-0">
+          <div ref={mainContentRef} className="flex min-w-0 flex-1 bg-surface">
             {state.activePdf ? (
               // PDF is open — show viewer
               <div className={`flex-1 min-w-0 ${state.chatOpen ? '' : ''}`}>
@@ -375,12 +376,12 @@ export default function AppPage() {
               </div>
             ) : (
               // Nothing selected — empty state
-              <div className="flex-1 flex items-center justify-center">
-                <div className="text-center">
-                  <PageDockMark size={56} className="mx-auto mb-4 rounded-xl opacity-90" />
-                  <h2 className="text-lg font-semibold text-on-surface mb-1">PageDock</h2>
-                  <p className="font-editorial text-sm text-on-surface-variant italic">
-                    왼쪽 탐색기에서 폴더를 선택해 시작하세요.
+              <div className="flex flex-1 items-center justify-center p-8">
+                <div className="w-full max-w-sm rounded-2xl border border-outline-variant/20 bg-surface-container-lowest px-8 py-9 text-center shadow-sm">
+                  <PageDockMark size={48} className="mx-auto mb-4 rounded-xl opacity-90 shadow-sm" />
+                  <h2 className="text-base font-semibold text-on-surface">라이브러리에서 시작하세요</h2>
+                  <p className="mt-2 text-xs leading-5 text-on-surface-variant">
+                    왼쪽에서 폴더나 PDF를 선택하면 읽기, 메모와 AI 대화를 이어갈 수 있습니다.
                   </p>
                 </div>
               </div>

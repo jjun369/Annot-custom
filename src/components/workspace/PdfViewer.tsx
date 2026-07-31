@@ -161,7 +161,10 @@ export function PdfViewer() {
 
   useEffect(() => {
     const storedPage = Number(window.localStorage.getItem(`${LAST_PAGE_STORAGE_KEY}:${activePdfPath}`) || 1);
-    const initialPage = Number.isFinite(storedPage) && storedPage > 0 ? Math.floor(storedPage) : 1;
+    const requestedPage = Number(new URLSearchParams(window.location.search).get('page') || 0);
+    const initialPage = Number.isFinite(requestedPage) && requestedPage > 0
+      ? Math.floor(requestedPage)
+      : Number.isFinite(storedPage) && storedPage > 0 ? Math.floor(storedPage) : 1;
     setVisiblePages(new Set([1, 2]));
     setPageRatios({});
     setNumPages(null);

@@ -4,6 +4,7 @@ export type TreeNodeType = 'folder' | 'pdf';
 
 export interface TreeNode {
   id: string;
+  documentId?: string;
   name: string;
   type: TreeNodeType;
   path: string;            // filesystem path relative to root
@@ -18,6 +19,7 @@ export type ReasoningEffort = 'auto' | 'none' | 'low' | 'medium' | 'high' | 'xhi
 
 export interface Session {
   id: string;
+  documentId?: string;
   folderPath: string;      // which folder this session belongs to
   sessionKind: SessionKind;
   pdfPath?: string;
@@ -54,6 +56,7 @@ export interface SessionTurnSummary {
 
 export interface Highlight {
   id: string;
+  documentId?: string;
   annotationId?: string;
   pdfPath: string;
   page: number;
@@ -88,6 +91,7 @@ export interface PaperTranslation {
 }
 
 export interface PaperMetadata {
+  documentId?: string;
   pdfPath: string;
   aiKeywords: string[];
   personalTags: string[];
@@ -101,4 +105,109 @@ export interface PaperMetadata {
   lastOpenedAt?: string;
   updatedAt: string;
   translations: PaperTranslation[];
+}
+
+// ── Technology research ────────────────────────────────────────
+
+export type ResearchDocumentKind = 'paper' | 'patent' | 'conference' | 'product' | 'technical';
+export type EvidenceLevel = 'explicit' | 'figure_inference' | 'technical_inference' | 'uncertain';
+export type ResearchJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface ResearchDocument {
+  id: string;
+  sha256?: string;
+  currentPath?: string;
+  fileName?: string;
+  displayTitle: string;
+  kind: ResearchDocumentKind;
+  doi?: string;
+  sourceUrl?: string;
+  sourceProvider?: string;
+  abstractText: string;
+  authors: string[];
+  publicationYear?: number;
+  tags: string[];
+  fileSize?: number;
+  fileMtimeMs?: number;
+  missing: boolean;
+  indexedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ResearchProject {
+  id: string;
+  name: string;
+  description: string;
+  profileId: string;
+  documentCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AnalysisProfile {
+  id: string;
+  name: string;
+  description: string;
+  builtIn: boolean;
+  focusAreas: string[];
+  questions: string[];
+  metrics: string[];
+  terminology: Record<string, string[]>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PatentMetadata {
+  documentId: string;
+  publicationNumber?: string;
+  applicationNumber?: string;
+  registrationNumber?: string;
+  priorityDate?: string;
+  filingDate?: string;
+  publicationDate?: string;
+  jurisdiction?: string;
+  legalStatus?: string;
+  assignees: string[];
+  inventors: string[];
+  familyId?: string;
+  citations: string[];
+  claimsText: string;
+  updatedAt: string;
+}
+
+export interface EvidenceAnchor {
+  id: string;
+  documentId: string;
+  reportId: string;
+  level: EvidenceLevel;
+  page?: number;
+  section?: string;
+  claim?: string;
+  figure?: string;
+  quote: string;
+  note: string;
+}
+
+export interface ResearchAnalysisReport {
+  id: string;
+  documentId: string;
+  projectId?: string;
+  profileId: string;
+  status: ResearchJobStatus;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  report: Record<string, unknown>;
+  evidence: EvidenceAnchor[];
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ResearchSearchResult {
+  document: ResearchDocument;
+  score: number;
+  snippet: string;
+  matches: string[];
+  projectIds: string[];
 }

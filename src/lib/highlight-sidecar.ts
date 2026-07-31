@@ -4,12 +4,14 @@ import path from 'path';
 
 import { getWorkspaceRoot } from '@/lib/annot-sessions';
 import { normalizeHighlightRects } from '@/lib/highlight-utils';
+import { getDocumentByPath } from '@/lib/research-db';
 import { Highlight } from '@/types';
 
 const SIDECAR_VERSION = 1;
 
 interface StoredHighlightSidecar {
   version: number;
+  documentId?: string;
   pdfPath: string;
   highlights: Highlight[];
   updatedAt: string;
@@ -23,12 +25,25 @@ function normalizePdfPath(pdfPath: string): string {
   return normalized;
 }
 
-function sidecarPath(pdfPath: string): string {
+function legacySidecarPath(pdfPath: string): string {
   const digest = createHash('sha256').update(normalizePdfPath(pdfPath)).digest('hex').slice(0, 24);
   return path.join(getWorkspaceRoot(), '.annot', 'annotations', `${digest}.json`);
 }
 
-function normalizeHighlight(pdfPath: string, value: Partial<Highlight>): Highlight | null {
+async function sidecarPaths(pdfPath: string): Promise<{ primary: string; legacy: string; documentId?: string }> {
+  const normalizedPath = normalizePdfPath(pdfPath);
+  const document = await getDocumentByPath(normalizedPath);
+  const legacy = legacySidecarPath(normalizedPath);
+  return {
+    primary: document
+      ? path.join(getWorkspaceRoot(), '.annot', 'annotations', `${document.id}.json`)
+      : legacy,
+    legacy,
+    documentId: document?.id,
+  };
+}
+
+function normalizeHighlight(pdfPath: string, value: Partial<Highlight>, documentId?: string): Highlight | null {
   if (!value || typeof value !== 'object') return null;
   const page = Number(value.page);
   const text = typeof value.text === 'string' ? value.text.trim() : '';
@@ -41,6 +56,7 @@ function normalizeHighlight(pdfPath: string, value: Partial<Highlight>): Highlig
   const type = value.type === 'unknown' ? 'unknown' : 'important';
   return {
     id: typeof value.id === 'string' && value.id ? value.id : randomUUID(),
+    documentId: documentId || value.documentId,
     annotationId: typeof value.annotationId === 'string' ? value.annotationId : undefined,
     pdfPath,
     page: Math.round(page),
@@ -53,21 +69,36 @@ function normalizeHighlight(pdfPath: string, value: Partial<Highlight>): Highlig
 }
 
 async function readSidecar(pdfPath: string): Promise<StoredHighlightSidecar | null> {
+  const locations = await sidecarPaths(pdfPath);
   try {
-    const raw = await fs.readFile(sidecarPath(pdfPath), 'utf8');
+    let raw: string;
+    let migrated = false;
+    try {
+      raw = await fs.readFile(locations.primary, 'utf8');
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT' || locations.primary === locations.legacy) throw error;
+      raw = await fs.readFile(locations.legacy, 'utf8');
+      migrated = true;
+    }
     const parsed = JSON.parse(raw) as Partial<StoredHighlightSidecar>;
     const normalizedPath = normalizePdfPath(pdfPath);
     const highlights = Array.isArray(parsed.highlights)
       ? parsed.highlights
-        .map((highlight) => normalizeHighlight(normalizedPath, highlight))
+        .map((highlight) => normalizeHighlight(normalizedPath, highlight, locations.documentId))
         .filter((highlight): highlight is Highlight => highlight !== null)
       : [];
-    return {
+    const result: StoredHighlightSidecar = {
       version: SIDECAR_VERSION,
+      documentId: locations.documentId,
       pdfPath: normalizedPath,
       highlights: mergeSidecarHighlights(highlights),
       updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : new Date(0).toISOString(),
     };
+    if (migrated) {
+      await fs.mkdir(path.dirname(locations.primary), { recursive: true });
+      await fs.writeFile(locations.primary, JSON.stringify(result, null, 2), 'utf8');
+    }
+    return result;
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
     throw error;
@@ -102,12 +133,14 @@ function mergeSidecarHighlights(highlights: Highlight[]): Highlight[] {
 
 async function writeSidecar(pdfPath: string, highlights: Highlight[]): Promise<void> {
   const normalizedPath = normalizePdfPath(pdfPath);
-  const filePath = sidecarPath(normalizedPath);
+  const locations = await sidecarPaths(normalizedPath);
+  const filePath = locations.primary;
   const value: StoredHighlightSidecar = {
     version: SIDECAR_VERSION,
+    documentId: locations.documentId,
     pdfPath: normalizedPath,
     highlights: mergeSidecarHighlights(highlights
-      .map((highlight) => normalizeHighlight(normalizedPath, highlight))
+      .map((highlight) => normalizeHighlight(normalizedPath, highlight, locations.documentId))
       .filter((highlight): highlight is Highlight => highlight !== null)),
     updatedAt: new Date().toISOString(),
   };
@@ -131,11 +164,21 @@ export async function listSidecarHighlights(pdfPath: string): Promise<Highlight[
 
 export async function replaceSidecarHighlights(pdfPath: string, highlights: Highlight[]): Promise<Highlight[]> {
   const normalizedPath = normalizePdfPath(pdfPath);
+  const document = await getDocumentByPath(normalizedPath);
   const next = mergeSidecarHighlights(highlights
-    .map((highlight) => normalizeHighlight(normalizedPath, highlight))
+    .map((highlight) => normalizeHighlight(normalizedPath, highlight, document?.id))
     .filter((highlight): highlight is Highlight => highlight !== null));
   await writeSidecar(normalizedPath, next);
   return next;
+}
+
+export async function moveSidecarHighlights(oldPdfPath: string, newPdfPath: string): Promise<void> {
+  const current = await listSidecarHighlights(oldPdfPath);
+  if (current.length === 0) return;
+  await replaceSidecarHighlights(newPdfPath, current.map((highlight) => ({
+    ...highlight,
+    pdfPath: normalizePdfPath(newPdfPath),
+  })));
 }
 
 export async function upsertSidecarHighlights(pdfPath: string, highlights: Highlight[]): Promise<Highlight[]> {

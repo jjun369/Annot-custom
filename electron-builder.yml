@@ -1,6 +1,9 @@
 appId: app.pagedock.desktop
 productName: PageDock
 asar: true
+electronLanguages:
+  - en-US
+  - ko
 directories:
   output: dist
 files:
@@ -16,6 +19,12 @@ extraResources:
     to: app/node_modules
     filter:
       - '**/*'
+  # Next 16 Turbopack standalone tracing omits several route runtime files.
+  # Overlay the production runtimes required by packaged API routes.
+  - from: node_modules/next/dist/compiled/next-server
+    to: app/node_modules/next/dist/compiled/next-server
+    filter:
+      - '*.runtime.prod.js'
   - from: .next/static
     to: app/.next/static
   - from: public
@@ -45,5 +54,5 @@ nsis:
 publish:
   provider: github
   owner: jjun369
-  repo: Annot-custom
+  repo: PageDock-Releases
   releaseType: release

@@ -12,8 +12,9 @@ import { replacePaperMetadata } from '@/lib/paper-metadata';
 import { replaceSidecarHighlights } from '@/lib/highlight-sidecar';
 import { Highlight, PaperMetadata, Session } from '@/types';
 import { APP_VERSION } from '@/lib/app-info';
+import { exportResearchData, importResearchData } from '@/lib/research-db';
 
-const BACKUP_VERSION = 1;
+const BACKUP_VERSION = 2;
 const BACKUP_RETENTION = 7;
 
 interface BackupFileRecord {
@@ -37,6 +38,8 @@ function toZipPath(relativePath: string): string {
 
 function isExcluded(relativePath: string, includePdfs: boolean): boolean {
   const normalized = toZipPath(relativePath);
+  if (/^\.annot\/pagedock\.sqlite(?:-wal|-shm)?$/i.test(normalized)) return true;
+  if (normalized === '.annot/research-export.json') return true;
   if (normalized === '.annot/backups' || normalized.startsWith('.annot/backups/')) return true;
   if (normalized === '.annot/trash' || normalized.startsWith('.annot/trash/')) return true;
   if (normalized.toLowerCase().endsWith('.tmp')) return true;
@@ -81,6 +84,14 @@ export async function createPortableBackup(includePdfs = true): Promise<Buffer> 
       sha256: createHash('sha256').update(data).digest('hex'),
     });
   }
+
+  const researchData = Buffer.from(JSON.stringify(await exportResearchData(), null, 2), 'utf8');
+  zip.file('library/.annot/research-export.json', researchData);
+  records.push({
+    path: '.annot/research-export.json',
+    size: researchData.byteLength,
+    sha256: createHash('sha256').update(researchData).digest('hex'),
+  });
 
   const manifest: BackupManifest = {
     format: 'annot-portable-backup',
@@ -128,6 +139,14 @@ export async function createPortableBackupStream(includePdfs = true): Promise<No
     });
     records.push({ path: zipPath, ...record });
   }
+
+  const researchData = Buffer.from(JSON.stringify(await exportResearchData(), null, 2), 'utf8');
+  zip.file('library/.annot/research-export.json', researchData);
+  records.push({
+    path: '.annot/research-export.json',
+    size: researchData.byteLength,
+    sha256: createHash('sha256').update(researchData).digest('hex'),
+  });
 
   const manifest: BackupManifest = {
     format: 'annot-portable-backup',
@@ -285,6 +304,7 @@ async function importExtractedBackup(extractionRoot: string, manifest: BackupMan
   const deferredMetadata: PaperMetadata[] = [];
   const deferredSidecars: DeferredSidecar[] = [];
   const deferredSessions: Array<{ folderPath: string; sessions: Session[] }> = [];
+  let deferredResearchData: unknown;
 
   for (const record of manifest.files) {
     const relativePath = safeArchivePath(record.path);
@@ -304,6 +324,17 @@ async function importExtractedBackup(extractionRoot: string, manifest: BackupMan
       } catch {
         skipped += 1;
         skippedPaths.push(`${relativePath} (메타데이터 해석 실패)`);
+      }
+      continue;
+    }
+
+    if (relativePath === '.annot/research-export.json') {
+      try {
+        deferredResearchData = JSON.parse(await fs.readFile(sourcePath, 'utf8')) as unknown;
+        imported += 1;
+      } catch {
+        skipped += 1;
+        skippedPaths.push(`${relativePath} (리서치 데이터 해석 실패)`);
       }
       continue;
     }
@@ -391,6 +422,11 @@ async function importExtractedBackup(extractionRoot: string, manifest: BackupMan
     }
   }
 
+
+  if (deferredResearchData) {
+    await importResearchData(deferredResearchData, pdfPathMap);
+  }
+
   return { imported, renamed, skipped, skippedPaths };
 }
 
@@ -453,6 +489,8 @@ export async function importPortableBackup(data: Buffer): Promise<{
   const pdfPathMap = new Map<string, string>();
   const deferredMetadata: PaperMetadata[] = [];
   const deferredSessions: Array<{ folderPath: string; sessions: Session[] }> = [];
+  const deferredSidecars: DeferredSidecar[] = [];
+  let deferredResearchData: unknown;
 
   for (const record of manifest.files) {
     const relativePath = safeArchivePath(record.path);
@@ -470,6 +508,26 @@ export async function importPortableBackup(data: Buffer): Promise<{
     if (/^\.annot\/papers\/[^/]+\.json$/i.test(relativePath)) {
       try {
         deferredMetadata.push(JSON.parse(fileData.toString('utf8')) as PaperMetadata);
+        imported += 1;
+      } catch {
+        skipped += 1;
+      }
+      continue;
+    }
+
+    if (relativePath === '.annot/research-export.json') {
+      try {
+        deferredResearchData = JSON.parse(fileData.toString('utf8')) as unknown;
+        imported += 1;
+      } catch {
+        skipped += 1;
+      }
+      continue;
+    }
+
+    if (/^\.annot\/annotations\/[^/]+\.json$/i.test(relativePath)) {
+      try {
+        deferredSidecars.push(JSON.parse(fileData.toString('utf8')) as DeferredSidecar);
         imported += 1;
       } catch {
         skipped += 1;
@@ -539,6 +597,15 @@ export async function importPortableBackup(data: Buffer): Promise<{
       await restoreSessions(folderPath, groupedSessions);
     }
   }
+  for (const sidecar of deferredSidecars) {
+    if (!sidecar.pdfPath || !Array.isArray(sidecar.highlights)) continue;
+    const targetPath = pdfPathMap.get(sidecar.pdfPath) || sidecar.pdfPath;
+    await replaceSidecarHighlights(targetPath, sidecar.highlights.map((highlight) => ({
+      ...highlight,
+      pdfPath: targetPath,
+    })));
+  }
+  if (deferredResearchData) await importResearchData(deferredResearchData, pdfPathMap);
   return { imported, renamed, skipped };
 }
 

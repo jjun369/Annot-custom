@@ -1,4 +1,6 @@
 import { spawn } from 'child_process';
+import { promises as fs } from 'fs';
+import { randomUUID } from 'crypto';
 import os from 'os';
 import path from 'path';
 
@@ -58,6 +60,19 @@ export interface CodexCatalogModel {
 export interface CodexCliAuthStatus {
   authenticated: boolean;
   authMethod?: string;
+}
+
+export interface StructuredCodexInput {
+  prompt: string;
+  schema: Record<string, unknown>;
+  model?: string;
+  reasoningEffort?: ReasoningEffort;
+  imagePaths?: string[];
+}
+
+export interface StructuredCodexOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 interface ParsedEvent {
@@ -531,4 +546,89 @@ export async function runCodexTurn(input: RunTurnInput, options: RunTurnOptions 
       });
     });
   });
+}
+
+export async function runCodexStructured<T>(
+  input: StructuredCodexInput,
+  options: StructuredCodexOptions = {},
+): Promise<T> {
+  if (options.signal?.aborted) {
+    const error = new Error('사용자가 AI 정리를 취소했습니다.');
+    error.name = 'AbortError';
+    throw error;
+  }
+  const codexExecutable = await getResolvedCodexExecutable();
+  const temporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'pagedock-codex-'));
+  const schemaPath = path.join(temporaryDirectory, `${randomUUID()}.schema.json`);
+  const outputPath = path.join(temporaryDirectory, `${randomUUID()}.result.json`);
+  await fs.writeFile(schemaPath, JSON.stringify(input.schema), 'utf8');
+  const args = [
+    ...codexExecutable.argsPrefix,
+    'exec',
+    '--ephemeral',
+    '--skip-git-repo-check',
+    '--sandbox',
+    'read-only',
+    '--cd',
+    getWorkspaceRoot(),
+    '--output-schema',
+    schemaPath,
+    '--output-last-message',
+    outputPath,
+  ];
+  if (input.model && !isAutoModel(input.model)) args.push('--model', input.model);
+  if (input.reasoningEffort && !isAutoReasoningEffort(input.reasoningEffort)) {
+    args.push('-c', `model_reasoning_effort="${input.reasoningEffort}"`);
+  }
+  if (input.imagePaths?.length) args.push('--image', ...input.imagePaths);
+  args.push(input.prompt);
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(codexExecutable.command, args, {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: process.env,
+        windowsHide: true,
+      });
+      let stderr = '';
+      let stopError: Error | null = null;
+      let settled = false;
+      const finish = (error?: Error) => {
+        if (settled) return;
+        settled = true;
+        options.signal?.removeEventListener('abort', abort);
+        if (timer) clearTimeout(timer);
+        if (error) reject(error);
+        else resolve();
+      };
+      const stop = (error: Error) => {
+        if (settled || stopError) return;
+        stopError = error;
+        if (!child.kill()) finish(error);
+      };
+      const abort = () => {
+        const error = new Error('사용자가 AI 정리를 취소했습니다.');
+        error.name = 'AbortError';
+        stop(error);
+      };
+      const timeoutMs = options.timeoutMs && options.timeoutMs > 0 ? options.timeoutMs : 0;
+      const timer = timeoutMs > 0 ? setTimeout(() => {
+        const error = new Error(`AI 정리가 ${Math.ceil(timeoutMs / 60_000)}분 제한시간을 넘겨 중지되었습니다.`);
+        error.name = 'TimeoutError';
+        stop(error);
+      }, timeoutMs) : null;
+      options.signal?.addEventListener('abort', abort, { once: true });
+      if (options.signal?.aborted) abort();
+      child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+      child.on('error', (error) => finish(stopError ?? describeCodexSpawnError(error)));
+      child.on('close', (code) => {
+        if (stopError) finish(stopError);
+        else if (code === 0) finish();
+        else finish(new Error(stderr.trim() || `codex structured exec failed with exit code ${code}`));
+      });
+    });
+    const raw = await fs.readFile(outputPath, 'utf8');
+    return JSON.parse(raw) as T;
+  } finally {
+    await fs.rm(temporaryDirectory, { recursive: true, force: true });
+  }
 }
