@@ -1,13 +1,13 @@
 # Current state
 
-- App version: 0.4.3
-- Status: PageDock 0.4.3 Windows-only safety, friend-usability, and research improvements implemented in the working tree
-- Release baseline: PageDock 0.4.3; final Windows verification completed before commit
-- Build status: documentation, lint, TypeScript, 29 tests, production build, Windows Electron packaging, packaged preload inspection, and isolated `--smoke-test` passed
+- App version: 0.4.4
+- Status: PageDock 0.4.4 Windows-only practical knowledge improvements implemented in the working tree
+- Release baseline: PageDock 0.4.4; final Windows verification and packaging completed before commit
+- Build status: documentation, lint, TypeScript, 35 tests, production build, Windows Electron packaging, packaged preload inspection, and isolated `--smoke-test` passed
 - Database: schema 1 (`.annot/pagedock.sqlite`, Node 24 `node:sqlite`, FTS5)
 - Backup: v2 export/import; v1 import retained
-- Knowledge MVP: draft-safe multi-file immutable inbox, next-ten/single-flight ChatGPT-OAuth-only proposals, non-destructive authentication errors, cancellation/timeout and first-error stop, lazy bounded review rendering, direct user wiki revisions, conflict resolution notes, recoverable revision trash, storage-size visibility, verified v1 rollback backup, stale-update protection, and restorable topic history (`.annot/knowledge-store.json` format 2 with v1 normalization)
-- Windows artifact: refreshed `PageDock-Setup-0.4.3.exe` 101.8 MB; unpacked 331.6 MB; packaged product version `0.4.3.0`; SHA-256 `A9F64CC722CE6442C5429030EE510986D50C741A87288E15EAE07061FE842497`
+- Knowledge MVP: draft-safe multi-file immutable inbox, device-local recursive memo-folder capture, local long-note split previews, next-ten/single-flight ChatGPT-OAuth-only proposals, non-destructive authentication errors, cancellation/timeout and first-error stop, lazy bounded review rendering, direct user wiki revisions, conflict resolution notes, recoverable revision trash, storage-size visibility, verified v1 rollback backup, stale-update protection, restorable topic history, and current-wiki Markdown export (`.annot/knowledge-store.json` format 2 with v1 normalization)
+- Windows artifact: refreshed `PageDock-Setup-0.4.4.exe` 101.9 MB; unpacked 331.9 MB; packaged product version `0.4.4.0`; SHA-256 `DCDDF10B1B3F328C0CD845A0B185BA4EF79372A949442F73B791927E03DC297B`
 - Supported platform: Windows 10/11 x64 only. The former experimental Apple Silicon port and its old CI artifacts are unsupported historical work and must not be rebuilt or distributed.
 
 Known issues:

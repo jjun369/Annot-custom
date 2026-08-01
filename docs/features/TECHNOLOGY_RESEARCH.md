@@ -1,6 +1,6 @@
 # Research (리서치)
 
-Status: Implemented core in 0.4.3; large-document progress, AI query expansion, and richer provider normalization remain planned.
+Status: Implemented core in 0.4.4; large-document progress, AI query expansion, and richer provider normalization remain planned.
 
 The user-facing area is named `리서치`. The screen has project navigation, unified search/results, and document detail/analysis. It includes generic, image-sensor PA, and logic-semiconductor profiles; users can copy/edit focus areas, questions, metrics, and terminology.
 

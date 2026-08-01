@@ -32,3 +32,7 @@ Deferred: WebView2 shell, embeddings/vector database, cloud sync, and company AI
 ## Personal knowledge flow
 
 The knowledge area stores its active versioned JSON at `.annot/knowledge-store.json` and recoverable removed history at `.annot/knowledge-revision-trash.json`. Capture is local and immutable. A deterministic term matcher selects bounded, visibly marked head/tail excerpts from candidate topics. Codex returns schema-constrained proposals in a cancellable, time-bounded read-only process, and application code applies only proposals explicitly accepted by the user. Direct user edits also create revisions without a model call. A v1 source is preserved as a verified content-addressed rollback file before the first mutation; active and trash JSON files use validated temporary writes and atomic rename.
+
+The 0.4.4 knowledge capture extension keeps its folder path and bounded file fingerprint ledger in device-local `%APPDATA%\\PageDock\\knowledge-import.json`. Folder scans are explicit on knowledge-page entry or refresh, recurse through ordinary subdirectories, skip symlinks and known runtime/export directories, and read only UTF-8 text files. Long-file segmentation is a deterministic local operation before normal inbox capture. Markdown export writes only the current topic projection to a timestamped destination through a temporary directory and never writes inside the configured import folder.
+
+The shared `AppHeader` opens static screen-aware help content by button or `F1`; it does not load external documentation at runtime.

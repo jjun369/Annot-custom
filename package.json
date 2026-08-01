@@ -1,6 +1,6 @@
 {
   "name": "pagedock",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "A local-first PDF study workspace with optional AI assistance.",
   "author": "PageDock contributors",
   "private": true,

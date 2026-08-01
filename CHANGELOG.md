@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.4 — 2026-08-02
+
+- Added a shared `?` help button and `F1` shortcut with screen-specific tips, a full usage guide, and troubleshooting guidance.
+- Added a device-local recursive knowledge memo folder scan. New small UTF-8 text files enter the inbox without changing their originals; duplicate content remains deduplicated.
+- Added local long-note split previews for manual and folder imports without an extra AI call or knowledge-store migration.
+- Added current-wiki Markdown export with `INDEX.md`, safe Windows filenames, atomic publication, and import-folder loop prevention.
+- Added coverage for folder scanning, unchanged-file fingerprints, long-note splitting, export safety, and the existing knowledge invariants.
+
 ## Windows-only product direction (working tree)
 
 - Declared Windows 10/11 x64 as PageDock's only supported platform.

@@ -5,6 +5,7 @@ import {
   AlertTriangle,
   BookOpenText,
   Check,
+  Download,
   FileInput,
   Inbox,
   Loader2,
@@ -20,11 +21,20 @@ import {
 } from 'lucide-react';
 
 import { KnowledgeConflictCard } from '@/components/knowledge/KnowledgeConflictCard';
+import { KnowledgeFolderCard } from '@/components/knowledge/KnowledgeFolderCard';
 import { KnowledgeReviewCard } from '@/components/knowledge/KnowledgeReviewCard';
+import { KnowledgeSplitDialog, type SplitDialogSegment } from '@/components/knowledge/KnowledgeSplitDialog';
 import { KnowledgeWikiPanel } from '@/components/knowledge/KnowledgeWikiPanel';
 import { AppHeader } from '@/components/layout/AppHeader';
 import type { CodexSetupStatus } from '@/lib/codex-setup';
 import { isKnowledgeChatGptOAuth } from '@/lib/knowledge-auth';
+import { normalizeKnowledgeText, splitKnowledgeText } from '@/lib/knowledge-split';
+import type {
+  KnowledgeFolderPreview,
+  KnowledgeFolderScanResult,
+  PendingKnowledgeFile,
+} from '@/lib/knowledge-folder';
+import type { KnowledgeImportSettings, KnowledgeImportSettingsSummary } from '@/lib/knowledge-import-settings';
 import type {
   CaptureKnowledgeResult,
   KnowledgeConflict,
@@ -36,6 +46,18 @@ import type {
 
 type View = 'inbox' | 'review' | 'conflicts' | 'wiki';
 type KnowledgePagePayload = KnowledgeSnapshot & { storeInfo: KnowledgeStoreInfo };
+type ManualFileInput = { text: string; sourceName: string; sizeBytes: number };
+type SplitPreviewState = {
+  kind: 'manual' | 'folder';
+  sourceName: string;
+  relativePath?: string;
+  expectedHash?: string;
+  text?: string;
+  charCount: number;
+  segments: SplitDialogSegment[];
+  segmentTexts: string[];
+  warnings: string[];
+};
 
 const EMPTY: KnowledgeSnapshot = { version: 2, notes: [], topics: [], reviews: [], conflicts: [] };
 const EMPTY_STORE_INFO: KnowledgeStoreInfo = { activeBytes: 0, revisionTrashBytes: 0, revisionTrashCount: 0 };
@@ -78,6 +100,15 @@ export default function KnowledgePage() {
   const [inboxVisible, setInboxVisible] = useState(PAGE_SIZE);
   const [reviewVisible, setReviewVisible] = useState(PAGE_SIZE);
   const [topicVisible, setTopicVisible] = useState(50);
+  const [folderDirectory, setFolderDirectory] = useState<string | null>(null);
+  const [folderAvailable, setFolderAvailable] = useState(false);
+  const [folderLastScanAt, setFolderLastScanAt] = useState<string | undefined>();
+  const [folderPending, setFolderPending] = useState<PendingKnowledgeFile[]>([]);
+  const [folderBusy, setFolderBusy] = useState(false);
+  const [splitPreview, setSplitPreview] = useState<SplitPreviewState | null>(null);
+  const [manualQueue, setManualQueue] = useState<ManualFileInput[]>([]);
+  const [splitBusy, setSplitBusy] = useState(false);
+  const [exportBusy, setExportBusy] = useState(false);
   const stopBatch = useRef(false);
   const activeRequest = useRef<AbortController | null>(null);
   const draftLoaded = useRef(false);
@@ -106,13 +137,37 @@ export default function KnowledgePage() {
     setRevisionTrash(result.items);
   }, []);
 
+  const refreshFolder = useCallback(async (scan: boolean) => {
+    const settings = await responseJson<KnowledgeImportSettingsSummary>(await fetch('/api/knowledge/import-folder', { cache: 'no-store' }));
+    setFolderDirectory(settings.directory);
+    setFolderLastScanAt(settings.lastScanAt);
+    setFolderAvailable(Boolean(settings.directory));
+    if (!scan || !settings.directory) {
+      setFolderPending([]);
+      return;
+    }
+    const result = await responseJson<KnowledgeFolderScanResult>(await fetch('/api/knowledge/import-folder', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'scan' }),
+    }));
+    setFolderAvailable(result.available);
+    setFolderLastScanAt(result.lastScanAt);
+    setFolderPending(result.pending);
+    if (!result.available) {
+      setMessage({ text: '연결된 메모 폴더를 찾지 못했습니다. 폴더를 변경하거나 다시 확인해 주세요.', error: true });
+    } else if (result.captured.length || result.duplicates.length) {
+      await refresh();
+      setMessage({ text: `메모 폴더에서 ${result.captured.length}개를 수집했습니다.${result.duplicates.length ? ` 중복 ${result.duplicates.length}개는 건너뛰었습니다.` : ''}` });
+    }
+  }, [refresh]);
+
   useEffect(() => {
     void refresh().catch((error) => setMessage({ text: error.message, error: true }));
     void refreshCodex();
+    void refreshFolder(true).catch((error) => setMessage({ text: error.message, error: true }));
     const draft = window.localStorage.getItem(DRAFT_KEY);
     if (draft) setNoteText(draft);
     draftLoaded.current = true;
-  }, [refresh, refreshCodex]);
+  }, [refresh, refreshCodex, refreshFolder]);
 
   useEffect(() => {
     if (!draftLoaded.current) return;
@@ -171,6 +226,25 @@ export default function KnowledgePage() {
     }
   }
 
+  function buildManualSplitPreview(input: ManualFileInput): SplitPreviewState {
+    const split = splitKnowledgeText(input.text);
+    return {
+      kind: 'manual',
+      sourceName: input.sourceName,
+      text: split.normalizedText,
+      charCount: split.normalizedText.length,
+      segments: split.segments.map((segment) => ({ title: segment.title, charCount: segment.text.length, preview: segment.text.slice(0, 240), hardSplit: segment.hardSplit })),
+      segmentTexts: split.segments.map((segment) => segment.text),
+      warnings: split.warnings,
+    };
+  }
+
+  function showNextManualSplit(): void {
+    const next = manualQueue[0];
+    setManualQueue((queue) => queue.slice(1));
+    setSplitPreview(next ? buildManualSplitPreview(next) : null);
+  }
+
   async function captureFiles(files: FileList | File[]): Promise<void> {
     const candidates = Array.from(files).filter((file) => /\.(?:txt|md|markdown)$/i.test(file.name));
     if (!candidates.length) {
@@ -182,13 +256,134 @@ export default function KnowledgePage() {
       setMessage({ text: `${tooLarge.name} 파일이 너무 큽니다. 파일 하나는 500KB 이하로 나눠 주세요.`, error: true });
       return;
     }
-    const notes = await Promise.all(candidates.map(async (file) => ({ text: await file.text(), sourceName: file.name })));
-    const oversizedText = notes.find((note) => note.text.length > 100_000);
-    if (oversizedText) {
-      setMessage({ text: `${oversizedText.sourceName} 내용이 100,000자를 넘습니다. 여러 파일로 나눠 주세요.`, error: true });
+    const inputs = (await Promise.all(candidates.map(async (file) => ({ text: normalizeKnowledgeText(await file.text()), sourceName: file.name, sizeBytes: file.size })))).filter((input) => input.text.length > 0);
+    if (!inputs.length) {
+      setMessage({ text: '비어 있는 메모 파일은 수집하지 않습니다.', error: true });
       return;
     }
-    await captureInputs(notes);
+    const invalid = inputs.find((input) => input.text.includes('\uFFFD'));
+    if (invalid) {
+      setMessage({ text: `${invalid.sourceName} 파일을 UTF-8 텍스트로 읽지 못했습니다. 파일을 UTF-8로 저장한 뒤 다시 시도해 주세요.`, error: true });
+      return;
+    }
+    const small = inputs.filter((input) => splitKnowledgeText(input.text).segments.length === 1 && input.text.length <= 20_000);
+    const long = inputs.filter((input) => !small.includes(input));
+    if (small.length && !(await captureInputs(small.map(({ text, sourceName }) => ({ text, sourceName }))))) return;
+    if (long.length) {
+      setManualQueue(long.slice(1));
+      setSplitPreview(buildManualSplitPreview(long[0]));
+    }
+  }
+
+  async function chooseKnowledgeFolder(): Promise<void> {
+    if (!window.pageDockDesktop) {
+      setMessage({ text: '메모 폴더 선택은 설치형 PageDock에서 사용할 수 있습니다.', error: true });
+      return;
+    }
+    const selected = await window.pageDockDesktop.selectDirectory();
+    if (!selected) return;
+    setFolderBusy(true);
+    try {
+      await responseJson<KnowledgeImportSettings>(await fetch('/api/knowledge/import-folder', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ directory: selected }),
+      }));
+      setFolderDirectory(selected);
+      await refreshFolder(true);
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : '메모 폴더를 연결하지 못했습니다.', error: true });
+    } finally {
+      setFolderBusy(false);
+    }
+  }
+
+  async function disconnectKnowledgeFolder(): Promise<void> {
+    if (!window.confirm('메모 폴더 연결을 해제할까요? 이미 수집한 메모는 그대로 남습니다.')) return;
+    setFolderBusy(true);
+    try {
+      await responseJson(await fetch('/api/knowledge/import-folder', {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ directory: null }),
+      }));
+      setFolderDirectory(null);
+      setFolderAvailable(false);
+      setFolderPending([]);
+      setFolderLastScanAt(undefined);
+      setMessage({ text: '메모 폴더 연결을 해제했습니다. 수집한 메모는 보존됩니다.' });
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : '메모 폴더 연결을 해제하지 못했습니다.', error: true });
+    } finally {
+      setFolderBusy(false);
+    }
+  }
+
+  async function previewKnowledgeFolderFile(file: PendingKnowledgeFile): Promise<void> {
+    setFolderBusy(true);
+    try {
+      const result = await responseJson<KnowledgeFolderPreview>(await fetch('/api/knowledge/import-folder', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'preview', relativePath: file.relativePath }),
+      }));
+      setSplitPreview({
+        kind: 'folder',
+        sourceName: result.relativePath,
+        relativePath: result.relativePath,
+        expectedHash: result.contentHash,
+        charCount: result.charCount,
+        segments: result.segments,
+        segmentTexts: [],
+        warnings: result.warnings,
+      });
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : '긴 메모를 미리 보지 못했습니다.', error: true });
+    } finally {
+      setFolderBusy(false);
+    }
+  }
+
+  async function importSplitPreview(mode: 'single' | 'split'): Promise<void> {
+    if (!splitPreview) return;
+    setSplitBusy(true);
+    try {
+      if (splitPreview.kind === 'folder' && splitPreview.relativePath && splitPreview.expectedHash) {
+        const result = await responseJson<{ captured: Array<unknown>; duplicates: Array<unknown> }>(await fetch('/api/knowledge/import-folder', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'import', relativePath: splitPreview.relativePath, expectedHash: splitPreview.expectedHash, mode }),
+        }));
+        setFolderPending((pending) => pending.filter((item) => item.relativePath !== splitPreview.relativePath));
+        await refresh();
+        setMessage({ text: `${result.captured.length}개 긴 메모 조각을 수집했습니다.${result.duplicates.length ? ` 중복 ${result.duplicates.length}개는 건너뛰었습니다.` : ''}` });
+        setSplitPreview(null);
+      } else if (splitPreview.text) {
+        const inputs = mode === 'single'
+          ? [{ text: splitPreview.text, sourceName: splitPreview.sourceName }]
+          : splitPreview.segmentTexts.map((text, index) => ({ text, sourceName: `${splitPreview.sourceName} · ${index + 1}/${splitPreview.segmentTexts.length}` }));
+        if (await captureInputs(inputs)) {
+          setSplitPreview(null);
+          showNextManualSplit();
+        }
+      }
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : '긴 메모를 수집하지 못했습니다.', error: true });
+    } finally {
+      setSplitBusy(false);
+    }
+  }
+
+  async function exportKnowledge(): Promise<void> {
+    if (!window.pageDockDesktop) {
+      setMessage({ text: 'Markdown 내보내기는 설치형 PageDock에서 사용할 수 있습니다.', error: true });
+      return;
+    }
+    const destination = await window.pageDockDesktop.selectDirectory();
+    if (!destination) return;
+    setExportBusy(true);
+    try {
+      const result = await responseJson<{ directory: string; topicCount: number }>(await fetch('/api/knowledge/export', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destination }),
+      }));
+      setMessage({ text: `${result.topicCount}개 위키를 Markdown으로 내보냈습니다: ${result.directory}` });
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : 'Markdown을 내보내지 못했습니다.', error: true });
+    } finally {
+      setExportBusy(false);
+    }
   }
 
   async function loginCodex(): Promise<void> {
@@ -408,6 +603,17 @@ export default function KnowledgePage() {
                 <textarea value={noteText} onChange={(event) => setNoteText(event.target.value)} placeholder="기술 메모, 관찰, 질문, 실험 결과, 나중에 확인할 것…" className="h-48 w-full resize-y bg-transparent text-sm leading-7 outline-none placeholder:text-outline" maxLength={100_000} />
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-outline-variant/20 pt-3"><span className="text-[10px] text-outline">{noteText.length.toLocaleString()}자 · 입력 중인 초안은 이 PC에 자동 저장됩니다</span><div className="flex gap-2"><label className="flex cursor-pointer items-center gap-1.5 rounded-xl bg-surface-container px-3 py-2.5 text-xs font-bold"><Upload size={14} />파일 여러 개<input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" multiple className="hidden" onChange={(event) => { if (event.target.files) void captureFiles(event.target.files); event.target.value = ''; }} /></label><button onClick={() => void captureText()} disabled={!noteText.trim() || captureBusy} className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-on-primary disabled:opacity-40">{captureBusy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}수집함에 넣기</button></div></div>
               </div>
+              <KnowledgeFolderCard
+                directory={folderDirectory}
+                available={folderAvailable}
+                lastScanAt={folderLastScanAt}
+                pending={folderPending}
+                busy={folderBusy || splitBusy}
+                onChoose={() => void chooseKnowledgeFolder()}
+                onScan={() => { setFolderBusy(true); void refreshFolder(true).catch((error) => setMessage({ text: error.message, error: true })).finally(() => setFolderBusy(false)); }}
+                onDisconnect={() => void disconnectKnowledgeFolder()}
+                onPreview={(file) => void previewKnowledgeFolderFile(file)}
+              />
             </section>
             <section><div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-bold">정리 대기 {inboxNotes.length}개</h2>{batchProgress && <p className="mt-1 text-[10px] text-primary">{batchProgress.done}/{batchProgress.total} 처리 중 · 오류가 나면 자동 중지</p>}</div>{batchProgress ? <div className="flex gap-2"><button onClick={() => { stopBatch.current = true; }} className="rounded-lg bg-surface-container px-3 py-2 text-[10px] font-bold text-on-surface-variant">현재 작업 후 중지</button><button onClick={cancelCurrent} className="flex items-center gap-1 rounded-lg bg-red-50 px-3 py-2 text-[10px] font-bold text-error"><StopCircle size={13} />즉시 취소</button></div> : <div className="flex gap-2"><button onClick={() => void processBatch(inboxNotes.slice(0, 10))} disabled={!oauthReady || !inboxNotes.length || !!processingId} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary disabled:opacity-40"><Sparkles size={13} />다음 10개</button>{inboxNotes.length > 10 && <button onClick={() => void processEverything()} disabled={!oauthReady || !!processingId} className="rounded-lg bg-surface-container px-3 py-2 text-[10px] font-bold text-on-surface-variant disabled:opacity-40">전체</button>}</div>}</div>
               <div className="mt-3 space-y-3">{visibleInboxNotes.map((note) => <article key={note.id} className="rounded-2xl border border-outline-variant/25 bg-surface-container-lowest p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-xs font-bold">{note.title}</h3><span className="mt-1 block text-[10px] text-outline">{note.sourceName} · {dateLabel(note.createdAt)} · {note.rawText.length.toLocaleString()}자{note.rawText.length > 20_000 ? ' · 큰 작업' : ''}</span></div>{processingId === note.id && !batchProgress ? <button onClick={cancelCurrent} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-[10px] font-bold text-error"><StopCircle size={12} />즉시 취소</button> : <button onClick={() => void processOne(note.id)} disabled={!oauthReady || !!processingId || !!batchProgress} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-container px-3 py-2 text-[10px] font-bold text-primary disabled:opacity-40">{note.status === 'error' ? <RotateCcw size={12} /> : <Sparkles size={12} />}{note.status === 'error' ? '다시 정리' : '정리'}</button>}</div><p className="mt-3 line-clamp-4 whitespace-pre-wrap text-[11px] leading-5 text-on-surface-variant">{note.rawText}</p>{note.error && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[10px] leading-5 text-error">{note.error}</p>}</article>)}{inboxNotes.length > inboxVisible && <button onClick={() => setInboxVisible((value) => value + PAGE_SIZE)} className="w-full rounded-xl bg-surface-container py-3 text-xs font-bold text-on-surface-variant">메모 {Math.min(PAGE_SIZE, inboxNotes.length - inboxVisible)}개 더 보기</button>}{!inboxNotes.length && <div className="rounded-2xl border border-dashed border-outline-variant/40 p-8 text-center text-xs text-on-surface-variant"><FileInput className="mx-auto mb-2" size={22} />정리를 기다리는 메모가 없습니다.</div>}</div>
@@ -418,9 +624,10 @@ export default function KnowledgePage() {
 
           {view === 'conflicts' && <section><h2 className="text-xl font-bold">미해결 충돌</h2><p className="mt-1 text-xs text-on-surface-variant">충돌을 등록해도 현재 위키 본문은 바뀌지 않습니다. 위키를 직접 수정한 뒤 해결 이유를 남길 수 있습니다.</p><div className="mt-5 space-y-4">{openConflicts.map((conflict) => <KnowledgeConflictCard key={conflict.id} conflict={conflict} topic={data.topics.find((item) => item.id === conflict.topicId)} note={data.notes.find((item) => item.id === conflict.noteId)} onOpenTopic={(topicId) => { setSelectedTopicId(topicId); setView('wiki'); }} onResolve={closeConflict} />)}{!openConflicts.length && <div className="rounded-2xl border border-dashed border-outline-variant/40 p-12 text-center text-xs text-on-surface-variant"><Check className="mx-auto mb-2 text-primary" size={24} />미해결 충돌이 없습니다.</div>}</div></section>}
 
-          {view === 'wiki' && <div className="grid min-h-[calc(100vh-7.5rem)] gap-5 lg:grid-cols-[280px_minmax(0,1fr)]"><aside className="rounded-2xl border border-outline-variant/25 bg-white p-3"><div className="relative"><Search size={13} className="absolute left-3 top-2.5 text-outline" /><input value={topicSearch} onChange={(event) => { setTopicSearch(event.target.value); setTopicVisible(50); }} placeholder="위키 검색" className="w-full rounded-lg bg-surface-container-low py-2 pl-8 pr-3 text-xs outline-none" /></div><div className="mt-2 space-y-1">{visibleTopics.map((topic) => <button key={topic.id} onClick={() => setSelectedTopicId(topic.id)} className={`w-full rounded-xl px-3 py-2.5 text-left ${selectedTopicId === topic.id ? 'bg-primary-container text-primary' : 'hover:bg-surface-container'}`}><span className="block truncate text-xs font-bold">{topic.title}</span><span className="mt-1 block line-clamp-2 text-[10px] leading-4 text-on-surface-variant">{topic.summary}</span></button>)}{filteredTopics.length > topicVisible && <button onClick={() => setTopicVisible((value) => value + 50)} className="w-full rounded-lg bg-surface-container py-2 text-[10px] font-bold text-on-surface-variant">위키 50개 더 보기</button>}</div></aside>{selectedTopic ? <KnowledgeWikiPanel key={`${selectedTopic.id}-${selectedTopic.revision}`} topic={selectedTopic} notes={data.notes} openConflictCount={openConflicts.filter((item) => item.topicId === selectedTopic.id).length} trashItems={revisionTrash.filter((item) => item.topicId === selectedTopic.id)} dateLabel={dateLabel} onOpenConflicts={() => setView('conflicts')} onEdit={(update) => editTopic(selectedTopic, update)} onRestore={(revision) => restoreRevision(selectedTopic, revision)} onTrash={(revision) => trashRevision(selectedTopic, revision)} onRestoreTrash={restoreTrashRevision} onDeleteTrash={deleteTrashRevision} /> : <article className="flex min-h-80 items-center justify-center rounded-2xl border border-outline-variant/25 bg-white p-6 text-xs text-on-surface-variant"><BookOpenText className="mr-2" size={18} />위키 문서를 선택하세요.</article>}</div>}
+          {view === 'wiki' && <section><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-xl font-bold">개인 위키</h2><p className="mt-1 text-xs text-on-surface-variant">현재 revision만 일반 Markdown 폴더로 내보낼 수 있습니다.</p></div><button type="button" onClick={() => void exportKnowledge()} disabled={exportBusy} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary disabled:opacity-40">{exportBusy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}Markdown 내보내기</button></div><div className="grid min-h-[calc(100vh-7.5rem)] gap-5 lg:grid-cols-[280px_minmax(0,1fr)]"><aside className="rounded-2xl border border-outline-variant/25 bg-white p-3"><div className="relative"><Search size={13} className="absolute left-3 top-2.5 text-outline" /><input value={topicSearch} onChange={(event) => { setTopicSearch(event.target.value); setTopicVisible(50); }} placeholder="위키 검색" className="w-full rounded-lg bg-surface-container-low py-2 pl-8 pr-3 text-xs outline-none" /></div><div className="mt-2 space-y-1">{visibleTopics.map((topic) => <button key={topic.id} onClick={() => setSelectedTopicId(topic.id)} className={`w-full rounded-xl px-3 py-2.5 text-left ${selectedTopicId === topic.id ? 'bg-primary-container text-primary' : 'hover:bg-surface-container'}`}><span className="block truncate text-xs font-bold">{topic.title}</span><span className="mt-1 block line-clamp-2 text-[10px] leading-4 text-on-surface-variant">{topic.summary}</span></button>)}{filteredTopics.length > topicVisible && <button onClick={() => setTopicVisible((value) => value + 50)} className="w-full rounded-lg bg-surface-container py-2 text-[10px] font-bold text-on-surface-variant">위키 50개 더 보기</button>}</div></aside>{selectedTopic ? <KnowledgeWikiPanel key={`${selectedTopic.id}-${selectedTopic.revision}`} topic={selectedTopic} notes={data.notes} openConflictCount={openConflicts.filter((item) => item.topicId === selectedTopic.id).length} trashItems={revisionTrash.filter((item) => item.topicId === selectedTopic.id)} dateLabel={dateLabel} onOpenConflicts={() => setView('conflicts')} onEdit={(update) => editTopic(selectedTopic, update)} onRestore={(revision) => restoreRevision(selectedTopic, revision)} onTrash={(revision) => trashRevision(selectedTopic, revision)} onRestoreTrash={restoreTrashRevision} onDeleteTrash={deleteTrashRevision} /> : <article className="flex min-h-80 items-center justify-center rounded-2xl border border-outline-variant/25 bg-white p-6 text-xs text-on-surface-variant"><BookOpenText className="mr-2" size={18} />위키 문서를 선택하세요.</article>}</div></section>}
         </div></section>
       </div>
+      {splitPreview && <KnowledgeSplitDialog sourceName={splitPreview.sourceName} charCount={splitPreview.charCount} segments={splitPreview.segments} warnings={splitPreview.warnings} allowSingle={splitPreview.charCount <= 100_000} busy={splitBusy} onCancel={() => { if (!splitBusy) { setSplitPreview(null); setManualQueue([]); } }} onImport={(mode) => void importSplitPreview(mode)} />}
     </main>
   );
 }

@@ -150,7 +150,7 @@ function timestamp(): string {
   return new Date().toISOString();
 }
 
-function hashText(value: string): string {
+export function hashKnowledgeText(value: string): string {
   return createHash('sha256').update(value.normalize('NFC'), 'utf8').digest('hex');
 }
 
@@ -172,7 +172,7 @@ function normalizeStore(value: unknown): KnowledgeSnapshot {
       id: String(note.id ?? randomUUID()),
       rawText,
       sourceName: String(note.sourceName ?? '직접 입력'),
-      contentHash: String(note.contentHash ?? hashText(rawText.trim())),
+      contentHash: String(note.contentHash ?? hashKnowledgeText(rawText.trim())),
       title: String(note.title ?? rawText.split(/\r?\n/, 1)[0].slice(0, 80)),
       summary: String(note.summary ?? ''),
       status: ['inbox', 'review', 'integrated', 'dismissed', 'error'].includes(String(note.status))
@@ -451,7 +451,7 @@ export async function captureKnowledgeNotes(inputs: CaptureKnowledgeInput[]): Pr
     const duplicates: CaptureKnowledgeResult['duplicates'] = [];
     const knownHashes = new Map(store.notes.map((note) => [note.contentHash, note.id]));
     for (const input of prepared) {
-      const contentHash = hashText(input.text);
+      const contentHash = hashKnowledgeText(input.text);
       const duplicateId = knownHashes.get(contentHash);
       if (duplicateId) {
         duplicates.push({ sourceName: input.sourceName, existingNoteId: duplicateId });

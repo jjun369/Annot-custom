@@ -1,8 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { BookOpen, BookOpenText, Search, Settings, Telescope } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { BookOpen, BookOpenText, CircleHelp, Search, Settings, Telescope } from 'lucide-react';
 
+import { HelpDialog } from '@/components/common/HelpDialog';
 import { PageDockMark } from '@/components/common/PageDockMark';
 
 type AppSection = 'library' | 'research' | 'knowledge' | 'settings';
@@ -20,7 +22,23 @@ const NAV_ITEMS = [
 ];
 
 export function AppHeader({ active, actions, onSearch }: AppHeaderProps) {
+  const [helpOpen, setHelpOpen] = useState(false);
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isEditing = target?.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target?.tagName ?? '');
+      if (event.key === 'F1' && !isEditing) {
+        event.preventDefault();
+        setHelpOpen((value) => !value);
+      }
+    };
+    window.addEventListener('keydown', handleShortcut);
+    return () => window.removeEventListener('keydown', handleShortcut);
+  }, []);
+
   return (
+    <>
     <header className="flex h-14 shrink-0 items-center justify-between border-b border-outline-variant/20 bg-surface-container-lowest px-3 shadow-[0_1px_0_rgba(40,52,57,0.02)]">
       <div className="flex min-w-0 items-center gap-3">
         <Link href="/" className="flex shrink-0 items-center gap-2.5 rounded-lg px-1 py-1" aria-label="PageDock 홈">
@@ -67,6 +85,9 @@ export function AppHeader({ active, actions, onSearch }: AppHeaderProps) {
             <kbd className="hidden rounded bg-surface-container px-1.5 py-0.5 text-[9px] font-medium text-outline lg:inline">Ctrl K</kbd>
           </button>
         )}
+        <button type="button" onClick={() => setHelpOpen(true)} className="flex h-9 w-9 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface" aria-label="사용 도움말 열기" title="사용 도움말 (F1)">
+          <CircleHelp size={16} strokeWidth={2} />
+        </button>
         <Link
           href="/settings"
           aria-label="설정"
@@ -82,5 +103,7 @@ export function AppHeader({ active, actions, onSearch }: AppHeaderProps) {
         </Link>
       </div>
     </header>
+    {helpOpen && <HelpDialog active={active} onClose={() => setHelpOpen(false)} />}
+    </>
   );
 }

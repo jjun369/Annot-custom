@@ -15,6 +15,8 @@
 - Explicit external-content-change approval and full compensation for failed internal PDF rename/move operations.
 - Friend-focused first-run actions, native library-folder selection, masked account identifiers, minimum-window research layout, project maintenance, manual patent entry, Unpaywall DOI lookup, terminology editing, and expanded local FTS.
 - Restore safety snapshot and a Python-free fallback for backup archives up to 512MB.
+- PageDock-wide `?` help dialog with F1 access, screen-specific tips, full usage guidance, and troubleshooting.
+- Device-local recursive knowledge memo-folder scan, unchanged-file fingerprints, local long-note split preview, and current-wiki Markdown export.
 
 ## Planned
 
@@ -24,7 +26,7 @@
 - Replace the bounded in-memory backup fallback with a fully streaming Node extractor for very large archives.
 - Add selected-page figure analysis UI and richer claim/paragraph anchors.
 - Code signing and a hardened public installer release workflow.
-- Improve knowledge candidate retrieval, add topic merge/split and Markdown export, and evaluate persisted queue counters only if interrupted real-world batches prove the need.
+- Improve knowledge candidate retrieval, add topic merge/split, and evaluate persisted queue counters only if interrupted real-world batches prove the need.
 
 ## Deferred
 

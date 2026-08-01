@@ -1,6 +1,6 @@
 # Personal knowledge inbox
 
-Status: Experimental implementation included in the PageDock 0.4.3 working tree.
+Status: Experimental implementation included in the PageDock 0.4.4 working tree.
 
 ## User goal
 
@@ -87,13 +87,14 @@ Critical invariants:
 
 ## Known limitations and next revisions
 
-1. Browser file import treats each file as one note; large compound files need a deliberate section-splitting UX.
+1. Folder and browser file import use a local split preview for long compound files; users still choose whether to capture the proposed pieces.
 2. Batch processing is sequential and safely stops at the first failure. The note states persist, but the visible done/total counter does not resume after an app restart.
 3. Candidate retrieval is lexical and may miss semantically related Korean phrasing. Evaluate SQLite FTS/trigrams or an optional local embedding model only after real-note tests.
-4. The wiki has local browsing/search, direct editing, revision restore, and recoverable history cleanup, but no topic merge/split or Markdown folder export yet.
+4. The wiki has local browsing/search, direct editing, revision restore, recoverable history cleanup, and current-projection Markdown export, but no topic merge/split yet.
 5. Conflict resolution captures an explanation and can open the related wiki for a direct edit, but it does not automatically generate or apply a resolved topic proposal.
 6. Line diff collapses long unchanged runs and preserves common prefixes/suffixes in the large-document fallback. It is still line-based rather than word-based.
 7. Knowledge remains a separate PageDock area by design. Avoid coupling it to PDFs/research tables until actual usage proves that relationship.
+8. The memo-folder path and fingerprint ledger are device-local; they are not restored as portable library data.
 
 ## Do not do this
 

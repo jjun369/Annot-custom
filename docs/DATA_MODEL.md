@@ -42,3 +42,5 @@ Only accepting a current create/update review mutates or creates a topic. A stal
 - Reviews retain `contextWarnings` when candidate topic excerpts were truncated or omitted, so that limitation remains visible after restart.
 - Revision trash moves and restores use loss-averse two-file ordering: a crash may leave a duplicate, never an unprotected missing revision.
 - Backup restore remaps paths, deduplicates documents by SHA-256 then DOI, and remaps project/report foreign keys.
+
+Knowledge folder settings and file fingerprints are device-local operational state in `%APPDATA%\\PageDock\\knowledge-import.json`. They are intentionally outside `.annot` and portable backups because a selected Windows path may not exist on another PC. The knowledge store remains format version 2; split imports create ordinary immutable `KnowledgeNote` records and Markdown export is a projection of current topics only.

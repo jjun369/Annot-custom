@@ -1,4 +1,4 @@
-import { mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { beforeAll, describe, expect, test } from 'vitest';
@@ -9,6 +9,7 @@ beforeAll(async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'pagedock-knowledge-test-'));
   process.env.PAGEDOCK_ROOT = root;
   process.env.ANNOT_ROOT = root;
+  process.env.PAGEDOCK_CONFIG_DIR = path.join(root, 'config');
   store = await import('@/lib/knowledge-store');
 });
 
@@ -141,5 +142,40 @@ describe('knowledge store v2', () => {
     const info = await store.getKnowledgeStoreInfo();
     expect(info.activeBytes).toBeGreaterThan(0);
     expect(info.revisionTrashCount).toBe(0);
+  });
+
+  test('scans a recursive folder, captures small files, and previews long files', async () => {
+    const folder = path.join(process.env.PAGEDOCK_ROOT!, 'incoming');
+    await mkdir(path.join(folder, 'nested'), { recursive: true });
+    await writeFile(path.join(folder, 'small.md'), '폴더에서 수집하는 작은 메모', 'utf8');
+    await writeFile(path.join(folder, 'nested', 'long.md'), `## 긴 주제\n\n${'긴 내용 '.repeat(6_000)}`, 'utf8');
+    const folderModule = await import('@/lib/knowledge-folder');
+    const settingsModule = await import('@/lib/knowledge-import-settings');
+    await settingsModule.setKnowledgeImportDirectory(folder);
+    const first = await folderModule.scanKnowledgeImportFolder();
+    expect(first.available).toBe(true);
+    expect(first.captured.map((item) => item.sourceName)).toContain('small.md');
+    expect(first.pending.map((item) => item.relativePath)).toContain('nested/long.md');
+    const second = await folderModule.scanKnowledgeImportFolder();
+    expect(second.captured).toHaveLength(0);
+    const preview = await folderModule.previewKnowledgeFolderFile('nested/long.md');
+    expect(preview.segments.length).toBeGreaterThan(1);
+    const imported = await folderModule.importKnowledgeFolderFile('nested/long.md', preview.contentHash, 'split');
+    expect(imported.segmentCount).toBe(preview.segments.length);
+    expect((await folderModule.scanKnowledgeImportFolder()).pending).toHaveLength(0);
+  });
+
+  test('exports current topics and blocks the connected import folder', async () => {
+    const folder = path.join(process.env.PAGEDOCK_ROOT!, 'export-source');
+    const destination = path.join(process.env.PAGEDOCK_ROOT!, 'exports');
+    await mkdir(folder, { recursive: true });
+    await mkdir(destination, { recursive: true });
+    const settingsModule = await import('@/lib/knowledge-import-settings');
+    const exportModule = await import('@/lib/knowledge-export');
+    await settingsModule.setKnowledgeImportDirectory(folder);
+    const result = await exportModule.exportKnowledgeMarkdown(destination);
+    expect(result.topicCount).toBeGreaterThan(0);
+    expect(await readFile(path.join(result.directory, 'INDEX.md'), 'utf8')).toContain('PageDock 지식 내보내기');
+    await expect(exportModule.exportKnowledgeMarkdown(folder)).rejects.toThrow(/메모 폴더 안으로/);
   });
 });
