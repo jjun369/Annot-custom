@@ -10,6 +10,8 @@ The Reader's `사이드채팅` action opens a separate Electron popup. The popup
 
 Side-chat AI runs with no implicit Library, PDF, Knowledge, or folder-tool context. A source is available only when the reader deliberately hands over a bounded selection. The popup explains that it is a separate conversation and does not silently copy the active PDF history.
 
+The PageDock question composer is kept as a local draft. The web-answer text and optional model label are also kept in device-local `localStorage` under a bounded key for the active side-chat question, session, and web provider, so switching tabs or closing and reopening the popup does not move a draft to another task. These convenience drafts are not session JSON and are not included in portable backups; a successfully saved perspective is the durable record.
+
 ## Web tabs and manual handoff
 
 The first web registry contains official top-level destinations for [DeepSeek](https://chat.deepseek.com/), [ChatGPT](https://chatgpt.com/), [Claude](https://claude.ai/), and [Gemini](https://gemini.google.com/). Electron uses an isolated provider-specific web view partition when the current runtime can host it; a load or security failure opens the same official destination in the system browser. Login state is not inferred.
@@ -21,6 +23,8 @@ The user chooses one outbound mode:
 - `원문 + 질문 + 답변`: the selected text, question, and a PageDock assistant answer explicitly chosen for review.
 
 PageDock shows the exact prompt and has separate `내용 복사` and `웹 AI 열기` actions. It never automatically sends, reads the web page, polls for a reply, or reads cookies. The user pastes a response into the popup, optionally types a model label marked `확인 안 됨`, and explicitly saves it. Each saved response remains additive and can be compared with the first PageDock explanation when one exists; no winner, consensus, answer grading, Knowledge promotion, or highlight resolution is created.
+
+If a saved question is visible and the user starts typing a new question, the new composer text becomes the web target and is saved locally before copy/open. A prior question, answer, provider, or prompt mode is not silently reused for that new draft; selecting a saved question again remains an explicit recovery action.
 
 ## Source and backup contract
 

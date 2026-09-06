@@ -14,7 +14,9 @@ let mainWindow = null;
 let deepSeekWindow = null;
 let sideChatWindow = null;
 const sideChatWebViews = new Map();
+const sideChatWebViewRequests = new Map();
 let activeSideChatWebProvider = null;
+let sideChatWebRequestId = 0;
 let serverProcess = null;
 let baseUrl = null;
 let isQuitting = false;
@@ -340,11 +342,13 @@ async function openSideChatWindow(handoff) {
   sideChatWindow = window;
   window.once('ready-to-show', () => window.show());
   window.on('closed', () => {
+    sideChatWebRequestId += 1;
     for (const view of sideChatWebViews.values()) {
       try { window.contentView.removeChildView(view); } catch { /* already detached */ }
       try { view.webContents.close({ waitForBeforeUnload: false }); } catch { /* already closed */ }
     }
     sideChatWebViews.clear();
+    sideChatWebViewRequests.clear();
     activeSideChatWebProvider = null;
     if (sideChatWindow === window) sideChatWindow = null;
   });
@@ -388,7 +392,13 @@ async function showSideChatWebProvider(providerId) {
     return { mode: 'external-fallback' };
   }
 
+  const requestId = sideChatWebRequestId + 1;
+  sideChatWebRequestId = requestId;
+  for (const candidate of sideChatWebViews.values()) candidate.setVisible(false);
+  activeSideChatWebProvider = null;
+
   let view = sideChatWebViews.get(providerId);
+  let createdView = false;
   if (!view) {
     const partition = SIDE_CHAT_WEB_PARTITIONS.get(providerId);
     view = new WebContentsView({
@@ -401,6 +411,7 @@ async function showSideChatWebProvider(providerId) {
       },
     });
     sideChatWebViews.set(providerId, view);
+    createdView = true;
     sideChatWindow.contentView.addChildView(view);
     view.setVisible(false);
     view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
@@ -428,18 +439,35 @@ async function showSideChatWebProvider(providerId) {
       void shell.openExternal(targetUrl);
     });
     view.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
-      if (isMainFrame && sideChatWindow && !sideChatWindow.isDestroyed()) {
+      if (isMainFrame && sideChatWebViewRequests.get(providerId) === sideChatWebRequestId && activeSideChatWebProvider === providerId && sideChatWindow && !sideChatWindow.isDestroyed()) {
         sideChatWindow.webContents.send('pagedock:sidechat-web-failed', { providerId, errorCode, errorDescription });
       }
     });
+    sideChatWebViewRequests.set(providerId, requestId);
     try {
       await view.webContents.loadURL(provider.url);
     } catch {
-      sideChatWindow.contentView.removeChildView(view);
-      sideChatWebViews.delete(providerId);
+      const windowStillOpen = sideChatWindow && !sideChatWindow.isDestroyed();
+      if (sideChatWebViewRequests.get(providerId) === requestId && windowStillOpen) {
+        sideChatWindow.contentView.removeChildView(view);
+        sideChatWebViews.delete(providerId);
+        sideChatWebViewRequests.delete(providerId);
+      }
+      if (sideChatWebRequestId !== requestId || !windowStillOpen) return { mode: 'cancelled' };
       await shell.openExternal(provider.url);
       return { mode: 'external-fallback' };
     }
+  } else {
+    sideChatWebViewRequests.set(providerId, requestId);
+  }
+
+  if (sideChatWebRequestId !== requestId || !sideChatWindow || sideChatWindow.isDestroyed()) {
+    if (createdView && sideChatWebViews.get(providerId) === view && sideChatWindow && !sideChatWindow.isDestroyed()) {
+      sideChatWindow.contentView.removeChildView(view);
+      sideChatWebViews.delete(providerId);
+      sideChatWebViewRequests.delete(providerId);
+    }
+    return { mode: 'cancelled' };
   }
 
   for (const [id, candidate] of sideChatWebViews) {
@@ -452,6 +480,7 @@ async function showSideChatWebProvider(providerId) {
 }
 
 function hideSideChatWebProvider() {
+  sideChatWebRequestId += 1;
   for (const view of sideChatWebViews.values()) view.setVisible(false);
   activeSideChatWebProvider = null;
 }

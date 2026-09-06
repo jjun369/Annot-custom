@@ -128,6 +128,49 @@ describe('independent side chat storage and outbound contract', () => {
     expect(sourceQuestionAnswer).toContain('Synthetic first answer.');
   });
 
+  it('keeps web answer drafts scoped to their question, session, and provider', async () => {
+    const { buildSideChatWebDraftKey } = await import('@/lib/side-chat');
+    const persisted = buildSideChatWebDraftKey({
+      sessionId: 'session-a',
+      questionMessageId: 'question-a',
+      question: 'Same synthetic question.',
+      provider: 'deepseek',
+    });
+    expect(buildSideChatWebDraftKey({
+      sessionId: 'session-a',
+      questionMessageId: 'question-a',
+      question: 'Same synthetic question.',
+      provider: 'deepseek',
+    })).toBe(persisted);
+    expect(buildSideChatWebDraftKey({
+      sessionId: 'session-b',
+      questionMessageId: 'question-a',
+      question: 'Same synthetic question.',
+      provider: 'deepseek',
+    })).not.toBe(persisted);
+    expect(buildSideChatWebDraftKey({
+      sessionId: 'session-a',
+      questionMessageId: 'question-a',
+      question: 'Same synthetic question.',
+      provider: 'chatgpt',
+    })).not.toBe(persisted);
+
+    const unsaved = buildSideChatWebDraftKey({
+      sessionId: 'session-a',
+      question: 'A new synthetic question.',
+      sourceContext,
+      provider: 'deepseek',
+    });
+    const otherUnsaved = buildSideChatWebDraftKey({
+      sessionId: 'session-a',
+      question: 'Another synthetic question.',
+      sourceContext,
+      provider: 'deepseek',
+    });
+    expect(unsaved).not.toBe(otherUnsaved);
+    expect(unsaved.length).toBeLessThan(200);
+  });
+
   it('is idempotent per pasted response while preserving distinct explanations and rejecting mutated previews', async () => {
     const sideSession = await makeSideSession('Synthetic perspective side chat');
     const { POST: saveQuestion } = await import('@/app/api/side-chat/questions/route');

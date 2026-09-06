@@ -5,6 +5,44 @@ export const SIDE_CHAT_PROMPT_VERSION = 'pagedock-sidechat-v1';
 export const SIDE_CHAT_MAX_RESPONSE_CHARS = 80_000;
 export const SIDE_CHAT_MAX_PROMPT_CHARS = 100_000;
 
+function hashDraftIdentity(value: string): string {
+  // This is only a compact localStorage key, not a security hash.
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+/**
+ * A bounded, local-only identity for a web answer draft. Persisted questions
+ * use their stable message id; an unsaved composer uses a content fingerprint
+ * so changing sessions or starting a second question cannot reuse the draft.
+ */
+export function buildSideChatWebDraftKey({
+  sessionId,
+  questionMessageId,
+  question,
+  sourceContext,
+  sourcePdfPath,
+  provider,
+}: {
+  sessionId?: string | null;
+  questionMessageId?: string;
+  question: string;
+  sourceContext?: ChatSourceContext;
+  sourcePdfPath?: string;
+  provider: SideChatWebProviderId;
+}): string {
+  const identity = questionMessageId || `draft-${hashDraftIdentity(JSON.stringify({
+    question: question.trim(),
+    sourceContext: sourceContext || null,
+    sourcePdfPath: sourcePdfPath || null,
+  }))}`;
+  return `pagedock-sidechat-web-draft:v1:${sessionId || 'new'}:${provider}:${identity}`;
+}
+
 /** A PDF path is only a relative Library hint; the document id remains authoritative. */
 export function normalizeSideChatPdfPathHint(value: unknown): string | undefined {
   if (typeof value !== 'string') return undefined;

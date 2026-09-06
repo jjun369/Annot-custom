@@ -2,6 +2,7 @@
 
 ## Unreleased — Provenance-gated Knowledge promotion
 
+- Hardened side-chat re-entry: a newly typed question cannot inherit an older web target, web answer/model drafts stay scoped to their session/question/provider across popup reopen, and stale embedded-tab loads or native views cannot overwrite the current tab/overlay.
 - Added an independent `사이드채팅` Electron popup. Its local `sidechat` sessions, PageDock AI turns, drafts, and provider state stay outside PDF conversation history; a bounded Reader selection can be handed over without automatic sending, and source return preserves document identity/page/rects.
 - Added explicit semi-manual web-AI tabs for DeepSeek, ChatGPT, Claude, and Gemini. Each uses a separate provider partition or safe system-browser fallback, shows the exact outbound mode/prompt, and accepts only a user-pasted response. Saved explanations are additive, labelled as direct paste with unknown model metadata when applicable, and never auto-score or promote content.
 - Hardened session persistence for overlapping Chat/DeepSeek writers: per-`sessions.json` locking and latest-read domain patches preserve concurrent messages, imports, and other-session updates, while delete/rename/move writers share the same boundary and cannot resurrect a removed session from stale state.
