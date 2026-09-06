@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Readable } from 'stream';
 
-import { createAutomaticBackup, createPortableBackupStream } from '@/lib/library-backup';
+import {
+  createAutomaticBackup,
+  createManualBackupInMobileBridge,
+  createPortableBackupStream,
+} from '@/lib/library-backup';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -24,8 +28,11 @@ export async function GET(req: NextRequest) {
   }
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
+    if (req.nextUrl.searchParams.get('target') === 'bridge-manual') {
+      return NextResponse.json(await createManualBackupInMobileBridge());
+    }
     return NextResponse.json(await createAutomaticBackup());
   } catch (error) {
     const message = error instanceof Error ? error.message : '자동 백업을 만들지 못했습니다.';

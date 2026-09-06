@@ -3,9 +3,11 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   getPaperMetadata,
   getPaperMetadataBatch,
+  metadataUpdatesAffectSearchIndex,
   updatePaperMetadata,
 } from '@/lib/paper-metadata';
 import { refreshDocumentSearchIndex } from '@/lib/research-db';
+import { markMobileBridgeExportDirtyForPdfPath } from '@/lib/mobile-bridge';
 
 export async function GET(req: NextRequest) {
   try {
@@ -47,7 +49,12 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ error: 'PDF 경로가 필요합니다.' }, { status: 400 });
     }
     const metadata = await updatePaperMetadata(pdfPath, updates);
-    await refreshDocumentSearchIndex(pdfPath);
+    if (metadataUpdatesAffectSearchIndex(updates)) {
+      await refreshDocumentSearchIndex(pdfPath);
+    }
+    if (Object.prototype.hasOwnProperty.call(updates, 'noteMarkdown')) {
+      await markMobileBridgeExportDirtyForPdfPath(pdfPath).catch(() => undefined);
+    }
     return NextResponse.json(metadata);
   } catch (error) {
     const message = error instanceof Error ? error.message : '논문 정보를 저장하지 못했습니다.';

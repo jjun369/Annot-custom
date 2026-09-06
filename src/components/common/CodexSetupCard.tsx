@@ -11,6 +11,7 @@ interface CodexSetupStatus {
   setupUrl?: string;
   version?: string;
   authMethod?: string;
+  transport?: 'cli' | 'account-api';
   error?: string;
 }
 
@@ -83,7 +84,9 @@ export function CodexSetupCard({ compact = false, onStatusChange }: CodexSetupCa
             <span className="text-sm font-semibold text-on-surface">
               {!status ? 'Codex 확인 중'
                 : !status.installed ? 'AI 연결 프로그램이 필요합니다'
-                  : status.authenticated ? 'Codex 연결 완료' : 'Codex 로그인이 필요합니다'}
+                  : status.authenticated
+                    ? status.transport === 'account-api' ? 'OpenAI 계정 연결 완료' : 'Codex 연결 완료'
+                    : 'Codex 로그인이 필요합니다'}
             </span>
           </div>
           <p className="mt-1.5 text-xs leading-5 text-on-surface-variant">
@@ -93,7 +96,9 @@ export function CodexSetupCard({ compact = false, onStatusChange }: CodexSetupCa
                   ? '공식 Codex 앱 또는 CLI를 설치한 뒤 다시 확인해 주세요. API 키는 필요하지 않습니다.'
                   : '버튼 한 번으로 OpenAI 공식 Codex를 설치합니다. 개발 도구는 필요하지 않습니다.'
                 : status.authenticated
-                  ? `버전 ${status.version || '확인됨'} · ${status.authMethod || 'Codex'} 로그인 연결됨`
+                  ? status.transport === 'account-api'
+                    ? 'OpenAI 계정 로그인 연결됨 · PageDock이 계정 연결로 Codex를 사용합니다.'
+                    : `버전 ${status.version || '확인됨'} · ${status.authMethod || 'Codex'} 로그인 연결됨`
                   : `버전 ${status.version || '확인됨'} · 브라우저에서 ChatGPT 로그인을 완료해 주세요.`}
           </p>
         </div>

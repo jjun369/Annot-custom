@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Send, Sparkles, Loader2, ChevronDown, X, CheckCircle2, AlertCircle, FileDown, RefreshCw } from 'lucide-react';
+import { Send, Sparkles, Loader2, ChevronDown, X, CheckCircle2, AlertCircle, FileDown, RefreshCw, MapPin, Layers3, BookOpenText, ArrowLeftRight, ClipboardPaste, ExternalLink } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -16,10 +16,14 @@ import {
   writeStoredReasoningEffort,
 } from '@/lib/ai-providers/reasoning-policy';
 import { MarkdownPreviewDialog } from '@/components/common/MarkdownPreviewDialog';
+import { KnowledgePromotionDialog, type KnowledgePromotionCandidate } from '@/components/knowledge/KnowledgePromotionDialog';
+import { DeepSeekComparisonDialog, DeepSeekImportDialog, DeepSeekPromptDialog } from '@/components/workspace/DeepSeekWebDialogs';
 import { buildSessionSummaryMarkdown, getSessionSummaryMarkdownFileName } from '@/lib/session-summary-markdown';
 import { useWorkspace } from '@/lib/workspace-store';
+import { buildDeepSeekWebPrompt, canRequestDeepSeekWebPerspective, DEEPSEEK_WEB_URL, isDeepSeekWebManualPerspective } from '@/lib/deepseek-web-bridge';
 import { AI_PROVIDER_EVENT, readStoredAIProvider } from '@/lib/provider-preferences';
-import { AIProvider, ChatMessage, ReasoningEffort, Session, SessionKind, SessionTurnSummary } from '@/types';
+import { AIProvider, ChatMessage, ChatSecondaryPerspective, ChatSourceContext, ReasoningEffort, Session, SessionKind, SessionTurnSummary } from '@/types';
+import { useFeedback } from '@/components/common/FeedbackProvider';
 import {
   CHAT_FONT_SIZE_EVENT,
   DEFAULT_CHAT_FONT_SIZE,
@@ -88,6 +92,21 @@ type ChatStreamEvent =
 
 type SummaryStatus = 'idle' | 'generating' | 'saved' | 'error';
 
+interface SendPromptOptions {
+  prompt: string;
+  sourceContext?: ChatSourceContext;
+  displayContent?: string;
+}
+
+interface DeepSeekPerspectiveTarget {
+  sessionId: string;
+  folderPath: string;
+  assistantMessageId: string;
+  questionMessageId: string;
+  prompt: string;
+  requestedAt: string;
+}
+
 interface SessionUiState {
   isLoading: boolean;
   sessionLoading: boolean;
@@ -126,6 +145,7 @@ function createDefaultSessionUiState(): SessionUiState {
 }
 
 export function ChatPanel() {
+  const { notify } = useFeedback();
   const {
     activeSessionFolder,
     activeSessionKind,
@@ -134,6 +154,14 @@ export function ChatPanel() {
     activePdf,
     openSession,
     toggleChat,
+    activePdfPage,
+    pendingChatRequest,
+    consumeChatRequest,
+    navigateToPdfSource,
+    focusChatMessageId,
+    consumeFocusChatMessage,
+    notifyChatSaved,
+    queueStudyCardRequest,
   } = useWorkspace();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
@@ -155,12 +183,23 @@ export function ChatPanel() {
   const [sessionTitle, setSessionTitle] = useState('');
   const [summaryExportOpen, setSummaryExportOpen] = useState(false);
   const [chatFontSize, setChatFontSize] = useState(DEFAULT_CHAT_FONT_SIZE);
+  const [pdfScope, setPdfScope] = useState<'pdf' | 'page'>('pdf');
+  const [knowledgePromotionCandidate, setKnowledgePromotionCandidate] = useState<KnowledgePromotionCandidate | null>(null);
+  const [deepSeekPromptTarget, setDeepSeekPromptTarget] = useState<DeepSeekPerspectiveTarget | null>(null);
+  const [deepSeekRequestedTargets, setDeepSeekRequestedTargets] = useState<Record<string, DeepSeekPerspectiveTarget>>({});
+  const [deepSeekImportTarget, setDeepSeekImportTarget] = useState<DeepSeekPerspectiveTarget | null>(null);
+  const [deepSeekOpening, setDeepSeekOpening] = useState(false);
+  const [deepSeekImporting, setDeepSeekImporting] = useState(false);
+  const [deepSeekComparison, setDeepSeekComparison] = useState<{ primaryAnswer: string; perspective: ChatSecondaryPerspective } | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const skipSessionHydrationRef = useRef<string | null>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const sessionUiMapRef = useRef<Record<string, SessionUiState>>({});
+  const pendingRequestIdsRef = useRef<Set<string>>(new Set());
+  const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const sendPromptRef = useRef<(options: SendPromptOptions) => Promise<void>>(async () => undefined);
 
   const sessionLabel = activeSessionKind === 'pdf' ? 'PDF 대화' : '폴더 대화';
   const exportSession = useMemo<Session>(() => ({
@@ -726,6 +765,7 @@ export function ChatPanel() {
         provider: event.provider || current.provider,
         title: event.session?.title || current.title,
       }));
+      notifyChatSaved();
       return;
     }
 
@@ -749,17 +789,20 @@ export function ChatPanel() {
     }
   };
 
-  const handleSend = async () => {
-    if (!input.trim() || isLoading || !activeSessionFolder || !activeSessionKind) return;
-    const prompt = input.trim();
-    setInput('');
+  const sendPrompt = async ({
+    prompt,
+    sourceContext,
+    displayContent,
+  }: SendPromptOptions) => {
+    if (!prompt.trim() || isLoading || !activeSessionFolder || !activeSessionKind) return;
     let targetSessionId: string | null = null;
 
     const userMessage = {
       id: `c${Date.now()}`,
       role: 'user' as const,
-      content: prompt,
+      content: displayContent || prompt.trim(),
       timestamp: new Date().toISOString(),
+      sourceContext,
     };
 
     try {
@@ -786,12 +829,13 @@ export function ChatPanel() {
         body: JSON.stringify({
           folderPath: activeSessionFolder,
           sessionId,
-          prompt: userMessage.content,
+          prompt: prompt.trim(),
           model: selectedModel,
           reasoningEffort: selectedReasoningEffort,
           currentPdfPath: activeSessionKind === 'pdf'
             ? (activeSessionPdfPath || activePdf?.path || null)
             : (activePdf?.path || null),
+          sourceContext,
         }),
       });
 
@@ -867,6 +911,47 @@ export function ChatPanel() {
       }
     }
   };
+  sendPromptRef.current = sendPrompt;
+
+  const handleSend = () => {
+    const prompt = input.trim();
+    if (!prompt || isLoading) return;
+    const sourceContext = activeSessionKind === 'pdf'
+      ? {
+        id: crypto.randomUUID(),
+        scope: pdfScope,
+        documentId: activePdf?.documentId,
+        page: pdfScope === 'page' ? activePdfPage : undefined,
+      } satisfies ChatSourceContext
+      : undefined;
+    setInput('');
+    void sendPrompt({ prompt, sourceContext });
+  };
+
+  useEffect(() => {
+    const request = pendingChatRequest;
+    if (!request || pendingRequestIdsRef.current.has(request.id)) return;
+    pendingRequestIdsRef.current.add(request.id);
+    consumeChatRequest(request.id);
+    if (request.autoSend) {
+      void sendPromptRef.current({
+        prompt: request.prompt,
+        sourceContext: request.sourceContext,
+        displayContent: request.displayContent,
+      });
+    } else {
+      setInput(request.prompt);
+      inputRef.current?.focus();
+    }
+  }, [consumeChatRequest, pendingChatRequest]);
+
+  useEffect(() => {
+    if (!focusChatMessageId) return;
+    const target = messageRefs.current[focusChatMessageId];
+    if (!target) return;
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    consumeFocusChatMessage(focusChatMessageId);
+  }, [consumeFocusChatMessage, focusChatMessageId, messages]);
 
   const displayName = (modelId: string) => {
     if (modelId === AUTO_MODEL_ID) return getAutoModelLabel(selectedProvider);
@@ -991,6 +1076,256 @@ export function ChatPanel() {
     '연구 방법과 결과를 짧게 정리해줘.',
     '이 논문의 한계와 주의할 점을 알려줘.',
   ];
+  const activeTurnSourceContext = useMemo(() => {
+    if (!isLoading) return undefined;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message?.role === 'user' && message.sourceContext) return message.sourceContext;
+    }
+    return undefined;
+  }, [isLoading, messages]);
+  const composerSourceContext = activeTurnSourceContext ?? (activeSessionKind === 'pdf'
+    ? {
+      id: 'composer-scope-preview',
+      scope: pdfScope,
+      documentId: activePdf?.documentId,
+      page: pdfScope === 'page' ? activePdfPage : undefined,
+    } satisfies ChatSourceContext
+    : undefined);
+  const composerSourceLabel = composerSourceContext?.scope === 'selection'
+    ? `선택문 1${composerSourceContext.page ? ` · p.${composerSourceContext.page}` : ''}`
+    : composerSourceContext?.scope === 'page'
+      ? `현재 페이지 · p.${composerSourceContext.page}`
+      : composerSourceContext?.scope === 'pdf'
+        ? '현재 PDF'
+        : '';
+  const getSourceChipLabel = (sourceContext: ChatSourceContext): string => {
+    if (sourceContext.scope === 'selection') return `p.${sourceContext.page} · 선택 영역`;
+    if (sourceContext.scope === 'page') return `p.${sourceContext.page} · 현재 페이지`;
+    return '현재 PDF';
+  };
+  const openSourceContext = (sourceContext: ChatSourceContext) => {
+    const pdfPath = activeSessionPdfPath || activePdf?.path;
+    if (!pdfPath || !sourceContext.page) return;
+    navigateToPdfSource({
+      id: crypto.randomUUID(),
+      pdfPath,
+      page: sourceContext.page,
+      rects: sourceContext.rects,
+    });
+  };
+  const renderSourceChip = (sourceContext: ChatSourceContext | undefined) => {
+    if (!sourceContext) return null;
+    const canNavigate = Boolean(
+      (activeSessionPdfPath || activePdf?.path)
+      && sourceContext.page
+      && (typeof window === 'undefined' || window.location.pathname !== '/chat-window'),
+    );
+    return (
+      <button
+        type="button"
+        onClick={() => openSourceContext(sourceContext)}
+        disabled={!canNavigate}
+        className="mt-1 inline-flex items-center gap-1 rounded-full border border-outline-variant/25 bg-surface-container-lowest px-2 py-1 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container disabled:cursor-default disabled:hover:bg-surface-container-lowest"
+        title={sourceContext.scope === 'selection' ? sourceContext.text?.slice(0, 240) : getSourceChipLabel(sourceContext)}
+      >
+        <MapPin size={10} aria-hidden="true" />
+        {getSourceChipLabel(sourceContext)}
+      </button>
+    );
+  };
+  const canCreateStudyCard = (message: ChatMessage): boolean => Boolean(
+    message.role === 'assistant'
+    && message.replyToMessageId
+    && message.sourceContext?.page
+    && (message.sourceContext.scope === 'selection' || message.sourceContext.scope === 'page')
+    && (activeSessionPdfPath || activePdf?.path)
+    && (typeof window === 'undefined' || window.location.pathname !== '/chat-window'),
+  );
+  const createStudyCardFromAssistant = (message: ChatMessage) => {
+    if (!message.replyToMessageId || !message.sourceContext) return;
+    const pdfPath = activeSessionPdfPath || activePdf?.path;
+    const question = messages.find((candidate) => candidate.id === message.replyToMessageId);
+    if (!pdfPath || !question || !message.sourceContext.page) return;
+    queueStudyCardRequest({
+      id: crypto.randomUUID(),
+      pdfPath,
+      sourceContext: message.sourceContext,
+      front: question.content,
+      back: message.content,
+      origin: 'chat',
+    });
+  };
+  const canPromoteKnowledge = (message: ChatMessage): boolean => Boolean(
+    message.role === 'assistant'
+    && message.content.trim()
+    && !message.content.trim().startsWith('**오류'),
+  );
+  const promoteAssistantMessage = (message: ChatMessage) => {
+    if (!message.content.trim()) return;
+    setKnowledgePromotionCandidate({
+      text: message.content,
+      sourceName: `${activePdf?.name || sessionTitle || 'AI 대화'} · AI 답변`,
+      defaultKind: 'ai_inference',
+      sourceAnchors: message.sourceContext ? [message.sourceContext] : undefined,
+      provenance: {
+        ai: {
+          answerId: message.id,
+          provider: selectedProvider,
+          ...(message.model ? { model: message.model } : {}),
+          generatedAt: message.timestamp,
+        },
+      },
+      originDate: message.timestamp.slice(0, 10),
+    });
+  };
+
+  const requestDeepSeekPerspective = (message: ChatMessage) => {
+    if (!activeSessionId || !activeSessionFolder || !canRequestDeepSeekWebPerspective(message)) return;
+    const question = messages.find((candidate) => candidate.id === message.replyToMessageId);
+    if (!question || question.role !== 'user') {
+      notify('연결된 원래 질문을 찾지 못했습니다.', 'error');
+      return;
+    }
+
+    setDeepSeekPromptTarget({
+      sessionId: activeSessionId,
+      folderPath: activeSessionFolder,
+      assistantMessageId: message.id,
+      questionMessageId: question.id,
+      prompt: buildDeepSeekWebPrompt({
+        sourceText: message.sourceContext.text ?? '',
+        question: question.content,
+      }),
+      requestedAt: new Date().toISOString(),
+    });
+  };
+
+  const copyPromptAndOpenDeepSeek = async () => {
+    const target = deepSeekPromptTarget;
+    if (!target) return;
+    setDeepSeekOpening(true);
+    try {
+      if (window.pageDockDesktop?.deepseekWeb) {
+        await window.pageDockDesktop.deepseekWeb.copyPrompt(target.prompt);
+        const result = await window.pageDockDesktop.deepseekWeb.open();
+        notify(
+          result.mode === 'external-fallback'
+            ? '질문을 복사했고 기본 브라우저에서 DeepSeek를 열었습니다. 붙여넣은 뒤 직접 전송하세요.'
+            : '질문을 복사했고 DeepSeek 웹 창을 열었습니다. 붙여넣은 뒤 직접 전송하세요.',
+          'info',
+        );
+      } else {
+        const externalWindow = window.open(DEEPSEEK_WEB_URL, '_blank', 'noopener,noreferrer');
+        if (!externalWindow) {
+          throw new Error('DeepSeek 웹 창을 열지 못했습니다. 브라우저의 팝업 차단을 확인해 주세요.');
+        }
+        if (!navigator.clipboard?.writeText) {
+          throw new Error('질문을 복사하지 못했습니다. 아래 내용을 직접 선택해 복사해 주세요.');
+        }
+        await navigator.clipboard.writeText(target.prompt);
+        notify('질문을 복사했고 기본 브라우저에서 DeepSeek를 열었습니다. 붙여넣은 뒤 직접 전송하세요.', 'info');
+      }
+
+      setDeepSeekRequestedTargets((current) => ({ ...current, [target.assistantMessageId]: target }));
+      setDeepSeekPromptTarget(null);
+    } finally {
+      setDeepSeekOpening(false);
+    }
+  };
+
+  const readClipboardForDeepSeekImport = async (): Promise<string> => {
+    if (window.pageDockDesktop?.deepseekWeb) {
+      return await window.pageDockDesktop.deepseekWeb.readClipboardOnUserAction();
+    }
+    if (!navigator.clipboard?.readText) {
+      throw new Error('Clipboard API unavailable');
+    }
+    return await navigator.clipboard.readText();
+  };
+
+  const importDeepSeekPerspective = async (responseText: string) => {
+    const target = deepSeekImportTarget;
+    if (!target) return;
+    setDeepSeekImporting(true);
+    try {
+      const response = await fetch('/api/sessions/deepseek-perspectives', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folderPath: target.folderPath,
+          sessionId: target.sessionId,
+          assistantMessageId: target.assistantMessageId,
+          promptSnapshot: target.prompt,
+          requestedAt: target.requestedAt,
+          responseText,
+        }),
+      });
+      const data = await response.json().catch(() => null);
+      if (!response.ok || !data?.session) {
+        throw new Error(typeof data?.error === 'string' ? data.error : 'DeepSeek 답변을 저장하지 못했습니다.');
+      }
+
+      commitSessionUiState(target.sessionId, (current) => ({
+        ...current,
+        messages: Array.isArray(data.session.messages) ? data.session.messages : current.messages,
+      }));
+      setDeepSeekRequestedTargets((current) => {
+        const next = { ...current };
+        delete next[target.assistantMessageId];
+        return next;
+      });
+      setDeepSeekImportTarget(null);
+      notifyChatSaved();
+      notify('DeepSeek 답변을 원문과 질문에 연결해 저장했습니다.', 'success');
+    } catch (error) {
+      notify(error instanceof Error ? error.message : 'DeepSeek 답변을 저장하지 못했습니다.', 'error');
+    } finally {
+      setDeepSeekImporting(false);
+    }
+  };
+
+  const renderDeepSeekActions = (message: ChatMessage) => {
+    if (!canRequestDeepSeekWebPerspective(message)) return null;
+    const perspective = [...(message.secondaryPerspectives ?? [])]
+      .reverse()
+      .find((candidate) => isDeepSeekWebManualPerspective(candidate));
+    const pendingImport = deepSeekRequestedTargets[message.id];
+
+    return (
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        {perspective ? (
+          <button
+            type="button"
+            onClick={() => setDeepSeekComparison({ primaryAnswer: message.content, perspective })}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2 py-1 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"
+          >
+            <ArrowLeftRight size={11} aria-hidden="true" />
+            DeepSeek와 비교
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={() => requestDeepSeekPerspective(message)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2 py-1 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"
+          >
+            <ExternalLink size={11} aria-hidden="true" />
+            다른 관점 보기
+          </button>
+        )}
+        {!perspective && pendingImport && (
+          <button
+            type="button"
+            onClick={() => setDeepSeekImportTarget(pendingImport)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2 py-1 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"
+          >
+            <ClipboardPaste size={11} aria-hidden="true" />
+            DeepSeek 답변 가져오기
+          </button>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="h-full flex flex-col">
@@ -1190,11 +1525,12 @@ export function ChatPanel() {
         )}
 
         {messages.map((msg) => (
-          <div key={msg.id}>
+          <div key={msg.id} ref={(node) => { messageRefs.current[msg.id] = node; }}>
             {msg.role === 'user' ? (
               <div className="flex justify-end">
                 <div className="max-w-[90%] bg-primary text-on-primary px-3.5 py-2.5 rounded-2xl rounded-tr-sm">
                   <p className="selectable-text whitespace-pre-wrap break-words" style={userFontStyle}>{msg.content}</p>
+                  {renderSourceChip(msg.sourceContext)}
                 </div>
               </div>
             ) : (
@@ -1249,6 +1585,28 @@ export function ChatPanel() {
                       {normalizeMathMarkdown(msg.content)}
                     </ReactMarkdown>
                   </div>
+                  {renderSourceChip(msg.sourceContext)}
+                  {renderDeepSeekActions(msg)}
+                  {canCreateStudyCard(msg) && (
+                    <button
+                      type="button"
+                      onClick={() => createStudyCardFromAssistant(msg)}
+                      className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2 py-1 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"
+                    >
+                      <Layers3 size={11} aria-hidden="true" />
+                      복습 카드로 저장
+                    </button>
+                  )}
+                  {canPromoteKnowledge(msg) && (
+                    <button
+                      type="button"
+                      onClick={() => promoteAssistantMessage(msg)}
+                      className="mt-2 ml-2 inline-flex items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2 py-1 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"
+                    >
+                      <BookOpenText size={11} aria-hidden="true" />
+                      지식 후보로 보내기
+                    </button>
+                  )}
                 </div>
               </div>
             )}
@@ -1299,6 +1657,22 @@ export function ChatPanel() {
 
       {/* Input */}
       <div className="px-4 py-3 shrink-0">
+        {activeSessionKind === 'pdf' && composerSourceContext && (
+          <div
+            className="mb-2 rounded-lg border border-primary/20 bg-primary-container/35 px-2.5 py-2 text-[10px] leading-4 text-on-primary-container"
+            aria-label="이번 AI 질문의 전송 범위"
+          >
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 font-semibold">
+              <span>전송 범위</span>
+              <span className="rounded-full bg-surface-container-lowest px-1.5 py-0.5 text-on-surface">{composerSourceLabel}</span>
+              <span className="rounded-full border border-outline-variant/25 bg-surface-container-lowest px-1.5 py-0.5 text-on-surface-variant">제외됨 · 개인·업무·Knowledge 메모</span>
+              <span className="text-on-surface-variant">외부 AI</span>
+            </div>
+            <p className="mt-1 text-on-surface-variant">
+              선택한 범위의 PDF 내용만 AI에 전송합니다. 별도 확인 창은 표시하지 않습니다.
+            </p>
+          </div>
+        )}
         <div className="mb-2 flex gap-1.5 overflow-x-auto">
           {quickPrompts.map((prompt) => (
             <button
@@ -1315,6 +1689,19 @@ export function ChatPanel() {
           ))}
         </div>
         <div className="flex items-end gap-2 bg-surface-container-low rounded-xl px-3 py-2.5">
+          {activeSessionKind === 'pdf' && (
+            <select
+              value={pdfScope}
+              onChange={(event) => setPdfScope(event.target.value === 'page' ? 'page' : 'pdf')}
+              disabled={isLoading}
+              className="h-7 max-w-24 shrink-0 rounded-md bg-surface-container-high px-1.5 text-[10px] font-semibold text-on-surface-variant outline-none disabled:opacity-50"
+              aria-label="PDF 질문 출처 범위"
+              title={pdfScope === 'page' ? `현재 페이지 ${activePdfPage}` : '현재 PDF'}
+            >
+              <option value="pdf">현재 PDF</option>
+              <option value="page">현재 페이지</option>
+            </select>
+          )}
           <textarea
             ref={inputRef}
             value={input}
@@ -1347,6 +1734,32 @@ export function ChatPanel() {
         confirmLabel="Markdown 내려받기"
         onCancel={() => setSummaryExportOpen(false)}
         onConfirm={handleSummaryExport}
+      />
+      {deepSeekPromptTarget && (
+        <DeepSeekPromptDialog
+          prompt={deepSeekPromptTarget.prompt}
+          opening={deepSeekOpening}
+          onClose={() => setDeepSeekPromptTarget(null)}
+          onCopyAndOpen={copyPromptAndOpenDeepSeek}
+        />
+      )}
+      {deepSeekImportTarget && (
+        <DeepSeekImportDialog
+          saving={deepSeekImporting}
+          onClose={() => setDeepSeekImportTarget(null)}
+          onSave={importDeepSeekPerspective}
+          onReadClipboard={readClipboardForDeepSeekImport}
+        />
+      )}
+      <DeepSeekComparisonDialog
+        open={Boolean(deepSeekComparison)}
+        primaryAnswer={deepSeekComparison?.primaryAnswer ?? ''}
+        perspective={deepSeekComparison?.perspective ?? null}
+        onClose={() => setDeepSeekComparison(null)}
+      />
+      <KnowledgePromotionDialog
+        candidate={knowledgePromotionCandidate}
+        onClose={() => setKnowledgePromotionCandidate(null)}
       />
     </div>
   );

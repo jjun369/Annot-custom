@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import { createReadStream, createWriteStream, promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -15,9 +15,14 @@ import { APP_VERSION } from '@/lib/app-info';
 import { getCommonPythonCandidateBases } from '@/lib/platform-paths';
 import { buildExecutableCandidates, resolveExecutable } from '@/lib/command-runtime';
 import { exportResearchData, importResearchData } from '@/lib/research-db';
+import { AUTOMATIC_BACKUP_RETENTION } from '@/lib/automatic-backup';
+import {
+  copyPortableBackupToMobileBridge,
+  pruneMobileBridgeAutomaticBackups,
+  writeManualPortableBackupToMobileBridge,
+} from '@/lib/mobile-bridge';
 
 const BACKUP_VERSION = 2;
-const BACKUP_RETENTION = 7;
 
 interface BackupFileRecord {
   path: string;
@@ -167,32 +172,95 @@ export async function createPortableBackupStream(includePdfs = true): Promise<No
   });
 }
 
-async function writePortableBackupFile(filePath: string, includePdfs: boolean): Promise<number> {
+export async function verifyPortableBackupFile(filePath: string): Promise<void> {
+  const data = await fs.readFile(filePath);
+  const zip = await JSZip.loadAsync(data, { checkCRC32: true });
+  const manifestFile = zip.file('manifest.json');
+  if (!manifestFile) throw new Error('백업 설명 파일을 찾지 못했습니다.');
+  const manifest = JSON.parse(await manifestFile.async('string')) as BackupManifest;
+  if (manifest.format !== 'annot-portable-backup' || manifest.version > BACKUP_VERSION || !Array.isArray(manifest.files)) {
+    throw new Error('백업 형식을 검증하지 못했습니다.');
+  }
+  for (const record of manifest.files) {
+    const entry = zip.file(`library/${safeArchivePath(record.path)}`);
+    if (!entry) throw new Error(`백업 파일이 없습니다: ${record.path}`);
+    const payload = Buffer.from(await entry.async('uint8array'));
+    if (payload.byteLength !== record.size || createHash('sha256').update(payload).digest('hex') !== record.sha256) {
+      throw new Error(`백업 파일 검증에 실패했습니다: ${record.path}`);
+    }
+  }
+}
+
+export async function writePortableBackupArchive(filePath: string, includePdfs: boolean): Promise<number> {
   const stream = await createPortableBackupStream(includePdfs);
-  await pipeline(stream as Parameters<typeof pipeline>[0], createWriteStream(filePath));
+  await pipeline(stream as Parameters<typeof pipeline>[0], createWriteStream(filePath, { flags: 'wx' }));
+  await verifyPortableBackupFile(filePath);
   return (await fs.stat(filePath)).size;
 }
 
 function timestampForName(date = new Date()): string {
-  return date.toISOString().replace(/[-:]/g, '').replace(/\.\d{3}Z$/, '').replace('T', '-');
+  return date.toISOString()
+    .replace(/[-:]/g, '')
+    .replace(/\.(\d{3})Z$/, '-$1')
+    .replace('T', '-');
 }
 
-export async function createAutomaticBackup(): Promise<{ fileName: string; size: number }> {
-  // Daily snapshots intentionally omit PDFs. OneDrive already carries the originals,
-  // while keeping seven full PDF copies would multiply storage use dramatically.
+export async function createAutomaticBackup(): Promise<{
+  fileName: string;
+  size: number;
+  bridgeCopied: boolean;
+  bridgeError?: string;
+}> {
+  // Daily snapshots intentionally omit PDFs. Originals may already be protected by
+  // the user's file-sync provider, and repeated full PDF copies grow very quickly.
   const backupDirectory = path.join(getWorkspaceRoot(), '.annot', 'backups');
   await fs.mkdir(backupDirectory, { recursive: true });
   const fileName = `pagedock-auto-${timestampForName()}.zip`;
-  const size = await writePortableBackupFile(path.join(backupDirectory, fileName), false);
+  const destination = path.join(backupDirectory, fileName);
+  const partial = `${destination}.${randomUUID()}.partial`;
+  let size = 0;
+  try {
+    size = await writePortableBackupArchive(partial, false);
+    try {
+      await fs.rename(partial, destination);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== 'EEXIST' && code !== 'EPERM' && code !== 'ENOTEMPTY') throw error;
+      await fs.rm(destination, { force: true });
+      await fs.rename(partial, destination);
+    }
+  } finally {
+    await fs.rm(partial, { force: true });
+  }
+
+  let bridgeCopied = false;
+  let bridgeError: string | undefined;
+  try {
+    const bridge = await copyPortableBackupToMobileBridge(destination, fileName, 'auto');
+    bridgeCopied = bridge.copied;
+    if (bridgeCopied) await pruneMobileBridgeAutomaticBackups(AUTOMATIC_BACKUP_RETENTION);
+  } catch (error) {
+    bridgeError = error instanceof Error ? error.message : '연결 폴더에 자동 백업을 복사하지 못했습니다.';
+  }
 
   const entries = (await fs.readdir(backupDirectory, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && /^(?:pagedock|annot)-auto-.*\.zip$/i.test(entry.name))
     .map((entry) => entry.name)
     .sort((a, b) => b.localeCompare(a));
-  await Promise.all(entries.slice(BACKUP_RETENTION).map((name) => (
+  await Promise.all(entries.slice(AUTOMATIC_BACKUP_RETENTION).map((name) => (
     fs.rm(path.join(backupDirectory, name), { force: true })
   )));
-  return { fileName, size };
+  return { fileName, size, bridgeCopied, bridgeError };
+}
+
+export async function createManualBackupInMobileBridge(): Promise<{
+  fileName: string;
+  size: number;
+  destination: string;
+}> {
+  return writeManualPortableBackupToMobileBridge(async (temporaryPath) => {
+    await writePortableBackupArchive(temporaryPath, true);
+  });
 }
 
 function safeArchivePath(value: string): string {
@@ -647,7 +715,7 @@ export async function getLibraryInfo() {
   return {
     root,
     oneDriveLikely: /(^|[\\/])OneDrive([\\/]|$)/i.test(root),
-    backupRetention: BACKUP_RETENTION,
+    backupRetention: AUTOMATIC_BACKUP_RETENTION,
     libraryExists: true,
     latestBackup,
   };

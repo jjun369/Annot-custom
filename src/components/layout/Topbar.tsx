@@ -1,9 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Search, MessageSquare, PictureInPicture2, X, Loader2, FileText } from 'lucide-react';
+import { Search, MessageSquare, X, Loader2, FileText } from 'lucide-react';
 import { useWorkspace } from '@/lib/workspace-store';
-import { useFeedback } from '@/components/common/FeedbackProvider';
 import { PaperMetadata, TreeNode } from '@/types';
 import { AppHeader } from '@/components/layout/AppHeader';
 
@@ -16,14 +15,10 @@ interface SearchResult {
 export function Topbar() {
   const {
     activeSessionFolder,
-    activeSessionKind,
-    activeSessionPdfPath,
-    activeSessionId,
     chatOpen,
     toggleChat,
     openPdf,
   } = useWorkspace();
-  const { notify } = useFeedback();
   const [searchOpen, setSearchOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<SearchResult[]>([]);
@@ -75,27 +70,6 @@ export function Topbar() {
     };
   }, [query, searchOpen]);
 
-  const detachChat = () => {
-    if (!activeSessionFolder || !activeSessionKind) return;
-    const params = new URLSearchParams({
-      folderPath: activeSessionFolder,
-      sessionKind: activeSessionKind,
-    });
-    if (activeSessionPdfPath) params.set('pdfPath', activeSessionPdfPath);
-    if (activeSessionId) params.set('sessionId', activeSessionId);
-    const popup = window.open(
-      `/chat-window?${params.toString()}`,
-      'pagedock-detached-chat',
-      'popup=yes,width=560,height=860,resizable=yes,scrollbars=no',
-    );
-    if (!popup) {
-      notify('팝업이 차단되었습니다. 이 사이트의 팝업을 허용해 주세요.', 'error');
-      return;
-    }
-    popup.focus();
-    if (chatOpen) toggleChat();
-  };
-
   return (
     <>
       <AppHeader
@@ -103,29 +77,18 @@ export function Topbar() {
         onSearch={() => setSearchOpen(true)}
         actions={activeSessionFolder ? (
           <div className="mr-1 flex items-center gap-1 border-r border-outline-variant/35 pr-2">
-        {activeSessionFolder && (
-          <button
-            onClick={detachChat}
-            className="flex h-9 w-9 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface"
-            title="AI 대화창 분리"
-          >
-            <PictureInPicture2 size={15} strokeWidth={2} />
-          </button>
-        )}
-        {activeSessionFolder && (
-          <button
-            onClick={toggleChat}
-            className={`flex h-9 items-center gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors ${
-              chatOpen
-                ? 'bg-primary-container text-primary'
-              : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
-            }`}
-            aria-label="AI 대화창 열기 또는 닫기"
-          >
-            <MessageSquare size={15} strokeWidth={2} />
-            <span className="hidden lg:inline">AI 대화</span>
-          </button>
-        )}
+            <button
+              onClick={toggleChat}
+              className={`flex h-9 items-center gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors ${
+                chatOpen
+                  ? 'bg-primary-container text-primary'
+                  : 'text-on-surface-variant hover:bg-surface-container hover:text-on-surface'
+              }`}
+              aria-label="AI 대화창 열기 또는 닫기"
+            >
+              <MessageSquare size={15} strokeWidth={2} />
+              <span className="hidden lg:inline">AI 대화</span>
+            </button>
           </div>
         ) : undefined}
       />
@@ -143,7 +106,7 @@ export function Topbar() {
                 ref={searchInputRef}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
-                placeholder="파일명, 태그, 요약, 개인 메모 검색"
+                placeholder="제목, 본문, 태그, 메모 검색"
                 className="min-w-0 flex-1 bg-transparent text-sm text-on-surface outline-none placeholder:text-outline"
               />
               <kbd className="hidden rounded bg-surface-container px-2 py-1 text-[10px] text-outline sm:inline">ESC</kbd>
@@ -167,7 +130,10 @@ export function Topbar() {
                 </div>
               )}
               {!searching && query.trim().length >= 2 && results.length === 0 && (
-                <div className="px-3 py-5 text-xs text-on-surface-variant">검색 결과가 없습니다.</div>
+                <div className="px-3 py-5 text-xs leading-5 text-on-surface-variant" role="status">
+                  <p><span className="font-semibold text-on-surface">“{query.trim()}”</span>과 일치하는 항목이 없습니다.</p>
+                  <p className="mt-1">다른 단어로 찾아보거나, 현재 PDF 안의 문장은 Reader 상단 검색을 사용해 보세요.</p>
+                </div>
               )}
               {!searching && results.map((result) => (
                 <button
@@ -182,6 +148,7 @@ export function Topbar() {
                   <span className="min-w-0 flex-1">
                     <span className="block truncate text-sm font-semibold text-on-surface">{result.pdf.name}</span>
                     <span className="mt-0.5 block truncate text-[11px] text-outline">{result.pdf.path}</span>
+                    <span className="mt-1 block text-[10px] font-semibold text-primary">논문 파일 · 저장한 메모까지 검색</span>
                     <span className="mt-1 block text-[11px] text-on-surface-variant">
                       {result.matches.join(' · ')}
                       {result.metadata.summaryKo ? ` · ${result.metadata.summaryKo.split('\n')[0]}` : ''}

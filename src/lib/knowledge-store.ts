@@ -3,11 +3,39 @@ import { promises as fs } from 'fs';
 import path from 'path';
 
 import { getWorkspaceRoot } from '@/lib/annot-sessions';
+import { normalizeChatSourceContext } from '@/lib/ai-providers/source-context';
+import type { ChatSourceContext } from '@/types';
 
 export type KnowledgeNoteStatus = 'inbox' | 'review' | 'integrated' | 'dismissed' | 'error';
 export type KnowledgeReviewStatus = 'pending' | 'accepted' | 'rejected';
 export type KnowledgeReviewKind = 'create' | 'update' | 'conflict';
 export type KnowledgeConflictStatus = 'open' | 'resolved' | 'dismissed';
+export type KnowledgeProvenanceKind = 'literature_claim' | 'work_observation' | 'personal_hypothesis' | 'ai_inference';
+export type KnowledgeReviewReason = 'manual' | 'source_changed';
+
+/**
+ * Provenance says where a captured statement came from. It deliberately does
+ * not rank whether that statement is true, current, or more valuable than a
+ * different type of evidence.
+ */
+export interface KnowledgeProvenance {
+  kind: KnowledgeProvenanceKind;
+  /** A publication, observation, authoring, or answer-generation date. */
+  originDate?: string;
+  ai?: {
+    answerId?: string;
+    provider?: string;
+    model?: string;
+    generatedAt?: string;
+  };
+}
+
+/** User-controlled attention state. Absence means no warning or expiry. */
+export interface KnowledgeTrustState {
+  lastReviewedAt?: string;
+  reviewRequestedAt?: string;
+  reviewReason?: KnowledgeReviewReason;
+}
 
 export interface KnowledgeNote {
   id: string;
@@ -17,6 +45,9 @@ export interface KnowledgeNote {
   title: string;
   summary: string;
   status: KnowledgeNoteStatus;
+  provenance?: KnowledgeProvenance;
+  /** Existing Reader/Chat anchors are reused; this is not another PDF locator. */
+  sourceAnchors?: ChatSourceContext[];
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -33,6 +64,7 @@ export interface KnowledgeTopicRevision {
   restoredFromRevision?: number;
   editedBy?: 'user';
   changeNote?: string;
+  provenance?: KnowledgeProvenance;
 }
 
 export interface KnowledgeRevisionTrashItem {
@@ -64,6 +96,8 @@ export interface KnowledgeTopic {
   sourceNoteIds: string[];
   revision: number;
   revisions: KnowledgeTopicRevision[];
+  provenance?: KnowledgeProvenance;
+  trust?: KnowledgeTrustState;
   createdAt: string;
   updatedAt: string;
 }
@@ -114,6 +148,8 @@ export interface KnowledgeSnapshot {
 export interface CaptureKnowledgeInput {
   text: string;
   sourceName?: string;
+  provenance?: KnowledgeProvenance;
+  sourceAnchors?: ChatSourceContext[];
 }
 
 export interface CaptureKnowledgeResult {
@@ -162,6 +198,77 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
+const PROVENANCE_KINDS: readonly KnowledgeProvenanceKind[] = [
+  'literature_claim',
+  'work_observation',
+  'personal_hypothesis',
+  'ai_inference',
+];
+
+function optionalIsoDate(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  return /^\d{4}-\d{2}-\d{2}$/.test(trimmed) || /^\d{4}-\d{2}$/.test(trimmed) ? trimmed : undefined;
+}
+
+function optionalIsoTimestamp(value: unknown): string | undefined {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  return Number.isNaN(Date.parse(value)) ? undefined : value;
+}
+
+export function normalizeKnowledgeProvenance(value: unknown): KnowledgeProvenance | undefined {
+  const record = asRecord(value);
+  const kind = record.kind;
+  if (typeof kind !== 'string' || !PROVENANCE_KINDS.includes(kind as KnowledgeProvenanceKind)) {
+    return undefined;
+  }
+  const aiRecord = asRecord(record.ai);
+  const ai = kind === 'ai_inference'
+    ? {
+      ...(typeof aiRecord.answerId === 'string' && aiRecord.answerId.trim()
+        ? { answerId: aiRecord.answerId.trim().slice(0, 200) }
+        : {}),
+      ...(typeof aiRecord.provider === 'string' && aiRecord.provider.trim()
+        ? { provider: aiRecord.provider.trim().slice(0, 80) }
+        : {}),
+      ...(typeof aiRecord.model === 'string' && aiRecord.model.trim()
+        ? { model: aiRecord.model.trim().slice(0, 160) }
+        : {}),
+      ...(optionalIsoTimestamp(aiRecord.generatedAt) ? { generatedAt: optionalIsoTimestamp(aiRecord.generatedAt) } : {}),
+    }
+    : undefined;
+
+  return {
+    kind: kind as KnowledgeProvenanceKind,
+    ...(optionalIsoDate(record.originDate) ? { originDate: optionalIsoDate(record.originDate) } : {}),
+    ...(ai && Object.keys(ai).length > 0 ? { ai } : {}),
+  };
+}
+
+export function normalizeKnowledgeSourceAnchors(value: unknown): ChatSourceContext[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const anchors = value
+    .slice(0, 16)
+    .map((entry) => normalizeChatSourceContext(entry))
+    .filter((entry): entry is ChatSourceContext => Boolean(entry));
+  return anchors.length ? anchors : undefined;
+}
+
+function normalizeKnowledgeTrust(value: unknown): KnowledgeTrustState | undefined {
+  const record = asRecord(value);
+  const lastReviewedAt = optionalIsoTimestamp(record.lastReviewedAt);
+  const reviewRequestedAt = optionalIsoTimestamp(record.reviewRequestedAt);
+  const reviewReason = record.reviewReason === 'manual' || record.reviewReason === 'source_changed'
+    ? record.reviewReason
+    : undefined;
+  if (!lastReviewedAt && !reviewRequestedAt && !reviewReason) return undefined;
+  return {
+    ...(lastReviewedAt ? { lastReviewedAt } : {}),
+    ...(reviewRequestedAt ? { reviewRequestedAt } : {}),
+    ...(reviewReason ? { reviewReason } : {}),
+  };
+}
+
 function normalizeStore(value: unknown): KnowledgeSnapshot {
   const record = asRecord(value);
   const rawNotes = Array.isArray(record.notes) ? record.notes : [];
@@ -178,6 +285,8 @@ function normalizeStore(value: unknown): KnowledgeSnapshot {
       status: ['inbox', 'review', 'integrated', 'dismissed', 'error'].includes(String(note.status))
         ? String(note.status) as KnowledgeNoteStatus
         : 'inbox',
+      ...(normalizeKnowledgeProvenance(note.provenance) ? { provenance: normalizeKnowledgeProvenance(note.provenance) } : {}),
+      ...(normalizeKnowledgeSourceAnchors(note.sourceAnchors) ? { sourceAnchors: normalizeKnowledgeSourceAnchors(note.sourceAnchors) } : {}),
       ...(typeof note.error === 'string' ? { error: note.error } : {}),
       createdAt: String(note.createdAt ?? timestamp()),
       updatedAt: String(note.updatedAt ?? note.createdAt ?? timestamp()),
@@ -205,6 +314,9 @@ function normalizeStore(value: unknown): KnowledgeSnapshot {
           : {}),
         ...(historical.editedBy === 'user' ? { editedBy: 'user' as const } : {}),
         ...(typeof historical.changeNote === 'string' ? { changeNote: historical.changeNote } : {}),
+        ...(normalizeKnowledgeProvenance(historical.provenance)
+          ? { provenance: normalizeKnowledgeProvenance(historical.provenance) }
+          : {}),
       };
     });
     if (!revisions.length) {
@@ -215,6 +327,9 @@ function normalizeStore(value: unknown): KnowledgeSnapshot {
         bodyMarkdown: String(topic.bodyMarkdown ?? ''),
         sourceNoteIds,
         createdAt: String(topic.updatedAt ?? topic.createdAt ?? timestamp()),
+        ...(normalizeKnowledgeProvenance(topic.provenance)
+          ? { provenance: normalizeKnowledgeProvenance(topic.provenance) }
+          : {}),
       });
     }
     return {
@@ -228,6 +343,8 @@ function normalizeStore(value: unknown): KnowledgeSnapshot {
       revisions,
       createdAt: String(topic.createdAt ?? timestamp()),
       updatedAt: String(topic.updatedAt ?? topic.createdAt ?? timestamp()),
+      ...(normalizeKnowledgeProvenance(topic.provenance) ? { provenance: normalizeKnowledgeProvenance(topic.provenance) } : {}),
+      ...(normalizeKnowledgeTrust(topic.trust) ? { trust: normalizeKnowledgeTrust(topic.trust) } : {}),
     };
   });
 
@@ -370,6 +487,9 @@ function normalizeRevisionTrash(value: unknown): KnowledgeRevisionTrashSnapshot 
             : {}),
           ...(historical.editedBy === 'user' ? { editedBy: 'user' as const } : {}),
           ...(typeof historical.changeNote === 'string' ? { changeNote: historical.changeNote } : {}),
+          ...(normalizeKnowledgeProvenance(historical.provenance)
+            ? { provenance: normalizeKnowledgeProvenance(historical.provenance) }
+            : {}),
         },
         sizeBytes: Math.max(0, Number(entry.sizeBytes ?? 0)),
         deletedAt: String(entry.deletedAt ?? timestamp()),
@@ -440,6 +560,8 @@ export async function captureKnowledgeNotes(inputs: CaptureKnowledgeInput[]): Pr
   const prepared = inputs.map((input) => ({
     text: input.text.trim(),
     sourceName: input.sourceName?.trim() || '직접 입력',
+    provenance: normalizeKnowledgeProvenance(input.provenance),
+    sourceAnchors: normalizeKnowledgeSourceAnchors(input.sourceAnchors),
   })).filter((input) => input.text.length > 0);
   if (!prepared.length) throw new Error('메모 내용이 비어 있습니다.');
   if (prepared.some((input) => input.text.length > 100_000)) {
@@ -466,6 +588,8 @@ export async function captureKnowledgeNotes(inputs: CaptureKnowledgeInput[]): Pr
         title: input.text.split(/\r?\n/, 1)[0].slice(0, 80),
         summary: '',
         status: 'inbox',
+        ...(input.provenance ? { provenance: input.provenance } : {}),
+        ...(input.sourceAnchors ? { sourceAnchors: input.sourceAnchors } : {}),
         createdAt,
         updatedAt: createdAt,
       };
@@ -477,8 +601,12 @@ export async function captureKnowledgeNotes(inputs: CaptureKnowledgeInput[]): Pr
   });
 }
 
-export async function captureKnowledgeNote(rawText: string, sourceName = '직접 입력'): Promise<KnowledgeNote> {
-  const result = await captureKnowledgeNotes([{ text: rawText, sourceName }]);
+export async function captureKnowledgeNote(
+  rawText: string,
+  sourceName = '직접 입력',
+  options: Pick<CaptureKnowledgeInput, 'provenance' | 'sourceAnchors'> = {},
+): Promise<KnowledgeNote> {
+  const result = await captureKnowledgeNotes([{ text: rawText, sourceName, ...options }]);
   if (!result.captured[0]) throw new Error('이미 같은 내용의 메모가 수집되어 있습니다.');
   return result.captured[0];
 }
@@ -577,6 +705,7 @@ function topicRevision(
     ...(options.restoredFromRevision ? { restoredFromRevision: options.restoredFromRevision } : {}),
     ...(options.editedBy ? { editedBy: options.editedBy } : {}),
     ...(options.changeNote ? { changeNote: options.changeNote } : {}),
+    ...(topic.provenance ? { provenance: structuredClone(topic.provenance) } : {}),
   };
 }
 
@@ -589,6 +718,7 @@ export async function resolveKnowledgeReview(
     if (!review) throw new Error('검토 항목을 찾을 수 없습니다.');
     if (review.status !== 'pending') throw new Error('이미 처리된 검토 항목입니다.');
     const resolvedAt = timestamp();
+    const note = store.notes.find((item) => item.id === review.noteId);
 
     let topic: KnowledgeTopic | undefined;
     let conflict: KnowledgeConflict | undefined;
@@ -621,6 +751,7 @@ export async function resolveKnowledgeReview(
           sourceNoteIds: [review.noteId],
           revision: 1,
           revisions: [],
+          ...(note?.provenance ? { provenance: structuredClone(note.provenance) } : {}),
           createdAt: resolvedAt,
           updatedAt: resolvedAt,
         };
@@ -634,6 +765,7 @@ export async function resolveKnowledgeReview(
         topic.summary = review.proposedSummary;
         topic.bodyMarkdown = review.proposedBodyMarkdown;
         topic.sourceNoteIds = Array.from(new Set([...topic.sourceNoteIds, review.noteId]));
+        if (!topic.provenance && note?.provenance) topic.provenance = structuredClone(note.provenance);
         topic.revision += 1;
         topic.updatedAt = resolvedAt;
         topic.revisions.push(topicRevision(topic, { reviewId: review.id }));
@@ -644,7 +776,6 @@ export async function resolveKnowledgeReview(
     }
     review.resolvedAt = resolvedAt;
 
-    const note = store.notes.find((item) => item.id === review.noteId);
     const pending = store.reviews.some((item) => item.noteId === review.noteId && item.status === 'pending');
     if (note && !pending) {
       note.status = store.reviews.some((item) => item.noteId === review.noteId && item.status === 'accepted')
@@ -683,6 +814,7 @@ export async function restoreKnowledgeTopicRevision(topicId: string, revision: n
     topic.summary = historical.summary;
     topic.bodyMarkdown = historical.bodyMarkdown;
     topic.sourceNoteIds = [...historical.sourceNoteIds];
+    topic.provenance = historical.provenance ? structuredClone(historical.provenance) : topic.provenance;
     topic.revision += 1;
     topic.updatedAt = restoredAt;
     topic.revisions.push(topicRevision(topic, { restoredFromRevision: historical.revision }));
@@ -713,6 +845,40 @@ export async function editKnowledgeTopic(
       editedBy: 'user',
       changeNote: update.changeNote?.trim(),
     }));
+    return topic;
+  });
+}
+
+/**
+ * Marks a topic for a human revisit without changing its current text or
+ * creating a revision. Time never creates this state automatically.
+ */
+export async function requestKnowledgeTopicReview(
+  topicId: string,
+  reason: KnowledgeReviewReason = 'manual',
+): Promise<KnowledgeTopic> {
+  return await mutateStore((store) => {
+    const topic = store.topics.find((item) => item.id === topicId);
+    if (!topic) throw new Error('위키 문서를 찾을 수 없습니다.');
+    topic.trust = {
+      ...(topic.trust?.lastReviewedAt ? { lastReviewedAt: topic.trust.lastReviewedAt } : {}),
+      reviewRequestedAt: timestamp(),
+      reviewReason: reason,
+    };
+    return topic;
+  });
+}
+
+/**
+ * Records that a human rechecked an unchanged topic. This intentionally does
+ * not create a synthetic content revision.
+ */
+export async function completeKnowledgeTopicReview(topicId: string): Promise<KnowledgeTopic> {
+  return await mutateStore((store) => {
+    const topic = store.topics.find((item) => item.id === topicId);
+    if (!topic) throw new Error('위키 문서를 찾을 수 없습니다.');
+    const reviewedAt = timestamp();
+    topic.trust = { lastReviewedAt: reviewedAt };
     return topic;
   });
 }

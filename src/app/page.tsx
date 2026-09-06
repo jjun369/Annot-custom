@@ -3,14 +3,23 @@
 import dynamic from 'next/dynamic';
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { Session, TreeNode } from '@/types';
-import { WorkspaceContext, WorkspaceState } from '@/lib/workspace-store';
+import {
+  type PdfSourceNavigation,
+  type PendingChatRequest,
+  type PendingReaderReviewRequest,
+  type PendingStudyCardRequest,
+  WorkspaceContext,
+  WorkspaceState,
+} from '@/lib/workspace-store';
 import { REQUEST_PDF_UPLOAD_EVENT, TreeExplorer } from '@/components/tree/TreeExplorer';
 import { FolderView } from '@/components/workspace/FolderView';
 import { ChatPanel } from '@/components/workspace/ChatPanel';
 import { Topbar } from '@/components/layout/Topbar';
-import { findNode, getParentFolderPath } from '@/lib/tree-utils';
+import { findNode, getParentFolderPath, hasPdfDescendant } from '@/lib/tree-utils';
 import { PageDockMark } from '@/components/common/PageDockMark';
 import { OnboardingDialog } from '@/components/common/OnboardingDialog';
+import { StudyCardDialog } from '@/components/workspace/StudyCardDialog';
+import { StudyReviewDialog } from '@/components/workspace/StudyReviewDialog';
 import { FilePlus } from 'lucide-react';
 
 const PdfViewer = dynamic(
@@ -18,13 +27,38 @@ const PdfViewer = dynamic(
   { ssr: false },
 );
 
-const DEFAULT_CHAT_PANEL_WIDTH = 420;
+const DEFAULT_CHAT_PANEL_WIDTH = 320;
 const MIN_CHAT_PANEL_WIDTH = 320;
 const MAX_CHAT_PANEL_WIDTH = 720;
-const MIN_MAIN_CONTENT_WIDTH = 360;
+const MIN_MAIN_CONTENT_WIDTH = 640;
+const CHAT_RESIZE_HANDLE_WIDTH = 8;
+const COMPACT_EXPLORER_BREAKPOINT = 1200;
+const AUXILIARY_OVERLAY_BREAKPOINT = 1040;
 const CHAT_PANEL_WIDTH_STORAGE_KEY = 'annot-chat-panel-width';
-const WORKSPACE_SYNC_CHANNEL = 'annot-workspace-sync';
-const LAST_AUTO_BACKUP_KEY = 'annot-last-auto-backup';
+const READER_CONTEXT_STORAGE_KEY = 'pagedock:last-reader-pdf';
+
+function readLastReaderPath(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const value = window.sessionStorage.getItem(READER_CONTEXT_STORAGE_KEY);
+    return value?.toLowerCase().endsWith('.pdf') ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLastReaderPath(pdfPath: string | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (pdfPath) {
+      window.sessionStorage.setItem(READER_CONTEXT_STORAGE_KEY, pdfPath);
+    } else {
+      window.sessionStorage.removeItem(READER_CONTEXT_STORAGE_KEY);
+    }
+  } catch {
+    // Route continuity is a convenience. The portable reading position remains authoritative.
+  }
+}
 
 export default function AppPage() {
   const [state, setState] = useState<WorkspaceState>({
@@ -38,13 +72,34 @@ export default function AppPage() {
     activeSessionId: null,
     explorerOpen: true,
     chatOpen: false,
+    activePdfPage: 1,
+    pendingChatRequest: null,
+    pendingPdfSourceNavigation: null,
+    focusChatMessageId: null,
+    chatRevision: 0,
+    pendingStudyCardRequest: null,
+    pendingReaderReviewRequest: null,
+    studyReviewOpen: false,
+    studyCardsRevision: 0,
   });
   const [chatPanelWidth, setChatPanelWidth] = useState(DEFAULT_CHAT_PANEL_WIDTH);
   const [preferencesHydrated, setPreferencesHydrated] = useState(false);
   const [isResizingChat, setIsResizingChat] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(0);
   const mainContentRef = useRef<HTMLDivElement>(null);
+  const chatOverlayRef = useRef<HTMLDivElement>(null);
+  const chatFocusReturnRef = useRef<HTMLElement | null>(null);
+  const wasChatOpenRef = useRef(false);
+
+  useEffect(() => {
+    const updateViewportWidth = () => setViewportWidth(window.innerWidth);
+    updateViewportWidth();
+    window.addEventListener('resize', updateViewportWidth);
+    return () => window.removeEventListener('resize', updateViewportWidth);
+  }, []);
 
   const openPdfInContext = useCallback((currentState: WorkspaceState, pdf: TreeNode) => {
+    writeLastReaderPath(pdf.path);
     const parentFolderPath = getParentFolderPath(pdf);
     const keepCurrentSession = (
       currentState.activeSessionKind === 'pdf' &&
@@ -60,6 +115,13 @@ export default function AppPage() {
       activeSessionPdfPath: pdf.path,
       activeSessionId: keepCurrentSession ? currentState.activeSessionId : null,
       chatOpen: keepCurrentSession ? currentState.chatOpen : false,
+      activePdfPage: 1,
+      pendingChatRequest: null,
+      pendingPdfSourceNavigation: null,
+      focusChatMessageId: null,
+      pendingStudyCardRequest: null,
+      pendingReaderReviewRequest: null,
+      studyReviewOpen: false,
     };
   }, []);
 
@@ -74,6 +136,13 @@ export default function AppPage() {
         activeSessionPdfPath: null,
         activeSessionId: null,
         chatOpen: false,
+        activePdfPage: 1,
+        pendingChatRequest: null,
+        pendingPdfSourceNavigation: null,
+        focusChatMessageId: null,
+        pendingStudyCardRequest: null,
+        pendingReaderReviewRequest: null,
+        studyReviewOpen: false,
       }));
     } else {
       setState((s) => openPdfInContext(s, node));
@@ -90,11 +159,29 @@ export default function AppPage() {
       activeSessionPdfPath: null,
       activeSessionId: null,
       chatOpen: false,
+      activePdfPage: 1,
+      pendingChatRequest: null,
+      pendingPdfSourceNavigation: null,
+      focusChatMessageId: null,
+      pendingStudyCardRequest: null,
+      pendingReaderReviewRequest: null,
+      studyReviewOpen: false,
     }));
   }, []);
 
   const openPdf = useCallback((pdf: TreeNode) => {
     setState((s) => openPdfInContext(s, pdf));
+  }, [openPdfInContext]);
+
+  const openPdfReview = useCallback((pdf: TreeNode) => {
+    const request: PendingReaderReviewRequest = {
+      id: crypto.randomUUID(),
+      pdfPath: pdf.path,
+    };
+    setState((s) => ({
+      ...openPdfInContext(s, pdf),
+      pendingReaderReviewRequest: request,
+    }));
   }, [openPdfInContext]);
 
   const openSession = useCallback((session: Pick<Session, 'id' | 'folderPath' | 'sessionKind' | 'pdfPath'>) => {
@@ -109,7 +196,18 @@ export default function AppPage() {
   }, []);
 
   const closePdf = useCallback(() => {
-    setState((s) => ({ ...s, activePdf: null }));
+    writeLastReaderPath(null);
+    setState((s) => {
+      const parentFolder = s.treeRoot && s.activePdf
+        ? findNode(s.treeRoot, getParentFolderPath(s.activePdf))
+        : null;
+      const selectedNode = parentFolder?.type === 'folder'
+        ? parentFolder
+        : s.treeRoot?.type === 'folder'
+          ? s.treeRoot
+          : null;
+      return { ...s, activePdf: null, selectedNode };
+    });
   }, []);
 
   const toggleExplorer = useCallback(() => {
@@ -118,6 +216,90 @@ export default function AppPage() {
 
   const toggleChat = useCallback(() => {
     setState((s) => ({ ...s, chatOpen: !s.chatOpen }));
+  }, []);
+
+  const openChat = useCallback(() => {
+    setState((s) => ({ ...s, chatOpen: true }));
+  }, []);
+
+  const setActivePdfPage = useCallback((page: number) => {
+    if (!Number.isFinite(page) || page < 1) return;
+    setState((s) => ({ ...s, activePdfPage: Math.floor(page) }));
+  }, []);
+
+  const queueChatRequest = useCallback((request: PendingChatRequest) => {
+    setState((s) => ({
+      ...s,
+      chatOpen: true,
+      pendingChatRequest: request,
+    }));
+  }, []);
+
+  const consumeChatRequest = useCallback((requestId: string) => {
+    setState((s) => s.pendingChatRequest?.id === requestId
+      ? { ...s, pendingChatRequest: null }
+      : s);
+  }, []);
+
+  const navigateToPdfSource = useCallback((request: PdfSourceNavigation) => {
+    setState((s) => {
+      const target = s.treeRoot ? findNode(s.treeRoot, request.pdfPath) : null;
+      const next = target?.type === 'pdf' ? openPdfInContext(s, target) : s;
+      return {
+        ...next,
+        chatOpen: true,
+        activePdfPage: request.page,
+        pendingPdfSourceNavigation: request,
+      };
+    });
+  }, [openPdfInContext]);
+
+  const consumePdfSourceNavigation = useCallback((requestId: string) => {
+    setState((s) => s.pendingPdfSourceNavigation?.id === requestId
+      ? { ...s, pendingPdfSourceNavigation: null }
+      : s);
+  }, []);
+
+  const focusChatMessage = useCallback((messageId: string) => {
+    setState((s) => ({ ...s, chatOpen: true, focusChatMessageId: messageId }));
+  }, []);
+
+  const consumeFocusChatMessage = useCallback((messageId: string) => {
+    setState((s) => s.focusChatMessageId === messageId
+      ? { ...s, focusChatMessageId: null }
+      : s);
+  }, []);
+
+  const notifyChatSaved = useCallback(() => {
+    setState((s) => ({ ...s, chatRevision: s.chatRevision + 1 }));
+  }, []);
+
+  const queueStudyCardRequest = useCallback((request: PendingStudyCardRequest) => {
+    setState((s) => ({ ...s, pendingStudyCardRequest: request }));
+  }, []);
+
+  const consumeStudyCardRequest = useCallback((requestId: string) => {
+    setState((s) => s.pendingStudyCardRequest?.id === requestId
+      ? { ...s, pendingStudyCardRequest: null }
+      : s);
+  }, []);
+
+  const consumeReaderReviewRequest = useCallback((requestId: string) => {
+    setState((s) => s.pendingReaderReviewRequest?.id === requestId
+      ? { ...s, pendingReaderReviewRequest: null }
+      : s);
+  }, []);
+
+  const openStudyReview = useCallback(() => {
+    setState((s) => s.activePdf ? { ...s, studyReviewOpen: true } : s);
+  }, []);
+
+  const closeStudyReview = useCallback(() => {
+    setState((s) => ({ ...s, studyReviewOpen: false }));
+  }, []);
+
+  const notifyStudyCardsChanged = useCallback(() => {
+    setState((s) => ({ ...s, studyCardsRevision: s.studyCardsRevision + 1 }));
   }, []);
 
   const refreshTree = useCallback(async () => {
@@ -178,45 +360,6 @@ export default function AppPage() {
   }, [state.activePdf?.path]);
 
   useEffect(() => {
-    const lastBackup = Number(window.localStorage.getItem(LAST_AUTO_BACKUP_KEY) || 0);
-    if (Date.now() - lastBackup < 24 * 60 * 60 * 1000) return;
-    const timeout = window.setTimeout(async () => {
-      try {
-        const res = await fetch('/api/library/backup', { method: 'POST' });
-        if (res.ok) window.localStorage.setItem(LAST_AUTO_BACKUP_KEY, String(Date.now()));
-      } catch {
-        // A failed background backup is retried on the next launch.
-      }
-    }, 5000);
-    return () => window.clearTimeout(timeout);
-  }, []);
-
-  useEffect(() => {
-    const channel = new BroadcastChannel(WORKSPACE_SYNC_CHANNEL);
-    const contextMessage = {
-      type: 'context',
-      activeSessionFolder: state.activeSessionFolder,
-      activeSessionKind: state.activeSessionKind,
-      activeSessionPdfPath: state.activeSessionPdfPath,
-      activeSessionId: state.activeSessionId,
-      activePdf: state.activePdf,
-    };
-    channel.onmessage = (event: MessageEvent) => {
-      if (event.data?.type === 'detached-chat-hello') {
-        channel.postMessage(contextMessage);
-      }
-    };
-    channel.postMessage(contextMessage);
-    return () => channel.close();
-  }, [
-    state.activePdf,
-    state.activeSessionFolder,
-    state.activeSessionId,
-    state.activeSessionKind,
-    state.activeSessionPdfPath,
-  ]);
-
-  useEffect(() => {
     const hydratePreferences = async () => {
       try {
         const res = await fetch('/api/library/preferences', { cache: 'no-store' });
@@ -275,9 +418,32 @@ export default function AppPage() {
           const nextTree = data as TreeNode;
           const requestedPdfPath = new URLSearchParams(window.location.search).get('pdf');
           const requestedPdf = requestedPdfPath ? findNode(nextTree, requestedPdfPath) : null;
-          setState((current) => requestedPdf?.type === 'pdf'
-            ? openPdfInContext({ ...current, treeRoot: nextTree, treeLoading: false }, requestedPdf)
-            : { ...current, treeRoot: nextTree, treeLoading: false });
+          const rememberedPdfPath = requestedPdfPath ? null : readLastReaderPath();
+          const rememberedPdf = rememberedPdfPath ? findNode(nextTree, rememberedPdfPath) : null;
+          const readerTarget = requestedPdf?.type === 'pdf'
+            ? requestedPdf
+            : rememberedPdf?.type === 'pdf'
+              ? rememberedPdf
+              : null;
+          if (rememberedPdfPath && !rememberedPdf) writeLastReaderPath(null);
+          setState((current) => {
+            if (readerTarget) {
+              return openPdfInContext({ ...current, treeRoot: nextTree, treeLoading: false }, readerTarget);
+            }
+
+            // Reopening the library should expose the calm "continue reading" landing
+            // state immediately. This chooses the library folder only; it never opens a
+            // PDF automatically or changes any persisted navigation preference.
+            const preservedSelection = current.selectedNode
+              ? findNode(nextTree, current.selectedNode.path)
+              : null;
+            const selectedNode = preservedSelection?.type === 'folder'
+              ? preservedSelection
+              : hasPdfDescendant(nextTree)
+                ? nextTree
+                : null;
+            return { ...current, treeRoot: nextTree, treeLoading: false, selectedNode };
+          });
         }
       } catch {
         if (!cancelled) {
@@ -342,6 +508,26 @@ export default function AppPage() {
     };
   }, [isResizingChat]);
 
+  useEffect(() => {
+    if (!state.chatOpen) return;
+
+    const mainContent = mainContentRef.current;
+    if (!mainContent) return;
+
+    const clampChatWidth = () => {
+      const maxAllowedWidth = Math.max(
+        MIN_CHAT_PANEL_WIDTH,
+        Math.min(MAX_CHAT_PANEL_WIDTH, mainContent.clientWidth - MIN_MAIN_CONTENT_WIDTH - CHAT_RESIZE_HANDLE_WIDTH),
+      );
+      setChatPanelWidth((current) => Math.min(current, maxAllowedWidth));
+    };
+
+    clampChatWidth();
+    const observer = new ResizeObserver(clampChatWidth);
+    observer.observe(mainContent);
+    return () => observer.disconnect();
+  }, [state.chatOpen]);
+
   const ctx = {
     ...state,
     selectNode,
@@ -351,23 +537,85 @@ export default function AppPage() {
     closePdf,
     toggleExplorer,
     toggleChat,
+    openChat,
+    setActivePdfPage,
+    queueChatRequest,
+    consumeChatRequest,
+    navigateToPdfSource,
+    consumePdfSourceNavigation,
+    focusChatMessage,
+    consumeFocusChatMessage,
+    notifyChatSaved,
+    queueStudyCardRequest,
+    consumeStudyCardRequest,
+    openPdfReview,
+    consumeReaderReviewRequest,
+    openStudyReview,
+    closeStudyReview,
+    notifyStudyCardsChanged,
   };
   const contextValue = { ...ctx, refreshTree };
+  const libraryHasPdfs = hasPdfDescendant(state.treeRoot);
+  const forceCompactExplorer = Boolean(
+    state.activePdf
+    && state.chatOpen
+    && state.explorerOpen
+    && viewportWidth > 0
+    && viewportWidth < COMPACT_EXPLORER_BREAKPOINT,
+  );
+  const useAuxiliaryOverlay = Boolean(
+    state.chatOpen
+    && state.activeSessionFolder
+    && viewportWidth > 0
+    && viewportWidth < AUXILIARY_OVERLAY_BREAKPOINT,
+  );
+
+  useEffect(() => {
+    if (state.chatOpen && !wasChatOpenRef.current) {
+      chatFocusReturnRef.current = document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    }
+    if (!state.chatOpen && wasChatOpenRef.current) {
+      const previous = chatFocusReturnRef.current;
+      if (previous?.isConnected) previous.focus();
+      chatFocusReturnRef.current = null;
+    }
+    wasChatOpenRef.current = state.chatOpen;
+  }, [state.chatOpen]);
+
+  useEffect(() => {
+    if (!useAuxiliaryOverlay) return;
+
+    const animationFrame = window.requestAnimationFrame(() => chatOverlayRef.current?.focus());
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      toggleChat();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [toggleChat, useAuxiliaryOverlay]);
 
   return (
     <WorkspaceContext value={contextValue}>
       <div className="flex h-full flex-col bg-surface">
         <OnboardingDialog />
+        <StudyCardDialog />
+        <StudyReviewDialog />
         <Topbar />
         <div className="flex-1 flex overflow-hidden">
           {/* Tree Explorer */}
-          <TreeExplorer />
+          <TreeExplorer forceCompact={forceCompactExplorer} />
 
           {/* Main Content Area */}
-          <div ref={mainContentRef} className="flex min-w-0 flex-1 bg-surface">
+          <div ref={mainContentRef} className="relative flex min-w-0 flex-1 bg-surface">
             {state.activePdf ? (
               // PDF is open — show viewer
-              <div className={`flex-1 min-w-0 ${state.chatOpen ? '' : ''}`}>
+              <div className="flex min-w-0 flex-1 overflow-hidden">
                 <PdfViewer key={state.activePdf.path} />
               </div>
             ) : state.selectedNode?.type === 'folder' ? (
@@ -376,28 +624,45 @@ export default function AppPage() {
                 <FolderView />
               </div>
             ) : (
-              // Nothing selected — empty state
+              // Nothing selected — distinguish an empty library from an unselected document.
               <div className="flex flex-1 items-center justify-center p-8">
                 <div className="w-full max-w-sm rounded-2xl border border-outline-variant/20 bg-surface-container-lowest px-8 py-9 text-center shadow-sm">
                   <PageDockMark size={48} className="mx-auto mb-4 rounded-xl opacity-90 shadow-sm" />
-                  <h2 className="text-base font-semibold text-on-surface">라이브러리에서 시작하세요</h2>
+                  <h2 className="text-base font-semibold text-on-surface">
+                    {libraryHasPdfs ? '읽을 문서를 골라 주세요' : '라이브러리가 비어 있습니다'}
+                  </h2>
                   <p className="mt-2 text-xs leading-5 text-on-surface-variant">
-                    PDF를 PageDock Library에 복사하면 파일명이 바뀌어도 메모와 리서치 연결을 유지합니다.
+                    {libraryHasPdfs
+                      ? '왼쪽 라이브러리에서 PDF를 선택하면 바로 열립니다. 최근 읽은 문서는 다음에 열어도 마지막 위치에서 이어집니다.'
+                      : 'PDF를 추가하면 읽기, 검색, 하이라이트와 메모를 로컬에서 사용할 수 있습니다.'}
                   </p>
-                  <button
-                    type="button"
-                    onClick={() => window.dispatchEvent(new Event(REQUEST_PDF_UPLOAD_EVENT))}
-                    className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-on-primary"
-                  >
-                    <FilePlus size={15} /> 첫 PDF 추가
-                  </button>
+                  {!libraryHasPdfs && (
+                    <button
+                      type="button"
+                      onClick={() => window.dispatchEvent(new Event(REQUEST_PDF_UPLOAD_EVENT))}
+                      className="mt-5 inline-flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-on-primary"
+                    >
+                      <FilePlus size={15} /> PDF 추가
+                    </button>
+                  )}
                 </div>
               </div>
             )}
 
             {/* Chat Panel */}
             {state.chatOpen && state.activeSessionFolder && (
-              <>
+              useAuxiliaryOverlay ? (
+                <div
+                  ref={chatOverlayRef}
+                  role="region"
+                  aria-label="AI 대화 오버레이"
+                  tabIndex={-1}
+                  className="absolute inset-y-0 right-0 z-40 w-80 max-w-full border-l border-outline-variant/10 bg-surface-container-lowest shadow-ambient outline-none"
+                >
+                  <ChatPanel />
+                </div>
+              ) : (
+                <>
                 <div
                   role="separator"
                   aria-orientation="vertical"
@@ -413,7 +678,8 @@ export default function AppPage() {
                 >
                   <ChatPanel />
                 </div>
-              </>
+                </>
+              )
             )}
           </div>
         </div>

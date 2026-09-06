@@ -3,15 +3,16 @@
 import { TreeItem } from './TreeItem';
 import { TreePromptDialog } from './TreePromptDialog';
 import { useWorkspace } from '@/lib/workspace-store';
-import { FolderPlus, FilePlus, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
-import { countItems, findNode, getParentFolderPath } from '@/lib/tree-utils';
+import { FilePlus, Folder, FolderPlus, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { collectPdfs, countItems, findNode, getParentFolderPath } from '@/lib/tree-utils';
 import { useFeedback } from '@/components/common/FeedbackProvider';
-import { useEffect, useRef, useState } from 'react';
-import { TreeNode } from '@/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ReaderSummary, TreeNode } from '@/types';
+import { READER_SUMMARY_CHANGED_EVENT } from '@/lib/reader-summary-events';
 
 export const REQUEST_PDF_UPLOAD_EVENT = 'pagedock:request-pdf-upload';
 
-export function TreeExplorer() {
+export function TreeExplorer({ forceCompact = false }: { forceCompact?: boolean }) {
   const {
     treeRoot,
     treeLoading,
@@ -26,7 +27,55 @@ export function TreeExplorer() {
   const [isCreatingFolder, setIsCreatingFolder] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [readerSummaries, setReaderSummaries] = useState<Record<string, ReaderSummary>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const readerSummaryRequestRef = useRef(0);
+
+  const loadReaderSummaries = useCallback(async () => {
+    const requestId = ++readerSummaryRequestRef.current;
+    if (!treeRoot) {
+      if (requestId === readerSummaryRequestRef.current) setReaderSummaries({});
+      return;
+    }
+    const paths = collectPdfs(treeRoot).map((pdf) => pdf.path);
+    if (paths.length === 0) {
+      if (requestId === readerSummaryRequestRef.current) setReaderSummaries({});
+      return;
+    }
+    try {
+      const res = await fetch('/api/workspace/reader-summary', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths }),
+      });
+      const data = await res.json() as { summaries?: Record<string, ReaderSummary> };
+      if (requestId === readerSummaryRequestRef.current && res.ok && data.summaries) {
+        setReaderSummaries(data.summaries);
+      }
+    } catch {
+      // Reader summaries are an optional convenience and never block the library tree.
+    }
+  }, [treeRoot]);
+
+  useEffect(() => {
+    void loadReaderSummaries();
+  }, [loadReaderSummaries]);
+
+  useEffect(() => {
+    let timeout: number | null = null;
+    const handleReaderSummaryChange = () => {
+      if (timeout !== null) window.clearTimeout(timeout);
+      timeout = window.setTimeout(() => {
+        timeout = null;
+        void loadReaderSummaries();
+      }, 300);
+    };
+    window.addEventListener(READER_SUMMARY_CHANGED_EVENT, handleReaderSummaryChange);
+    return () => {
+      if (timeout !== null) window.clearTimeout(timeout);
+      window.removeEventListener(READER_SUMMARY_CHANGED_EVENT, handleReaderSummaryChange);
+    };
+  }, [loadReaderSummaries]);
 
   useEffect(() => {
     const requestUpload = () => fileInputRef.current?.click();
@@ -118,23 +167,37 @@ export function TreeExplorer() {
     }
   };
 
-  if (!explorerOpen) {
+  if (!explorerOpen || forceCompact) {
     return (
       <aside className="flex w-12 shrink-0 flex-col overflow-hidden border-r border-outline-variant/15 bg-surface-container">
         <div className="flex h-11 shrink-0 items-center justify-center">
-          <button
-            onClick={toggleExplorer}
-            className="w-7 h-7 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors"
-            title="탐색기 펼치기"
-          >
-            <PanelLeftOpen size={14} strokeWidth={2} />
-          </button>
+          {forceCompact ? (
+            <span
+              className="flex h-7 w-7 items-center justify-center text-on-surface-variant"
+              title="읽는 영역을 확보하기 위해 탐색기를 임시로 축소했습니다. 창을 넓히거나 대화를 닫으면 다시 펼쳐집니다."
+              aria-label="읽는 영역을 확보하기 위해 탐색기가 임시로 축소됨"
+            >
+              <PanelLeftClose size={14} strokeWidth={2} />
+            </span>
+          ) : (
+            <button
+              onClick={toggleExplorer}
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors"
+              title="탐색기 펼치기"
+            >
+              <PanelLeftOpen size={14} strokeWidth={2} />
+            </button>
+          )}
         </div>
 
         <div className="flex-1 flex items-center justify-center">
-          <div className="text-[10px] text-outline [writing-mode:vertical-rl] rotate-180">
-            탐색기
-          </div>
+          <span
+            className="flex h-7 w-7 items-center justify-center rounded-lg text-outline"
+            title="라이브러리 탐색기"
+            aria-label="라이브러리 탐색기"
+          >
+            <Folder size={15} strokeWidth={1.8} />
+          </span>
         </div>
 
         <div className="px-1 py-3 shrink-0 text-center text-[10px] text-outline leading-tight">
@@ -155,7 +218,7 @@ export function TreeExplorer() {
   }
 
   return (
-    <aside className="flex w-[240px] shrink-0 flex-col overflow-hidden border-r border-outline-variant/15 bg-surface-container">
+    <aside className="flex w-[208px] shrink-0 flex-col overflow-hidden border-r border-outline-variant/15 bg-surface-container">
       {/* Header */}
       <div className="flex h-11 shrink-0 items-center justify-between px-3">
         <div className="flex items-center gap-1">
@@ -216,6 +279,7 @@ export function TreeExplorer() {
               node={node}
               depth={0}
               selectedPath={selectedNode?.path ?? null}
+              readerSummaries={readerSummaries}
             />
           ))
         ) : (

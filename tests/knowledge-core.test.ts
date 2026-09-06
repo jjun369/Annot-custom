@@ -179,3 +179,70 @@ describe('knowledge store v2', () => {
     await expect(exportModule.exportKnowledgeMarkdown(folder)).rejects.toThrow(/메모 폴더 안으로/);
   });
 });
+
+describe('knowledge provenance and human review attention', () => {
+  test('keeps provenance and reader anchors additive through the inbox and accepted topic', async () => {
+    const note = await store.captureKnowledgeNote(
+      '논문 원문에서 확인한 공정 조건은 장비 조건에 따라 달라질 수 있다.',
+      'process-paper.pdf · p.12',
+      {
+        provenance: { kind: 'literature_claim', originDate: '2020-04' },
+        sourceAnchors: [{
+          id: 'knowledge-test-anchor', scope: 'selection', documentId: 'document-1', page: 12,
+          text: '공정 조건은 장비 조건에 따라 달라질 수 있다.', rects: [{ x: 0.1, y: 0.2, width: 0.4, height: 0.04 }],
+        }],
+      },
+    );
+    expect(note.provenance).toEqual({ kind: 'literature_claim', originDate: '2020-04' });
+    expect(note.sourceAnchors?.[0]).toMatchObject({ id: 'knowledge-test-anchor', page: 12, scope: 'selection' });
+
+    const [review] = await store.saveKnowledgeProposals(note.id, {
+      title: '공정 조건의 적용 범위', summary: '', proposals: [{
+        kind: 'create', topicId: '', title: '공정 조건의 적용 범위', rationale: '원문 근거 수집', conflictSummary: '',
+        proposedSummary: '공정 조건은 적용 환경에 따라 달라질 수 있다.',
+        proposedBodyMarkdown: '## 원문 근거\n\n장비 조건과 적용 환경을 함께 확인한다.',
+        sourceClaims: [note.rawText],
+      }],
+    });
+    const accepted = await store.resolveKnowledgeReview(review.id, 'accept');
+    expect(accepted.topic?.provenance).toEqual({ kind: 'literature_claim', originDate: '2020-04' });
+    expect(accepted.topic?.revisions[0]?.provenance).toEqual({ kind: 'literature_claim', originDate: '2020-04' });
+  });
+
+  test('never infers expiry from an old source date and records only explicit human review attention', async () => {
+    const snapshot = await store.getKnowledgeSnapshot();
+    const topic = snapshot.topics.find((item) => item.title === '공정 조건의 적용 범위')!;
+    const before = { revision: topic.revision, body: topic.bodyMarkdown, updatedAt: topic.updatedAt };
+
+    const requested = await store.requestKnowledgeTopicReview(topic.id);
+    expect(requested.revision).toBe(before.revision);
+    expect(requested.bodyMarkdown).toBe(before.body);
+    expect(requested.updatedAt).toBe(before.updatedAt);
+    expect(requested.trust?.reviewReason).toBe('manual');
+    expect(requested.trust?.reviewRequestedAt).toBeTruthy();
+
+    const completed = await store.completeKnowledgeTopicReview(topic.id);
+    expect(completed.revision).toBe(before.revision);
+    expect(completed.bodyMarkdown).toBe(before.body);
+    expect(completed.updatedAt).toBe(before.updatedAt);
+    expect(completed.trust?.reviewRequestedAt).toBeUndefined();
+    expect(completed.trust?.lastReviewedAt).toBeTruthy();
+    expect(completed.provenance?.originDate).toBe('2020-04');
+  });
+
+  test('loads older knowledge JSON without assigning a provenance class or review state', async () => {
+    const legacy = await store.captureKnowledgeNote('유형이 없던 기존 지식 메모', '기존 메모');
+    const snapshot = await store.getKnowledgeSnapshot();
+    const loaded = snapshot.notes.find((note) => note.id === legacy.id)!;
+    expect(loaded.provenance).toBeUndefined();
+    expect(loaded.sourceAnchors).toBeUndefined();
+  });
+
+  test('normalizes invalid provenance and malformed source anchors away at the persistence boundary', () => {
+    expect(store.normalizeKnowledgeProvenance({ kind: 'truth', originDate: '1900-01-01' })).toBeUndefined();
+    expect(store.normalizeKnowledgeProvenance({ kind: 'ai_inference', originDate: '2026-09-01', ai: { answerId: 'answer-1' } })).toEqual({
+      kind: 'ai_inference', originDate: '2026-09-01', ai: { answerId: 'answer-1' },
+    });
+    expect(store.normalizeKnowledgeSourceAnchors([{ id: 'bad', scope: 'selection', page: 0 }])).toBeUndefined();
+  });
+});

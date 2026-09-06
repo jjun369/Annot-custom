@@ -1,6 +1,12 @@
 import { getClaudeAuthStatus, probeClaudeConnection, runClaudeTurn } from '@/lib/claude-code';
-import { fetchCodexModels, getCodexAuthStatus } from '@/lib/codex-auth';
-import { getCodexCliAuthStatus, listCodexModelsFromCli, runCodexTurn } from '@/lib/codex-exec';
+import { buildProviderSourceContextBlock } from '@/lib/ai-providers/source-context';
+import { fetchCodexModels, getCodexAuthStatus, sendCodexChat } from '@/lib/codex-auth';
+import {
+  getCodexCliAuthStatus,
+  isCodexCliUnavailableError,
+  listCodexModelsFromCli,
+  runCodexTurn,
+} from '@/lib/codex-exec';
 import { AIProvider } from '@/types';
 import { DEFAULT_AI_PROVIDER } from './config';
 import { AUTO_MODEL_ID, withAutoModel } from './model-policy';
@@ -55,43 +61,98 @@ const codexRuntime: ProviderRuntime = {
     };
   },
   async validateConnection() {
-    const result = await runCodexTurn({
-      model: AUTO_MODEL_ID,
-      folderPath: '',
-      sessionKind: 'folder',
-      prompt: 'Reply with exactly OK.',
-      ephemeral: true,
-    });
+    try {
+      const result = await runCodexTurn({
+        model: AUTO_MODEL_ID,
+        folderPath: '',
+        sessionKind: 'folder',
+        prompt: 'Reply with exactly OK.',
+        ephemeral: true,
+      });
 
-    return {
-      provider: 'codex',
-      ok: /^ok\b/i.test(result.content.trim()),
-      model: AUTO_MODEL_ID,
-      response: result.content.trim(),
-      message: 'Codex responded successfully.',
-    };
+      return {
+        provider: 'codex' as const,
+        ok: /^ok\b/i.test(result.content.trim()),
+        model: AUTO_MODEL_ID,
+        response: result.content.trim(),
+        message: 'Codex responded successfully.',
+      };
+    } catch (error) {
+      if (!isCodexCliUnavailableError(error)) throw error;
+
+      const accountStatus = await getCodexAuthStatus();
+      if (!accountStatus.authenticated) throw error;
+
+      // Account validation must not spend a Codex turn. The models endpoint
+      // verifies both the token/account pairing and that the account can use
+      // at least one Codex model, without being affected by turn quotas.
+      const models = await fetchCodexModels();
+      if (!models || models.length === 0) {
+        throw new Error('Codex 계정은 확인했지만 사용할 수 있는 모델을 찾지 못했습니다.');
+      }
+
+      return {
+        provider: 'codex' as const,
+        ok: true,
+        model: models[0].id,
+        response: '인증됨',
+        message: 'OpenAI 계정과 Codex 모델을 확인했습니다. standalone CLI 없이 로그인 계정을 사용합니다.',
+      };
+    }
   },
   async runTurn(
     input: ProviderTurnInput,
     options?: { onEvent?: (event: ProviderTurnEvent) => void },
   ): Promise<ProviderTurnResult> {
-    const result = await runCodexTurn(
-      {
-        codexSessionId: input.providerSessionId,
-        model: input.model,
-        reasoningEffort: input.reasoningEffort,
-        folderPath: input.folderPath,
-        sessionKind: input.sessionKind,
-        prompt: input.prompt,
-        currentPdfPath: input.currentPdfPath,
-      },
-      options,
-    );
+    try {
+      const result = await runCodexTurn(
+        {
+          codexSessionId: input.providerSessionId,
+          model: input.model,
+          reasoningEffort: input.reasoningEffort,
+          folderPath: input.folderPath,
+          sessionKind: input.sessionKind,
+          prompt: input.prompt,
+          currentPdfPath: input.currentPdfPath,
+          sourceContext: input.sourceContext,
+        },
+        options,
+      );
 
-    return {
-      providerSessionId: result.codexSessionId,
-      content: result.content,
-    };
+      return {
+        providerSessionId: result.codexSessionId,
+        content: result.content,
+      };
+    } catch (error) {
+      if (!isCodexCliUnavailableError(error)) throw error;
+
+      const accountStatus = await getCodexAuthStatus();
+      if (!accountStatus.authenticated) throw error;
+
+      options?.onEvent?.({
+        type: 'status',
+        message: 'OpenAI 계정 연결로 Codex에 연결했습니다. 답변을 준비하고 있습니다.',
+      });
+
+      const conversation = (input.conversation || [])
+        .filter((message) => message.content.trim())
+        .slice(-24);
+      const result = await sendCodexChat(
+        [
+          ...conversation,
+          { role: 'user', content: input.prompt },
+        ],
+        input.model,
+        input.sourceContext ? buildProviderSourceContextBlock(input.sourceContext).join('\n') : undefined,
+      );
+
+      return {
+        // The account API has no native CLI session id. The persisted chat
+        // messages remain the source of truth for the next fallback turn.
+        providerSessionId: '',
+        content: result.content,
+      };
+    }
   },
 };
 

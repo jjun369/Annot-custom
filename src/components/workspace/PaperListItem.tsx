@@ -1,15 +1,17 @@
 'use client';
 
 import { useState } from 'react';
-import { BookOpen, FileText, Star } from 'lucide-react';
+import { BookOpen, CircleHelp, Clock3, FileText, Star } from 'lucide-react';
 
 import { useFeedback } from '@/components/common/FeedbackProvider';
-import { PaperMetadata, TreeNode } from '@/types';
+import { PaperMetadata, ReaderSummary, TreeNode } from '@/types';
+import { formatReaderSummaryActivity } from '@/lib/reader-summary';
 
 interface PaperListItemProps {
   pdf: TreeNode;
   relativePath: string;
   metadata: PaperMetadata;
+  readerSummary?: ReaderSummary;
   selected?: boolean;
   onSelect: () => void;
   onOpen: () => void;
@@ -32,6 +34,7 @@ export function PaperListItem({
   pdf,
   relativePath,
   metadata,
+  readerSummary,
   selected = false,
   onSelect,
   onOpen,
@@ -39,6 +42,11 @@ export function PaperListItem({
 }: PaperListItemProps) {
   const { notify } = useFeedback();
   const [statusSaving, setStatusSaving] = useState(false);
+  const readerCue = [
+    readerSummary?.page ? `p.${readerSummary.page}에서 이어 읽기` : null,
+    readerSummary?.unresolvedCount ? `다시 볼 것 ${readerSummary.unresolvedCount}` : null,
+    formatReaderSummaryActivity(readerSummary?.lastOpenedAt),
+  ].filter((value): value is string => Boolean(value));
 
   const updateStatus = async (readingStatus: string) => {
     if (readingStatus !== 'unread' && readingStatus !== 'reading' && readingStatus !== 'completed') return;
@@ -96,6 +104,13 @@ export function PaperListItem({
             {metadata.summaryKo && (
               <span className="mt-1 block truncate text-[11px] leading-5 text-on-surface-variant">
                 {metadata.summaryKo.split('\n')[0]}
+              </span>
+            )}
+            {readerCue.length > 0 && (
+              <span className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-medium text-on-surface-variant">
+                {readerSummary?.page && <span className="inline-flex items-center gap-1 text-primary"><Clock3 size={11} aria-hidden="true" />{readerCue[0]}</span>}
+                {readerSummary?.unresolvedCount ? <span className="inline-flex items-center gap-1 text-study-unclear"><CircleHelp size={11} aria-hidden="true" />다시 볼 것 {readerSummary.unresolvedCount}</span> : null}
+                {formatReaderSummaryActivity(readerSummary?.lastOpenedAt) && <span>{formatReaderSummaryActivity(readerSummary?.lastOpenedAt)}</span>}
               </span>
             )}
           </span>

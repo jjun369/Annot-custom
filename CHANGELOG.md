@@ -1,5 +1,76 @@
 # Changelog
 
+## Unreleased — Provenance-gated Knowledge promotion
+
+- Fixed Codex connection for the OpenCodex Windows app: when the logged-in desktop app exposes only its protected internal binary, PageDock now uses the existing ChatGPT OAuth account session through the Codex account transport instead of treating the account as unavailable. Connection validation checks the authenticated model catalog without spending a turn, and fallback chat reuses the bounded saved conversation. Provider errors such as exhausted usage limits are shown as plain-language guidance.
+- Fixed the collapsed library rail: the old vertical `탐색기` label could render Korean glyphs upside down or visually broken, so the narrow state now uses a stable folder icon with a tooltip instead of rotated text.
+- Hardened Windows PDF rendering for otherwise valid documents that can show a blank page in Electron: PageDock now disables PDF.js worker-side OffscreenCanvas/image-decoder acceleration in favor of the stable canvas path, and it remounts the current document once after a transient page-render failure without losing Reader state.
+- Refined the Reader after a screen-by-screen visual review without changing any persisted format: selection actions now anchor below the end of the selected source (and flip above only at the viewport edge); unresolved amber marks gain a subtle darker boundary so they cannot be confused with the operating system's blue live selection; and the record drawer contracts to 288px below 1440px while retaining the wider desktop reading layout.
+- Made figure, table, and equation recording source-visible: the editor is now a keyboard-contained responsive right sheet rather than a source-covering popup, so a reader can keep the original page in view while assigning a type and optional memo. Escape and outside-click close it when no save is in progress.
+- Re-established Reader-first navigation presentation: Library remains the sole prominent top-level work area, while existing Research and Knowledge destinations live under a compact `더보기` menu. Names, routes, data, and every existing workflow remain unchanged.
+- Added an explicit DeepSeek Web Manual Bridge for a second, user-requested view of an existing selection-anchored PDF answer. It previews and copies only that selection plus the original question, opens an isolated DeepSeek web session for direct user login/send, and accepts only a user-pasted answer back into the same local session for a non-judgmental side-by-side comparison. It never automates the web chat, reads web content or credentials, promotes knowledge, resolves study state, changes SQLite, or changes the backup manifest.
+- Tightened the short-session Reader return path without adding a dashboard: Library rows now show the existing saved page, unresolved count, and last-read date; opening remains a deliberate user action and restores the existing resume position.
+- Made the Library re-entry choice calmer: its top `계속 읽기` card has one primary `이어서 읽기` action, while `다시 볼 것 N` is a small link that opens the same PDF's existing unresolved drawer filter. `이해 필요` remains the in-reading mark; later views use `다시 볼 것` and explicit `이해 완료` wording without creating a second queue or study state.
+- Closed the visible unresolved loop in the Reader record drawer: an anchored `이해 필요` item can be returned to its source and explicitly marked understood in place. This never invokes AI or creates a recall card automatically.
+- Reduced AI-first and management-heavy wording without changing storage: the application title, Research analysis action, and Knowledge navigation now foreground reading, personal memos, and user review while retaining clear pre-action remote-AI disclosure.
+- Separated the Settings surface into clearly labelled `휴대폰에서 읽기` and `PageDock 복구 백업` panels. Mobile output remains a one-way read-only PDF; every existing manual/automatic backup and restore entry point remains visible.
+- Added a provider-neutral Mobile Bridge for a user-selected external folder. An explicit stable-document mobile shelf generates a phone-width `PageDock-Mobile.pdf` with selectable Reader records, clearly labelled user notes/AI answers, recall cards, source-linked Knowledge, and disposable rendered visual regions. It never copies the live Library or persists visual crops.
+- Refined the Mobile Bridge as a deliberate derived-artifact workflow: automatic mobile publication is opt-in and defaults off, relevant projected changes persist as a visible dirty state, and opted-in publishes use a 90-second debounce plus a ten-minute minimum interval. Original Library save, mobile-snapshot publish, and full backup now use distinct language and state feedback; normal external-folder failure receives one delayed retry, while external modification or deletion blocks automatic replacement.
+- Added SHA-256 receipt/conflict handling for the mobile PDF: externally changed output blocks automatic replacement until the user explicitly preserves the modified pair under `Mobile/Conflicts`.
+- Hardened automatic backup publication: local snapshots are written as partial ZIPs, fully reopened and manifest-verified before publication, then copied byte-identically to configured bridge `Backups/Auto`. Local and bridge automatic snapshots independently retain three successes; bridge manual full ZIPs include PDFs and are never auto-pruned.
+- Automatic metadata backups now retain the latest three snapshots, while manually downloaded full ZIP backups remain outside automatic cleanup.
+- Softened the Windows study surface from cool system blue-gray to a quiet paper-neutral hierarchy. Important, needs-understanding, resolved, AI-reference, and real-error treatments now use separate muted roles and continue to include text/icon state cues rather than relying on color.
+- Made the Reader selection action bar smaller and source-centered, with compact icons and less visually dominant AI styling. Improved the no-document, inline Reader-search, and global-search guidance so a reader can take the next local action without guessing.
+- Reframed Knowledge presentation without changing its provenance or review contract: `정리된 노트`, `바뀐 점`, `AI 초안 · 확인 전`, and `다시 볼 표시` communicate personal review rather than an approval workflow or AI truth claim. Research filename metadata gaps now reassure the user that reading and local saving still work.
+- Refined the Reader around the source-first loop: the document title now keeps a compact current-page cue, `기록 보기` moved into secondary document tools, and a new `이해 필요` save can open the unresolved record filter directly. The selection bar now consistently reads `중요 / 이해 필요 / AI 설명 / 메모`.
+- Made the PDF AI trust strip quieter and more exact: it keeps the selected PDF scope visible, states that personal/work/Knowledge memos are excluded, and avoids a repeated confirmation dialog. Knowledge review cards now visibly separate `AI 초안 · 확인 전` from the personally confirmed note and its manual recheck state.
+- Made the study loop's destinations explicit: after a learning, work, or visual save, the Reader status offers `기록에서 보기` and opens the matching non-resizing record view; the PDF chat composer now labels the exact source scope sent for this turn and that personal/work/Knowledge notes are excluded by default.
+- Refined the Reader command hierarchy without changing stored study data: primary selection actions are now important, needs-understanding, note, and ask-AI; semantic, review, work, and translation actions remain available from More. Reader records now use a non-resizing right overlay drawer with reading/learning, work, and visual-region views. Visual-region capture opens a compact source-adjacent editor and keeps passive region outlines subtle until selected or focused.
+- Clarified the Knowledge boundary in the composer: a captured memo stays in the local inbox until the user explicitly runs `원격 AI로 정리`; provenance is labeled as source/context metadata rather than truth or trust, and the remote-AI connection state is secondary instead of a persistent warning.
+- Added durable visual-region anchors for figure, table, equation, process-condition, and custom PDF areas. They use only stable document identity, page-relative rectangle, user kind/memo, and timestamps in the existing `.annot` sidecar; crop images, thumbnails, OCR, AI interpretation, SQLite schema changes, and backup-manifest changes remain out of scope.
+- Added explicit, review-gated promotion from a PDF highlight or persisted AI answer into the existing local Knowledge inbox. Promotion preserves the existing source anchor and can include the highlight memo; it never creates a wiki revision directly.
+- Added provenance classes for `문헌 주장`, `업무 관찰`, `개인 가설`, and `AI 추론`, plus optional original-date and AI-answer metadata. They are additive optional fields in the existing format-2 knowledge JSON; SQLite schema, backup manifest, and legacy JSON read behavior are unchanged.
+- Added an intentionally narrow manual `재검토 표시` / `재검토 완료` flow. It records human attention without changing a topic body, `updatedAt`, or revision. Publication age never automatically creates expiry, stale, or truth state.
+
+## 0.9.0 — 2026-08-31
+
+- Added a current-PDF Evidence → Work Item loop for professional technical reading. A highlight can optionally be classified as `finding`, `verify`, `discuss`, or `try`; its existing note remains the interpretation or follow-up text, while Verify/Discuss/Try may be marked done independently of study `resolvedAt`.
+- Added a compact Work filter in the existing highlight list and a separate Evidence Brief Markdown export. It includes only promoted source highlights, groups Findings/open/completed follow-ups, and links each item back to the existing `?pdf=&page=` Reader location.
+- Stored only optional `workKind` and `workDoneAt` fields inside existing v1 annotation sidecars. No SQLite schema, sidecar version, backup manifest, task database, network service, or AI/Python dependency was added.
+- Refined the Reader follow-through UI into independent learning/work record views, with exact-source cards, a footer-only secondary Ask for existing highlights, Library resume/unresolved/open-work summaries, and one responsive auxiliary slot for Chat or reading records. The Evidence Brief preview now uses that same work selector while preserving work-only Markdown export.
+
+## 0.8.0 — 2026-08-31
+
+- Added source-anchored manual Cloze cards. A learner selects a PDF sentence, then explicitly chooses one short original-text span to hide; the current-PDF Today queue, review dates, and exact source return are reused unchanged.
+- Stored only optional `kind: "cloze"` plus `clozeText`/`clozeStart`/`clozeEnd` inside the existing v1 `study.cards` sidecar. Missing `kind` remains the prior basic recall card without a read-time migration; SQLite schema 1 and backup manifest v2 remain unchanged.
+- Kept Cloze fully local and self-rated: no AI generation, automatic grading, multi-cloze, quiz choices, global study dashboard, or adaptive SRS.
+
+## 0.7.0 — 2026-08-31
+
+- Added a compact, current-PDF `오늘 복습` queue to Source-Anchored Recall. New cards are due today; `다시` returns a card tomorrow and `기억함` in three calendar days.
+- Stored only optional date-only `review.nextReviewDate` state in the existing v1 `study.cards` sidecar. Existing 0.6 cards with no date remain due without a read-time migration write; SQLite schema 1 and backup manifest v2 remain unchanged.
+- Kept all-card access, answer-hidden recall, editing, source return, offline/Python-free behavior, and exact document anchors. Adaptive SRS, notifications, streaks, cross-PDF queues, and a global study dashboard remain out of scope.
+
+## 0.6.0 — 2026-08-31
+
+- Added Source-Anchored Recall: manual, editable cards from a PDF selection or an anchored AI answer; answers stay hidden until requested and always return to the original PDF page/rect.
+- Added minimal local review state (`again` / `remembered`, count, and last review time) without SM-2/FSRS scheduling, notifications, gamification, or a new database.
+- Stored cards as optional `study.cards` data in the existing v1 annotation sidecar. Existing sidecars, highlights, sessions, backup manifest v2, and SQLite schema 1 remain compatible.
+
+## 0.5.0 — 2026-08-31
+
+- Added the local-first PDF study loop: compact text-selection actions, semantic highlight meanings, unresolved/resolved study state, and a filtered review list while retaining legacy native PDF highlight types.
+- Added durable PDF chat source contexts, selection/page source chips that return to the Reader, and small PDF markers for completed anchored AI conversations.
+- Added portable page-relative reading resume in paper metadata, preserving the older localStorage page fallback and avoiding FTS rebuilds for reading-position updates.
+- Preserved `.annot` sidecar, legacy session, SQLite schema 1, and backup manifest v2 compatibility. AI and PyMuPDF remain optional; sidecar study state works without either.
+
+## Large-PDF indexing (working tree)
+
+- Replaced synchronous in-memory research indexing with a single-flight background job that reports real PDF page progress and permits cancellation while pages are being extracted.
+- Streamed PyMuPDF page JSONL into disposable OS-temp NDJSON staging, re-verified the document path/stat/SHA-256 before commit, and atomically replaced chunks plus FTS so cancellation, source changes, and failures retain the prior index.
+- Added clear restart recovery messaging, a commit-time cancellation boundary, idempotent same-document starts, and guarded automatic-title updates that cannot overwrite a user's later edit.
+- Prefer the current `pymupdf` import in the extractor so the deprecated `fitz` compatibility warning cannot corrupt the stdout-only JSONL protocol, and prefer a concrete installed Python before Windows Store aliases; retained an older-PyMuPDF fallback and added an opt-in real-PDF integration test.
+
 ## 0.4.4 — 2026-08-02
 
 - Added a shared `?` help button and `F1` shortcut with screen-specific tips, a full usage guide, and troubleshooting guidance.

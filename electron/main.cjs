@@ -5,12 +5,13 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 
-const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 
 const isDevelopment = process.argv.includes('--dev') || !app.isPackaged;
 const isSmokeTest = process.argv.includes('--smoke-test');
 let mainWindow = null;
+let deepSeekWindow = null;
 let serverProcess = null;
 let baseUrl = null;
 let isQuitting = false;
@@ -21,6 +22,28 @@ app.setAppUserModelId('app.pagedock.desktop');
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
 if (!hasSingleInstanceLock) {
   app.quit();
+}
+
+const DEEPSEEK_WEB_URL = 'https://chat.deepseek.com/';
+const DEEPSEEK_WEB_PARTITION = 'persist:pagedock-deepseek-web';
+const MAX_DEEPSEEK_PROMPT_CHARS = 16_000;
+
+function isDeepSeekUrl(targetUrl) {
+  try {
+    const parsed = new URL(targetUrl);
+    return parsed.protocol === 'https:' && (
+      parsed.hostname === 'deepseek.com'
+      || parsed.hostname.endsWith('.deepseek.com')
+    );
+  } catch {
+    return false;
+  }
+}
+
+function getWindowIcon() {
+  return isDevelopment
+    ? path.join(__dirname, '..', 'build', 'icon.png')
+    : path.join(process.resourcesPath, 'assets', 'icon.png');
 }
 
 function getFreePort() {
@@ -126,9 +149,7 @@ function createWindow(url) {
       return false;
     }
   };
-  const windowIcon = isDevelopment
-    ? path.join(__dirname, '..', 'build', 'icon.png')
-    : path.join(process.resourcesPath, 'assets', 'icon.png');
+  const windowIcon = getWindowIcon();
   mainWindow = new BrowserWindow({
     width: 1440,
     height: 920,
@@ -172,6 +193,71 @@ function createWindow(url) {
   void mainWindow.loadURL(url);
 }
 
+async function openDeepSeekWebWindow() {
+  if (deepSeekWindow && !deepSeekWindow.isDestroyed()) {
+    if (deepSeekWindow.isMinimized()) deepSeekWindow.restore();
+    deepSeekWindow.focus();
+    return { mode: 'focused' };
+  }
+
+  const window = new BrowserWindow({
+    width: 1120,
+    height: 820,
+    minWidth: 760,
+    minHeight: 560,
+    title: 'DeepSeek 웹 보조 · PageDock',
+    icon: getWindowIcon(),
+    backgroundColor: '#f5f8f7',
+    show: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      partition: DEEPSEEK_WEB_PARTITION,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      webSecurity: true,
+    },
+  });
+  deepSeekWindow = window;
+
+  window.once('ready-to-show', () => window.show());
+  window.on('closed', () => {
+    if (deepSeekWindow === window) deepSeekWindow = null;
+  });
+  window.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    if (!isDeepSeekUrl(targetUrl)) {
+      void shell.openExternal(targetUrl);
+    }
+    return { action: 'deny' };
+  });
+  window.webContents.on('will-navigate', (event, targetUrl) => {
+    if (isDeepSeekUrl(targetUrl)) return;
+    event.preventDefault();
+    void shell.openExternal(targetUrl);
+  });
+
+  try {
+    await window.loadURL(DEEPSEEK_WEB_URL);
+    return { mode: 'window' };
+  } catch {
+    if (!window.isDestroyed()) window.close();
+    await shell.openExternal(DEEPSEEK_WEB_URL);
+    return { mode: 'external-fallback' };
+  }
+}
+
+async function clearDeepSeekWebSession() {
+  const deepSeekSession = session.fromPartition(DEEPSEEK_WEB_PARTITION);
+  await deepSeekSession.clearStorageData({
+    storages: ['appcache', 'cookies', 'filesystem', 'indexdb', 'localstorage', 'serviceworkers', 'websql', 'cachestorage'],
+  });
+  await deepSeekSession.clearCache();
+
+  if (deepSeekWindow && !deepSeekWindow.isDestroyed()) {
+    await deepSeekWindow.loadURL(DEEPSEEK_WEB_URL).catch(() => undefined);
+  }
+}
+
 function configureDesktopIpc() {
   ipcMain.handle('pagedock:select-directory', async () => {
     const options = {
@@ -183,6 +269,20 @@ function configureDesktopIpc() {
       : await dialog.showOpenDialog(options);
     return result.canceled ? null : result.filePaths[0] || null;
   });
+
+  ipcMain.handle('pagedock:deepseek-web-open', async () => openDeepSeekWebWindow());
+  ipcMain.handle('pagedock:deepseek-web-clear-session', async () => {
+    await clearDeepSeekWebSession();
+    return true;
+  });
+  ipcMain.handle('pagedock:deepseek-web-copy-prompt', (_event, text) => {
+    if (typeof text !== 'string' || !text.trim() || text.length > MAX_DEEPSEEK_PROMPT_CHARS) {
+      throw new Error('DeepSeek에 복사할 질문 내용이 올바르지 않습니다.');
+    }
+    clipboard.writeText(text);
+    return true;
+  });
+  ipcMain.handle('pagedock:deepseek-web-read-clipboard', () => clipboard.readText());
 }
 
 function configureApplicationMenu() {

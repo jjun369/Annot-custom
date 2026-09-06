@@ -1,16 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { editKnowledgeTopic, restoreKnowledgeTopicRevision } from '@/lib/knowledge-store';
+import {
+  completeKnowledgeTopicReview,
+  editKnowledgeTopic,
+  requestKnowledgeTopicReview,
+  restoreKnowledgeTopicRevision,
+} from '@/lib/knowledge-store';
 
 export async function PATCH(request: NextRequest) {
   try {
     const body = await request.json() as {
-      action?: 'edit' | 'restore';
+      action?: 'edit' | 'restore' | 'request-review' | 'complete-review';
       topicId?: string;
       revision?: number;
+      reason?: 'manual' | 'source_changed';
       update?: { title?: string; summary?: string; bodyMarkdown?: string; changeNote?: string };
     };
     if (!body.topicId) return NextResponse.json({ error: 'topicId가 필요합니다.' }, { status: 400 });
+    if (body.action === 'request-review') {
+      return NextResponse.json({ topic: await requestKnowledgeTopicReview(body.topicId, body.reason ?? 'manual') });
+    }
+    if (body.action === 'complete-review') {
+      return NextResponse.json({ topic: await completeKnowledgeTopicReview(body.topicId) });
+    }
     if (body.action === 'edit') {
       if (!body.update?.title || !body.update.bodyMarkdown) {
         return NextResponse.json({ error: '제목과 Markdown 본문이 필요합니다.' }, { status: 400 });

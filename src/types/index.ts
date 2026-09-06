@@ -17,6 +17,98 @@ export type SessionKind = 'folder' | 'pdf';
 export type AIProvider = 'codex' | 'claude';
 export type ReasoningEffort = 'auto' | 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
+export type ChatSourceScope = 'selection' | 'page' | 'pdf';
+
+export interface HighlightRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * A durable, page-relative bookmark for a visual part of a PDF. The PDF is
+ * always the source of truth: no crop, thumbnail, OCR, or AI interpretation
+ * is persisted with this anchor.
+ */
+export type VisualRegionKind = 'figure' | 'table' | 'equation' | 'process_condition' | 'custom';
+
+export interface VisualRegion {
+  id: string;
+  documentId?: string;
+  page: number;
+  rect: HighlightRect;
+  kind: VisualRegionKind;
+  memo: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ReaderSummary {
+  page?: number;
+  unresolvedCount: number;
+  openWorkCount: number;
+  /** Existing metadata only; this is a transient Library cue, not new study state. */
+  lastOpenedAt?: string;
+}
+
+export interface ChatSourceContext {
+  id: string;
+  scope: ChatSourceScope;
+  documentId?: string;
+  page?: number;
+  text?: string;
+  rects?: HighlightRect[];
+  highlightId?: string;
+}
+
+export type StudyCardOrigin = 'selection' | 'chat';
+export type StudyCardReviewResult = 'again' | 'remembered';
+export type StudyCardKind = 'basic' | 'cloze';
+
+/**
+ * One continuous exact-text span inside a selection card's immutable source
+ * excerpt. It is presentation state, not a second PDF locator.
+ */
+export interface StudyCardCloze {
+  text: string;
+  start: number;
+  end: number;
+}
+
+export interface StudyCardReviewState {
+  reviewCount: number;
+  lastReviewedAt?: string;
+  lastResult?: StudyCardReviewResult;
+  /**
+   * Local calendar day in YYYY-MM-DD form. It deliberately has no time or
+   * timezone component: recall is a "today" workflow, not an alarm.
+   */
+  nextReviewDate?: string;
+}
+
+/**
+ * A portable active-recall card. `sourceContext` deliberately reuses the
+ * Reader/Chat anchor contract instead of introducing a second PDF locator.
+ */
+export interface StudyCard {
+  id: string;
+  documentId?: string;
+  sourceContext: ChatSourceContext;
+  /** Missing on 0.6/0.7 cards means the original basic recall renderer. */
+  kind?: StudyCardKind;
+  /** Additive only for kind === 'cloze'; offsets are into sourceContext.text. */
+  clozeText?: string;
+  clozeStart?: number;
+  clozeEnd?: number;
+  front: string;
+  back: string;
+  origin: StudyCardOrigin;
+  createdAt: string;
+  updatedAt: string;
+  review: StudyCardReviewState;
+}
+
 export interface Session {
   id: string;
   documentId?: string;
@@ -40,6 +132,34 @@ export interface ChatMessage {
   content: string;
   timestamp: string;
   model?: string;
+  sourceContext?: ChatSourceContext;
+  replyToMessageId?: string;
+  /**
+   * Explicitly imported alternative answers. They never replace the primary
+   * provider answer and are only populated through a user-controlled flow.
+   */
+  secondaryPerspectives?: ChatSecondaryPerspective[];
+}
+
+/**
+ * A DeepSeek web answer that the user copied and deliberately imported after
+ * reviewing the exact bounded prompt in PageDock. It contains no web session,
+ * cookie, credential, DOM, or remote conversation-history data.
+ */
+export interface ChatSecondaryPerspective {
+  id: string;
+  provider: 'deepseek';
+  transport: 'web-manual';
+  acquisition: 'user-paste';
+  sourceMessageId: string;
+  questionMessageId: string;
+  promptSnapshot: string;
+  promptSha256: string;
+  responseText: string;
+  requestedAt: string;
+  importedAt: string;
+  /** The DeepSeek web UI model is not reliably observable by PageDock. */
+  model: null;
 }
 
 export interface SessionTurnSummary {
@@ -54,6 +174,9 @@ export interface SessionTurnSummary {
 
 // ── Highlights ──────────────────────────────────────────────────
 
+export type HighlightStudyKind = 'important' | 'concept' | 'memorize' | 'question' | 'unclear';
+export type HighlightWorkKind = 'finding' | 'verify' | 'discuss' | 'try';
+
 export interface Highlight {
   id: string;
   documentId?: string;
@@ -63,18 +186,19 @@ export interface Highlight {
   type: 'important' | 'unknown';
   text: string;
   note?: string;
-  rects?: Array<{
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  }>;
-  position: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-  };
+  rects?: HighlightRect[];
+  position: HighlightRect;
+  studyKind?: HighlightStudyKind;
+  resolvedAt?: string;
+  /**
+   * Optional local-only work classification. The existing note remains the
+   * interpretation or follow-up text; this is deliberately not a task model.
+   */
+  workKind?: HighlightWorkKind;
+  /** Present only for completed Verify / Discuss / Try follow-ups. */
+  workDoneAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export type ReadingStatus = 'unread' | 'reading' | 'completed';
@@ -90,6 +214,13 @@ export interface PaperTranslation {
   model?: string;
 }
 
+export interface ReadingPosition {
+  page: number;
+  pageOffsetRatio: number;
+  viewMode: 'paged' | 'scroll';
+  updatedAt: string;
+}
+
 export interface PaperMetadata {
   documentId?: string;
   pdfPath: string;
@@ -103,6 +234,7 @@ export interface PaperMetadata {
   analyzedAt?: string;
   analysisModel?: string;
   lastOpenedAt?: string;
+  readingPosition?: ReadingPosition;
   updatedAt: string;
   translations: PaperTranslation[];
 }

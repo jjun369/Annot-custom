@@ -2,11 +2,37 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react';
 import { useWorkspace } from '@/lib/workspace-store';
-import { Highlight } from '@/types';
-import { getHighlightRects, mergeHighlights, normalizeHighlightRects, type HighlightRect } from '@/lib/highlight-utils';
+import { ChatSourceContext, Highlight, HighlightRect, HighlightStudyKind, HighlightWorkKind, ReadingPosition, Session, StudyCardKind, VisualRegion, VisualRegionKind } from '@/types';
+import { getHighlightRects, mergeHighlights, normalizeHighlightRects } from '@/lib/highlight-utils';
+import { applyStudyKind, getStudyKindLabel, inferStudyKind, isUnresolvedHighlight, legacyTypeForStudyKind } from '@/lib/highlight-study';
+import { applyWorkKind, getWorkKindLabel, getWorkNotePlaceholder, isWorkActionKind, isWorkDone } from '@/lib/highlight-work';
+import { normalizeVisualRegionRect } from '@/lib/visual-regions';
+import { MAX_SELECTION_CONTEXT_CHARS } from '@/lib/ai-providers/source-context';
+import { normalizeReadingPosition } from '@/lib/reading-position';
+import { notifyReaderSummaryChanged } from '@/lib/reader-summary-events';
 import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
 import { readStoredReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
+import {
+  PDF_EXPORT_PREVIEW_FAILED,
+  PDF_HIGHLIGHT_DELETE_FAILED,
+  PDF_HIGHLIGHT_MIGRATION_DEFERRED,
+  PDF_HIGHLIGHT_SAVE_DEFERRED,
+  PDF_NOTE_SAVE_FAILED,
+  PDF_TEXT_ANALYSIS_UNAVAILABLE,
+  PDF_TRANSLATION_FAILED,
+  PDF_TRANSLATION_SAVE_FAILED,
+} from '@/lib/pdf-user-messages';
 import { MarkdownPreviewDialog } from '@/components/common/MarkdownPreviewDialog';
+import { KnowledgePromotionDialog, type KnowledgePromotionCandidate } from '@/components/knowledge/KnowledgePromotionDialog';
+import { SelectionActionBar } from '@/components/workspace/pdf/SelectionActionBar';
+import { AiAnchorMarker } from '@/components/workspace/pdf/AiAnchorMarker';
+import { EvidenceBriefDialog } from '@/components/workspace/pdf/EvidenceBriefDialog';
+import {
+  ReaderRecordPanel,
+  type ReaderLearningFilter,
+  type ReaderRecordTab,
+} from '@/components/workspace/pdf/ReaderRecordPanel';
+import { VisualRegionDialog, type VisualRegionDraftLocation } from '@/components/workspace/pdf/VisualRegionDialog';
 import {
   Minus,
   Plus,
@@ -24,7 +50,11 @@ import {
   Languages,
   BookOpenText,
   List,
+  ScanLine,
   Search as SearchIcon,
+  ChevronDown,
+  MoreHorizontal,
+  Smartphone,
 } from 'lucide-react';
 import { Document, Page, pdfjs } from 'react-pdf';
 
@@ -35,6 +65,7 @@ const LAST_PAGE_STORAGE_KEY = 'annot-last-page';
 
 type HighlightMode = Highlight['type'] | null;
 type PdfViewMode = 'paged' | 'scroll';
+type PdfExportKind = 'highlights' | 'evidence-brief';
 type TranslationDraft = {
   kind: 'selection' | 'full';
   title: string;
@@ -42,6 +73,37 @@ type TranslationDraft = {
   translatedMarkdown: string;
   bilingualMarkdown: string;
   model?: string;
+};
+
+interface PdfSelectionSnapshot {
+  page: number;
+  text: string;
+  rects: HighlightRect[];
+  viewportRect: {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  };
+}
+
+interface VisualRegionPointer {
+  page: number;
+  x: number;
+  y: number;
+}
+
+interface AnchoredConversation {
+  sourceContext: ChatSourceContext;
+  session: Session;
+  questionMessageId: string;
+}
+
+type SelectionNotice = string | {
+  message: string;
+  recordTab?: ReaderRecordTab;
+  recordActionLabel?: string;
+  recordLearningFilter?: ReaderLearningFilter;
 };
 
 function loadHighlights(): Record<string, Highlight[]> {
@@ -79,7 +141,24 @@ function setStoredHighlights(pdfPath: string, nextHighlights: Highlight[]): void
 }
 
 export function PdfViewer() {
-  const { activePdf, closePdf, activeSessionFolder, chatOpen, toggleChat } = useWorkspace();
+  const {
+    activePdf,
+    closePdf,
+    activeSessionFolder,
+    chatOpen,
+    toggleChat,
+    setActivePdfPage,
+    queueChatRequest,
+    queueStudyCardRequest,
+    openStudyReview,
+    pendingPdfSourceNavigation,
+    consumePdfSourceNavigation,
+    pendingReaderReviewRequest,
+    consumeReaderReviewRequest,
+    openSession,
+    focusChatMessage,
+    chatRevision,
+  } = useWorkspace();
   const activePdfPath = activePdf?.path ?? '';
   const [zoom, setZoom] = useState(125);
   const [renderZoom, setRenderZoom] = useState(125);
@@ -92,7 +171,21 @@ export function PdfViewer() {
   const [highlightMode, setHighlightMode] = useState<HighlightMode>(null);
   const [eraseMode, setEraseMode] = useState(false);
   const [highlights, setHighlights] = useState<Highlight[]>([]);
-  const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
+  const [visualRegions, setVisualRegions] = useState<VisualRegion[]>([]);
+  const [visualCaptureMode, setVisualCaptureMode] = useState(false);
+  const [visualRegionPointer, setVisualRegionPointer] = useState<VisualRegionPointer | null>(null);
+  const [visualRegionPreview, setVisualRegionPreview] = useState<VisualRegionDraftLocation | null>(null);
+  const [visualRegionDraft, setVisualRegionDraft] = useState<VisualRegionDraftLocation | null>(null);
+  const [selectedVisualRegionId, setSelectedVisualRegionId] = useState<string | null>(null);
+  const [visualRegionEditing, setVisualRegionEditing] = useState<VisualRegion | null>(null);
+  const [visualRegionSaving, setVisualRegionSaving] = useState(false);
+  const [selectionNotice, setSelectionNotice] = useState<SelectionNotice | null>(null);
+  const [recordTabRequest, setRecordTabRequest] = useState<{
+    tab: ReaderRecordTab;
+    id: string;
+    learningFilter?: ReaderLearningFilter;
+  } | null>(null);
+  const [selectionSnapshot, setSelectionSnapshot] = useState<PdfSelectionSnapshot | null>(null);
   const [annotationSyncing, setAnnotationSyncing] = useState(false);
   const [selectedHighlightKey, setSelectedHighlightKey] = useState<string | null>(null);
   const [draftNote, setDraftNote] = useState('');
@@ -103,6 +196,10 @@ export function PdfViewer() {
   const [exportDialogOpen, setExportDialogOpen] = useState(false);
   const [exportLoading, setExportLoading] = useState(false);
   const [exportMarkdown, setExportMarkdown] = useState('');
+  const [exportKind, setExportKind] = useState<PdfExportKind>('highlights');
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [viewMenuOpen, setViewMenuOpen] = useState(false);
+  const [markMenuOpen, setMarkMenuOpen] = useState(false);
   const [translationOpen, setTranslationOpen] = useState(false);
   const [translationLoading, setTranslationLoading] = useState(false);
   const [translationDraft, setTranslationDraft] = useState<TranslationDraft | null>(null);
@@ -111,6 +208,13 @@ export function PdfViewer() {
   const [textSearchQuery, setTextSearchQuery] = useState('');
   const [textSearchPages, setTextSearchPages] = useState<number[]>([]);
   const [textSearchLoading, setTextSearchLoading] = useState(false);
+  const [anchoredConversations, setAnchoredConversations] = useState<AnchoredConversation[]>([]);
+  const [focusRects, setFocusRects] = useState<HighlightRect[]>([]);
+  const [resolvingHighlightKey, setResolvingHighlightKey] = useState<string | null>(null);
+  const [storedReadingPosition, setStoredReadingPosition] = useState<ReadingPosition | undefined>();
+  const [knowledgePromotionCandidate, setKnowledgePromotionCandidate] = useState<KnowledgePromotionCandidate | null>(null);
+  const [mobileShelfSaving, setMobileShelfSaving] = useState(false);
+  const [pdfRendererRetry, setPdfRendererRetry] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
   const pageShellRefs = useRef<Record<number, HTMLDivElement | null>>({});
   const pageNumberRef = useRef(1);
@@ -122,15 +226,25 @@ export function PdfViewer() {
     }>;
   } | null>(null);
   const textCacheRef = useRef<Record<number, string>>({});
+  const explicitRequestedPageRef = useRef<number | null>(null);
+  const resumeRestoreKeyRef = useRef<string | null>(null);
+  const readingSaveTimeoutRef = useRef<number | null>(null);
+  const lastPublishedReadingPageRef = useRef<number | null>(null);
+  const visualCaptureClickIgnoreRef = useRef(false);
 
   const fileUrl = useMemo(
     () => `/api/workspace/file?path=${encodeURIComponent(activePdfPath)}`,
     [activePdfPath],
   );
-  const exportUrl = useMemo(
-    () => `/api/workspace/export?path=${encodeURIComponent(activePdfPath)}&format=markdown`,
-    [activePdfPath],
-  );
+  // Electron's worker-side OffscreenCanvas path has produced blank pages for
+  // otherwise valid PDFs with some embedded image/font combinations. Keep the
+  // stable main-thread canvas path for the desktop reader; it is slower only
+  // for the page currently being shown and preserves text selection.
+  const pdfDocumentOptions = useMemo(() => ({
+    isOffscreenCanvasSupported: false,
+    isImageDecoderSupported: false,
+    useWasm: false,
+  }), []);
   const fitPageRatio = pageRatios[pageNumber] || 1.414;
   const fitPageZoom = Math.min(
     200,
@@ -143,16 +257,36 @@ export function PdfViewer() {
     () => highlights.find((highlight) => (highlight.annotationId || highlight.id) === selectedHighlightKey) ?? null,
     [highlights, selectedHighlightKey],
   );
-  const exportFileName = `${(activePdf?.name || 'document').replace(/\.pdf$/i, '')}.highlights.md`;
+  const exportFileName = `${(activePdf?.name || 'document').replace(/\.pdf$/i, '')}.${exportKind === 'evidence-brief' ? 'evidence-brief' : 'highlights'}.md`;
+
+  const showRecordNotice = useCallback((
+    message: string,
+    recordTab: ReaderRecordTab,
+    options?: { actionLabel?: string; learningFilter?: ReaderLearningFilter },
+  ) => {
+    setSelectionNotice({
+      message,
+      recordTab,
+      recordActionLabel: options?.actionLabel,
+      recordLearningFilter: options?.learningFilter,
+    });
+  }, []);
+
+  const openReaderRecords = useCallback((recordTab: ReaderRecordTab, learningFilter?: ReaderLearningFilter) => {
+    setRecordTabRequest({ tab: recordTab, learningFilter, id: crypto.randomUUID() });
+    setAnnotationListOpen(true);
+    setSelectionNotice(null);
+  }, []);
 
   const rememberPage = useCallback((nextPage: number) => {
     const safePage = Math.max(1, numPages ? Math.min(numPages, nextPage) : nextPage);
     pageNumberRef.current = safePage;
     setPageNumber(safePage);
+    setActivePdfPage(safePage);
     if (activePdfPath) {
       window.localStorage.setItem(`${LAST_PAGE_STORAGE_KEY}:${activePdfPath}`, String(safePage));
     }
-  }, [activePdfPath, numPages]);
+  }, [activePdfPath, numPages, setActivePdfPage]);
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setRenderZoom(effectiveZoom), 180);
@@ -162,15 +296,19 @@ export function PdfViewer() {
   useEffect(() => {
     const storedPage = Number(window.localStorage.getItem(`${LAST_PAGE_STORAGE_KEY}:${activePdfPath}`) || 1);
     const requestedPage = Number(new URLSearchParams(window.location.search).get('page') || 0);
-    const initialPage = Number.isFinite(requestedPage) && requestedPage > 0
+    const explicitPage = Number.isFinite(requestedPage) && requestedPage > 0
       ? Math.floor(requestedPage)
-      : Number.isFinite(storedPage) && storedPage > 0 ? Math.floor(storedPage) : 1;
+      : null;
+    const initialPage = explicitPage ?? (Number.isFinite(storedPage) && storedPage > 0 ? Math.floor(storedPage) : 1);
+    explicitRequestedPageRef.current = explicitPage;
+    resumeRestoreKeyRef.current = null;
     setVisiblePages(new Set([1, 2]));
     setPageRatios({});
     setNumPages(null);
     setFitMode('manual');
     setRenderZoom(125);
     setZoom(125);
+    setPdfRendererRetry(0);
     setPageNumber(initialPage);
     pageNumberRef.current = initialPage;
     pageShellRefs.current = {};
@@ -179,6 +317,36 @@ export function PdfViewer() {
     setTextSearchPages([]);
     setTextSearchQuery('');
     setTextSearchOpen(false);
+    setSelectionSnapshot(null);
+    setVisualRegions([]);
+    setVisualCaptureMode(false);
+    setVisualRegionPointer(null);
+    setVisualRegionPreview(null);
+    setVisualRegionDraft(null);
+    setSelectedVisualRegionId(null);
+    setVisualRegionEditing(null);
+    setAnchoredConversations([]);
+    setFocusRects([]);
+    setStoredReadingPosition(undefined);
+    lastPublishedReadingPageRef.current = null;
+
+    if (!activePdfPath) return;
+    let cancelled = false;
+    const loadReadingPosition = async () => {
+      try {
+        const res = await fetch(`/api/papers/metadata?path=${encodeURIComponent(activePdfPath)}`, { cache: 'no-store' });
+        const metadata = await res.json();
+        const readingPosition = normalizeReadingPosition(metadata?.readingPosition);
+        if (!cancelled) {
+          setStoredReadingPosition(readingPosition);
+          if (readingPosition) setViewMode(readingPosition.viewMode);
+        }
+      } catch {
+        // Legacy localStorage remains the fallback when portable metadata is unavailable.
+      }
+    };
+    void loadReadingPosition();
+    return () => { cancelled = true; };
   }, [activePdfPath]);
 
   useEffect(() => {
@@ -187,6 +355,10 @@ export function PdfViewer() {
 
   const handlePageChange = useCallback((nextPage: number) => {
     setSelectionNotice(null);
+    setSelectionSnapshot(null);
+    setVisualCaptureMode(false);
+    setVisualRegionPointer(null);
+    setVisualRegionPreview(null);
 
     if (viewMode === 'scroll') {
       const pageShell = pageShellRefs.current[nextPage];
@@ -200,6 +372,37 @@ export function PdfViewer() {
 
     rememberPage(nextPage);
   }, [rememberPage, viewMode]);
+
+  const persistReadingPosition = useCallback((page: number, pageOffsetRatio: number, mode: PdfViewMode) => {
+    if (!activePdfPath) return;
+    void fetch('/api/papers/metadata', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        pdfPath: activePdfPath,
+        readingPosition: {
+          page: Math.max(1, Math.floor(page)),
+          pageOffsetRatio: Math.min(1, Math.max(0, pageOffsetRatio)),
+          viewMode: mode,
+          updatedAt: new Date().toISOString(),
+        },
+      }),
+    }).then((res) => {
+      if (!res.ok || lastPublishedReadingPageRef.current === page) return;
+      lastPublishedReadingPageRef.current = page;
+      notifyReaderSummaryChanged();
+    }).catch(() => {
+      // Resume persistence must never interrupt reading.
+    });
+  }, [activePdfPath]);
+
+  const scheduleReadingPositionSave = useCallback((page: number, pageOffsetRatio: number, mode: PdfViewMode) => {
+    if (readingSaveTimeoutRef.current !== null) window.clearTimeout(readingSaveTimeoutRef.current);
+    readingSaveTimeoutRef.current = window.setTimeout(() => {
+      readingSaveTimeoutRef.current = null;
+      persistReadingPosition(page, pageOffsetRatio, mode);
+    }, 900);
+  }, [persistReadingPosition]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -217,7 +420,58 @@ export function PdfViewer() {
   }, []);
 
   useEffect(() => {
+    if (viewMode !== 'scroll') return;
+    const container = containerRef.current;
+    if (!container) return;
+    const onScroll = () => {
+      setSelectionSnapshot(null);
+      if (visualCaptureMode) {
+        setVisualCaptureMode(false);
+        setVisualRegionPointer(null);
+        setVisualRegionPreview(null);
+      }
+      const page = pageNumberRef.current;
+      const pageShell = pageShellRefs.current[page];
+      const containerRect = container.getBoundingClientRect();
+      const pageRect = pageShell?.getBoundingClientRect();
+      const pageOffsetRatio = pageRect && pageRect.height > 0
+        ? Math.min(1, Math.max(0, (containerRect.top - pageRect.top) / pageRect.height))
+        : 0;
+      scheduleReadingPositionSave(page, pageOffsetRatio, 'scroll');
+    };
+    container.addEventListener('scroll', onScroll, { passive: true });
+    return () => container.removeEventListener('scroll', onScroll);
+  }, [scheduleReadingPositionSave, viewMode, visualCaptureMode]);
+
+  useEffect(() => {
+    setSelectionSnapshot(null);
+    setVisualCaptureMode(false);
+    setVisualRegionPointer(null);
+    setVisualRegionPreview(null);
+  }, [effectiveZoom, viewMode]);
+
+  useEffect(() => {
+    if (!activePdfPath || viewMode !== 'paged') return;
+    scheduleReadingPositionSave(pageNumber, 0, 'paged');
+  }, [activePdfPath, pageNumber, scheduleReadingPositionSave, viewMode]);
+
+  useEffect(() => () => {
+    if (readingSaveTimeoutRef.current !== null) {
+      window.clearTimeout(readingSaveTimeoutRef.current);
+    }
+  }, []);
+
+  useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && (visualCaptureMode || visualRegionDraft || visualRegionEditing)) {
+        event.preventDefault();
+        setVisualCaptureMode(false);
+        setVisualRegionPointer(null);
+        setVisualRegionPreview(null);
+        setVisualRegionDraft(null);
+        setVisualRegionEditing(null);
+        return;
+      }
       const target = event.target as HTMLElement | null;
       if (target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.isContentEditable) return;
 
@@ -248,7 +502,7 @@ export function PdfViewer() {
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handlePageChange, numPages]);
+  }, [handlePageChange, numPages, visualCaptureMode, visualRegionDraft, visualRegionEditing]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -278,8 +532,11 @@ export function PdfViewer() {
       setHighlights([]);
       setSelectedHighlightKey(null);
       setDraftNote('');
+      setRecordTabRequest(null);
       return;
     }
+
+    setRecordTabRequest(null);
 
     let cancelled = false;
 
@@ -328,10 +585,8 @@ export function PdfViewer() {
             nextHighlights = mergeHighlights([...nextHighlights, ...legacyHighlights]);
 
             if (!cancelled) {
-              const message = error instanceof Error
-                ? error.message
-                : '기존 하이라이트를 아직 이전하지 못했습니다.';
-              setSelectionNotice(message);
+              console.warn('Failed to migrate legacy PDF highlights.', error);
+              setSelectionNotice(PDF_HIGHLIGHT_MIGRATION_DEFERRED);
             }
           }
         }
@@ -341,10 +596,10 @@ export function PdfViewer() {
         }
       } catch (error) {
         if (!cancelled) {
-          const message = error instanceof Error ? error.message : 'PDF 주석을 불러오지 못했습니다.';
+          console.warn('Failed to load PDF annotations.', error);
           const fallbackHighlights = legacyHighlights.length > 0 ? legacyHighlights : [];
           setHighlights(mergeHighlights(fallbackHighlights));
-          setSelectionNotice(message);
+          setSelectionNotice(PDF_TEXT_ANALYSIS_UNAVAILABLE);
         }
       } finally {
         if (!cancelled) {
@@ -359,6 +614,17 @@ export function PdfViewer() {
       cancelled = true;
     };
   }, [activePdfPath]);
+
+  useEffect(() => {
+    if (!pendingReaderReviewRequest || pendingReaderReviewRequest.pdfPath !== activePdfPath) return;
+    openReaderRecords('learning', 'needs-understanding');
+    consumeReaderReviewRequest(pendingReaderReviewRequest.id);
+  }, [
+    activePdfPath,
+    consumeReaderReviewRequest,
+    openReaderRecords,
+    pendingReaderReviewRequest,
+  ]);
 
   useEffect(() => {
     if (!selectedHighlightKey) {
@@ -376,6 +642,107 @@ export function PdfViewer() {
 
     setDraftNote(selectedHighlight.note ?? '');
   }, [selectedHighlight, selectedHighlightKey]);
+
+  useEffect(() => {
+    if (!activePdfPath) {
+      setVisualRegions([]);
+      return;
+    }
+    let cancelled = false;
+    const loadVisualRegions = async () => {
+      try {
+        const response = await fetch(`/api/workspace/visual-regions?path=${encodeURIComponent(activePdfPath)}`, {
+          cache: 'no-store',
+        });
+        const payload = await response.json();
+        if (!response.ok || payload?.error) {
+          throw new Error(typeof payload?.error === 'string' ? payload.error : '기록을 불러오지 못했습니다.');
+        }
+        if (!cancelled) setVisualRegions(Array.isArray(payload.regions) ? payload.regions as VisualRegion[] : []);
+      } catch {
+        if (!cancelled) {
+          setVisualRegions([]);
+          setSelectionNotice('그림·표 기록을 불러오지 못했습니다. PDF 읽기는 계속할 수 있습니다.');
+        }
+      }
+    };
+    void loadVisualRegions();
+    return () => { cancelled = true; };
+  }, [activePdfPath]);
+
+  useEffect(() => {
+    if (!activePdfPath || !activeSessionFolder) {
+      setAnchoredConversations([]);
+      return;
+    }
+    let cancelled = false;
+    const loadAnchoredConversations = async () => {
+      try {
+        const params = new URLSearchParams({
+          folderPath: activeSessionFolder,
+          sessionKind: 'pdf',
+          pdfPath: activePdfPath,
+        });
+        const res = await fetch(`/api/sessions?${params.toString()}`, { cache: 'no-store' });
+        const sessions = await res.json();
+        if (!res.ok || !Array.isArray(sessions) || cancelled) return;
+        const anchors: AnchoredConversation[] = [];
+        for (const session of sessions as Session[]) {
+          const assistantReplies = new Set(session.messages
+            .filter((message) => message.role === 'assistant' && typeof message.replyToMessageId === 'string')
+            .map((message) => message.replyToMessageId));
+          for (const message of session.messages) {
+            const sourceContext = message.sourceContext;
+            if (
+              message.role !== 'user'
+              || sourceContext?.scope !== 'selection'
+              || !sourceContext.page
+              || !Array.isArray(sourceContext.rects)
+              || sourceContext.rects.length === 0
+              || !assistantReplies.has(message.id)
+            ) continue;
+            anchors.push({ sourceContext, session, questionMessageId: message.id });
+          }
+        }
+        if (!cancelled) setAnchoredConversations(anchors);
+      } catch {
+        if (!cancelled) setAnchoredConversations([]);
+      }
+    };
+    void loadAnchoredConversations();
+    return () => { cancelled = true; };
+  }, [activePdfPath, activeSessionFolder, chatRevision]);
+
+  useEffect(() => {
+    if (!pendingPdfSourceNavigation || pendingPdfSourceNavigation.pdfPath !== activePdfPath) return;
+    const request = pendingPdfSourceNavigation;
+    setVisiblePages((current) => new Set([...current, request.page]));
+    rememberPage(request.page);
+    const scrollToSource = () => {
+      const pageShell = pageShellRefs.current[request.page];
+      pageShell?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      setFocusRects(request.rects ?? []);
+      consumePdfSourceNavigation(request.id);
+    };
+    const animationFrame = window.requestAnimationFrame(() => {
+      window.requestAnimationFrame(scrollToSource);
+    });
+    return () => {
+      window.cancelAnimationFrame(animationFrame);
+    };
+  }, [activePdfPath, consumePdfSourceNavigation, pendingPdfSourceNavigation, rememberPage]);
+
+  useEffect(() => {
+    if (focusRects.length === 0) return;
+    const timeout = window.setTimeout(() => setFocusRects([]), 2_000);
+    return () => window.clearTimeout(timeout);
+  }, [focusRects]);
+
+  useEffect(() => {
+    if (!selectedVisualRegionId) return;
+    const timeout = window.setTimeout(() => setSelectedVisualRegionId(null), 2_000);
+    return () => window.clearTimeout(timeout);
+  }, [selectedVisualRegionId]);
 
   useEffect(() => {
     if (viewMode !== 'scroll' || !numPages) return;
@@ -486,11 +853,53 @@ export function PdfViewer() {
     const nextNumPages = pdf.numPages;
     setNumPages(nextNumPages);
     const storedPage = Number(window.localStorage.getItem(`${LAST_PAGE_STORAGE_KEY}:${activePdfPath}`) || pageNumberRef.current);
-    const initialPage = Number.isFinite(storedPage) && storedPage > 0
+    const initialPage = explicitRequestedPageRef.current
+      ?? storedReadingPosition?.page
+      ?? (Number.isFinite(storedPage) && storedPage > 0
       ? Math.min(nextNumPages, Math.floor(storedPage))
-      : 1;
+      : 1);
     rememberPage(initialPage);
   };
+
+  const handlePageRenderError = useCallback(() => {
+    // A fresh Document instance clears a transient canvas/worker render task
+    // without discarding the selected PDF, annotations, or reading position.
+    if (pdfRendererRetry === 0) {
+      setPdfRendererRetry(1);
+      return;
+    }
+
+    setSelectionNotice('이 페이지를 다시 그리지 못했습니다. 다른 페이지를 열었다가 돌아오면 재시도합니다.');
+  }, [pdfRendererRetry]);
+
+  useEffect(() => {
+    if (!activePdfPath || !storedReadingPosition || !numPages || explicitRequestedPageRef.current) return;
+    const restoreKey = `${activePdfPath}:${storedReadingPosition.updatedAt}`;
+    if (resumeRestoreKeyRef.current === restoreKey) return;
+    resumeRestoreKeyRef.current = restoreKey;
+    const targetPage = Math.max(1, Math.min(numPages, storedReadingPosition.page));
+    setVisiblePages((current) => new Set([...current, targetPage]));
+    rememberPage(targetPage);
+    if (viewMode !== 'scroll') return;
+
+    let attempts = 0;
+    let animationFrame = 0;
+    const restoreOffset = () => {
+      const pageShell = pageShellRefs.current[targetPage];
+      const container = containerRef.current;
+      if (!pageShell || !container) {
+        if (attempts < 3) {
+          attempts += 1;
+          animationFrame = window.requestAnimationFrame(restoreOffset);
+        }
+        return;
+      }
+      pageShell.scrollIntoView({ block: 'start', behavior: 'auto' });
+      container.scrollTop += pageShell.clientHeight * storedReadingPosition.pageOffsetRatio;
+    };
+    animationFrame = window.requestAnimationFrame(restoreOffset);
+    return () => window.cancelAnimationFrame(animationFrame);
+  }, [activePdfPath, numPages, rememberPage, storedReadingPosition, viewMode]);
 
   const canGoPrev = pageNumber > 1;
   const canGoNext = numPages !== null && pageNumber < numPages;
@@ -501,10 +910,18 @@ export function PdfViewer() {
       return accumulator;
     }, {});
   }, [highlights]);
-  const sortedHighlights = useMemo(() => [...highlights].sort((a, b) => {
-    if (a.page !== b.page) return a.page - b.page;
-    return (a.rects?.[0]?.y ?? a.position.y) - (b.rects?.[0]?.y ?? b.position.y);
-  }), [highlights]);
+  const anchorsByPage = useMemo(() => anchoredConversations.reduce<Record<number, AnchoredConversation[]>>((groups, anchor) => {
+    const page = anchor.sourceContext.page;
+    if (!page) return groups;
+    groups[page] ??= [];
+    groups[page].push(anchor);
+    return groups;
+  }, {}), [anchoredConversations]);
+  const visualRegionsByPage = useMemo(() => visualRegions.reduce<Record<number, VisualRegion[]>>((groups, region) => {
+    groups[region.page] ??= [];
+    groups[region.page].push(region);
+    return groups;
+  }, {}), [visualRegions]);
   const getSelectionRects = (pageShell: HTMLDivElement | null): HighlightRect[] => {
     const selection = window.getSelection();
 
@@ -535,73 +952,210 @@ export function PdfViewer() {
       .filter((rect): rect is HighlightRect => rect !== null));
   };
 
-  const handleHighlightSelection = async (targetPage: number, pageShell: HTMLDivElement | null) => {
-    if (!highlightMode || eraseMode || !activePdfPath || annotationSyncing) return;
-
+  const getSelectionSnapshot = (
+    targetPage: number,
+    pageShell: HTMLDivElement | null,
+  ): PdfSelectionSnapshot | null => {
     const selection = window.getSelection();
-    const selectedText = selection?.toString().trim() ?? '';
+    if (!selection || !pageShell || selection.rangeCount === 0) return null;
+    const text = selection.toString().trim();
+    if (!text) return null;
+    const range = selection.getRangeAt(0);
+    if (!pageShell.contains(range.startContainer) || !pageShell.contains(range.endContainer)) {
+      setSelectionNotice('한 페이지 안에서 텍스트를 선택해 주세요.');
+      return null;
+    }
     const rects = getSelectionRects(pageShell);
-
-    if (!selection || !selectedText || rects.length === 0) {
-      setSelectionNotice('선택한 영역에서 텍스트를 찾지 못했습니다.');
-      return;
-    }
-
     if (rects.length === 0) {
-      setSelectionNotice('선택 영역을 하이라이트로 변환하지 못했습니다.');
-      return;
+      setSelectionNotice('선택한 영역에서 텍스트 위치를 찾지 못했습니다.');
+      return null;
     }
+    const clientRects = Array.from(range.getClientRects());
+    const selectionRect = clientRects.reduce<DOMRect | null>((combined, rect) => {
+      if (!combined) return rect;
+      const left = Math.min(combined.left, rect.left);
+      const top = Math.min(combined.top, rect.top);
+      const right = Math.max(combined.right, rect.right);
+      const bottom = Math.max(combined.bottom, rect.bottom);
+      return new DOMRect(left, top, right - left, bottom - top);
+    }, null) ?? range.getBoundingClientRect();
+    if (selectionRect.width <= 0 || selectionRect.height <= 0) return null;
+    return {
+      page: targetPage,
+      text,
+      rects,
+      viewportRect: {
+        left: selectionRect.left,
+        top: selectionRect.top,
+        right: selectionRect.right,
+        bottom: selectionRect.bottom,
+      },
+    };
+  };
 
+  const getVisualRegionPoint = (
+    event: ReactMouseEvent<HTMLDivElement>,
+    pageShell: HTMLDivElement | null,
+  ): { x: number; y: number } | null => {
+    if (!pageShell) return null;
+    const pageRect = pageShell.getBoundingClientRect();
+    if (pageRect.width <= 0 || pageRect.height <= 0) return null;
+    const x = (event.clientX - pageRect.left) / pageRect.width;
+    const y = (event.clientY - pageRect.top) / pageRect.height;
+    return x >= 0 && x <= 1 && y >= 0 && y <= 1 ? { x, y } : null;
+  };
+
+  const getVisualRegionRect = (
+    event: ReactMouseEvent<HTMLDivElement>,
+    pageShell: HTMLDivElement | null,
+  ): HighlightRect | null => {
+    if (!visualRegionPointer || !pageShell) return null;
+    const point = getVisualRegionPoint(event, pageShell);
+    if (!point) return null;
+    const x = Math.min(visualRegionPointer.x, point.x);
+    const y = Math.min(visualRegionPointer.y, point.y);
+    return normalizeVisualRegionRect({
+      x,
+      y,
+      width: Math.abs(point.x - visualRegionPointer.x),
+      height: Math.abs(point.y - visualRegionPointer.y),
+    });
+  };
+
+  const handleVisualRegionMouseDown = (
+    event: ReactMouseEvent<HTMLDivElement>,
+    targetPage: number,
+    pageShell: HTMLDivElement | null,
+  ) => {
+    if (!visualCaptureMode) return;
+    const point = getVisualRegionPoint(event, pageShell);
+    if (!point) return;
+    event.preventDefault();
+    window.getSelection()?.removeAllRanges();
+    visualCaptureClickIgnoreRef.current = true;
+    setSelectionSnapshot(null);
+    setVisualRegionPointer({ page: targetPage, ...point });
+    setVisualRegionPreview(null);
+  };
+
+  const handleVisualRegionMouseMove = (
+    event: ReactMouseEvent<HTMLDivElement>,
+    targetPage: number,
+    pageShell: HTMLDivElement | null,
+  ) => {
+    if (!visualCaptureMode || visualRegionPointer?.page !== targetPage) return;
+    const rect = getVisualRegionRect(event, pageShell);
+    setVisualRegionPreview(rect ? { page: targetPage, rect } : null);
+  };
+
+  const handleVisualRegionMouseUp = (
+    event: ReactMouseEvent<HTMLDivElement>,
+    targetPage: number,
+    pageShell: HTMLDivElement | null,
+  ): boolean => {
+    if (!visualCaptureMode) return false;
+    event.preventDefault();
+    const rect = visualRegionPointer?.page === targetPage
+      ? getVisualRegionRect(event, pageShell)
+      : null;
+    setVisualRegionPointer(null);
+    setVisualRegionPreview(null);
+    setVisualCaptureMode(false);
+    if (!rect) {
+      setSelectionNotice('그림·표 영역을 조금 더 크게 드래그해 주세요.');
+      return true;
+    }
+    setVisualRegionDraft({
+      page: targetPage,
+      rect,
+    });
+    return true;
+  };
+
+  const clearSelectionAction = useCallback(() => {
+    setSelectionSnapshot(null);
+  }, []);
+
+  const createStudyHighlight = async (
+    snapshot: PdfSelectionSnapshot,
+    studyKind: HighlightStudyKind,
+    workKind?: HighlightWorkKind,
+    options?: { openNote?: boolean },
+  ) => {
+    if (!activePdfPath || annotationSyncing) return;
+    const now = new Date().toISOString();
+    const studyFields = applyStudyKind({
+      type: legacyTypeForStudyKind(studyKind),
+      studyKind,
+      resolvedAt: undefined,
+    }, studyKind);
     const nextHighlight: Highlight = {
       id: crypto.randomUUID(),
+      documentId: activePdf?.documentId,
       pdfPath: activePdfPath,
-      page: targetPage,
-      type: highlightMode,
-      text: selectedText,
-      rects,
-      position: rects[0],
+      page: snapshot.page,
+      type: studyFields.type,
+      studyKind,
+      text: snapshot.text,
+      rects: snapshot.rects,
+      position: snapshot.rects[0],
       note: '',
+      ...(workKind ? { workKind } : {}),
+      createdAt: now,
+      updatedAt: now,
     };
-    selection.removeAllRanges();
-
-    // The API stores the highlight in the portable .annot sidecar as well as
-    // attempting to embed it in the PDF. Keep localStorage only as a last
-    // resort for a temporary network failure.
+    window.getSelection()?.removeAllRanges();
+    setSelectionSnapshot(null);
     setHighlights((current) => mergeHighlights([...current, nextHighlight]));
-    setSelectionNotice('하이라이트를 표시했습니다. 저장하는 중...');
+    if (options?.openNote) {
+      setSelectedHighlightKey(nextHighlight.id);
+      setDraftNote('');
+      setNoteDialogOpen(true);
+    }
+    const savedLabel = workKind ? `${getWorkKindLabel(workKind)} 업무 근거` : getStudyKindLabel(studyKind);
+    setSelectionNotice(`${savedLabel} 표시를 저장하는 중...`);
 
     try {
       setAnnotationSyncing(true);
-
       const res = await fetch('/api/workspace/annotations', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          pdfPath: activePdfPath,
-          highlights: [nextHighlight],
-        }),
+        body: JSON.stringify({ pdfPath: activePdfPath, highlights: [nextHighlight] }),
       });
       const data = await res.json();
-
       if (!res.ok || data?.error) {
         throw new Error(typeof data?.error === 'string' ? data.error : '하이라이트를 저장하지 못했습니다.');
       }
-
-      const nextHighlights = Array.isArray(data.highlights)
+      setHighlights(Array.isArray(data.highlights)
         ? mergeHighlights(data.highlights as Highlight[])
-        : mergeHighlights([...highlights, nextHighlight]);
-      setHighlights(nextHighlights);
-      setSelectedHighlightKey(null);
-      setSelectionNotice(data.warning
-        ? `${highlightMode === 'important' ? '중요' : '확인 필요'} 하이라이트를 PageDock에 저장했습니다. PDF 원본 반영은 보류되었습니다.`
-        : `${highlightMode === 'important' ? '중요' : '확인 필요'} 하이라이트를 저장했습니다.`);
+        : mergeHighlights([...highlights, nextHighlight]));
+      notifyReaderSummaryChanged();
+      const isUnresolvedStudy = studyKind === 'unclear' || studyKind === 'question';
+      showRecordNotice(
+        data.warning
+          ? `${savedLabel} 표시를 PageDock에 저장했습니다. PDF 원본 반영은 보류되었습니다.`
+          : isUnresolvedStudy && !workKind
+            ? '이해 필요를 남겼습니다. 나중에 다시 볼 수 있어요.'
+            : `${savedLabel} 표시를 저장했습니다.`,
+        workKind ? 'work' : 'learning',
+        isUnresolvedStudy && !workKind
+          ? { actionLabel: '다시 볼 것 보기', learningFilter: 'needs-understanding' }
+          : undefined,
+      );
     } catch (error) {
-      const message = error instanceof Error ? error.message : '하이라이트를 저장하지 못했습니다.';
+      console.warn('Failed to save PDF highlight.', error);
       setStoredHighlights(activePdfPath, mergeHighlights([...getStoredHighlights(activePdfPath), nextHighlight]));
-      setSelectionNotice(`임시 보관했습니다. 다시 열 때 저장을 재시도합니다. ${message}`);
+      setSelectionNotice(PDF_HIGHLIGHT_SAVE_DEFERRED);
     } finally {
       setAnnotationSyncing(false);
     }
+  };
+
+  const handleHighlightSelection = async (targetPage: number, pageShell: HTMLDivElement | null) => {
+    if (!highlightMode || eraseMode || !activePdfPath || annotationSyncing) return;
+    const snapshot = getSelectionSnapshot(targetPage, pageShell);
+    if (!snapshot) return;
+    await createStudyHighlight(snapshot, highlightMode === 'unknown' ? 'unclear' : 'important');
   };
 
   const selectionContainsHighlightRect = (
@@ -680,6 +1234,7 @@ export function PdfViewer() {
         ? mergeHighlights(data.highlights as Highlight[])
         : highlights.filter((highlight) => !removableIds.has(highlight.id));
       setHighlights(nextHighlights);
+      notifyReaderSummaryChanged();
       if (selectedHighlightKey && removableHighlights.some((highlight) => (
         (highlight.annotationId || highlight.id) === selectedHighlightKey
       ))) {
@@ -688,8 +1243,8 @@ export function PdfViewer() {
 
       setSelectionNotice(`하이라이트 ${removableIds.size}개를 지웠습니다.`);
     } catch (error) {
-      const message = error instanceof Error ? error.message : '하이라이트를 지우지 못했습니다.';
-      setSelectionNotice(message);
+      console.warn('Failed to delete PDF highlight.', error);
+      setSelectionNotice(PDF_HIGHLIGHT_DELETE_FAILED);
     } finally {
       setAnnotationSyncing(false);
     }
@@ -731,21 +1286,25 @@ export function PdfViewer() {
       }
 
       setHighlights(Array.isArray(data.highlights) ? mergeHighlights(data.highlights as Highlight[]) : []);
+      notifyReaderSummaryChanged();
       setSelectionNotice(draftNote.trim() ? '하이라이트 메모를 저장했습니다.' : '메모를 비웠습니다.');
     } catch (error) {
-      const message = error instanceof Error ? error.message : '메모를 저장하지 못했습니다.';
-      setSelectionNotice(message);
+      console.warn('Failed to save PDF highlight note.', error);
+      setSelectionNotice(PDF_NOTE_SAVE_FAILED);
     } finally {
       setNoteSaving(false);
     }
   };
 
-  const handleOpenExportPreview = async () => {
+  const handleOpenExportPreview = async (kind: PdfExportKind) => {
+    setExportKind(kind);
+    setExportMenuOpen(false);
     setExportDialogOpen(true);
     setExportLoading(true);
 
     try {
-      const res = await fetch(exportUrl, { cache: 'no-store' });
+      const format = kind === 'evidence-brief' ? 'evidence-brief' : 'markdown';
+      const res = await fetch(`/api/workspace/export?path=${encodeURIComponent(activePdfPath)}&format=${format}`, { cache: 'no-store' });
       const text = await res.text();
 
       if (!res.ok) {
@@ -754,8 +1313,8 @@ export function PdfViewer() {
 
       setExportMarkdown(text);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Markdown 미리보기를 준비하지 못했습니다.';
-      setExportMarkdown(`오류: ${message}`);
+      console.warn('Failed to prepare PDF annotation markdown preview.', error);
+      setExportMarkdown(`오류: ${PDF_EXPORT_PREVIEW_FAILED}`);
     } finally {
       setExportLoading(false);
     }
@@ -775,8 +1334,13 @@ export function PdfViewer() {
   const handlePageClick = (
     event: ReactMouseEvent<HTMLDivElement>,
     pageHighlights: Highlight[],
+    pageVisualRegions: VisualRegion[],
   ) => {
-    if (highlightMode || eraseMode) return;
+    if (visualCaptureClickIgnoreRef.current) {
+      visualCaptureClickIgnoreRef.current = false;
+      return;
+    }
+    if (highlightMode || eraseMode || visualCaptureMode) return;
 
     const selection = window.getSelection();
     if (selection && !selection.isCollapsed && selection.toString().trim()) {
@@ -789,6 +1353,19 @@ export function PdfViewer() {
       x: (event.clientX - pageRect.left) / pageRect.width,
       y: (event.clientY - pageRect.top) / pageRect.height,
     };
+    const matchedVisualRegion = [...pageVisualRegions].reverse().find((region) => (
+      point.x >= region.rect.x
+      && point.x <= region.rect.x + region.rect.width
+      && point.y >= region.rect.y
+      && point.y <= region.rect.y + region.rect.height
+    ));
+    if (matchedVisualRegion) {
+      setSelectedVisualRegionId(matchedVisualRegion.id);
+      setFocusRects([matchedVisualRegion.rect]);
+      setAnnotationListOpen(true);
+      setSelectionNotice(null);
+      return;
+    }
     const matchedHighlight = [...pageHighlights].reverse().find((highlight) => (
       getHighlightRects(highlight).some((rect) => (
         point.x >= rect.x &&
@@ -802,6 +1379,364 @@ export function PdfViewer() {
       handleHighlightClick(matchedHighlight);
     }
   };
+
+  const handleAddToMobileShelf = async () => {
+    if (!activePdfPath || mobileShelfSaving) return;
+    setMobileShelfSaving(true);
+    try {
+      const response = await fetch('/api/mobile-bridge/shelf', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdfPath: activePdfPath }),
+      });
+      const data = await response.json();
+      if (!response.ok || data?.error) throw new Error(data?.error || '모바일 보관함에 넣지 못했습니다.');
+      setSelectionNotice(data.added
+        ? '모바일 보관함에 넣었습니다. 설정에서 연결 폴더와 모바일 읽기 사본을 확인할 수 있습니다.'
+        : '이 문서는 이미 모바일 보관함에 있습니다.');
+    } catch (error) {
+      setSelectionNotice(error instanceof Error ? error.message : '모바일 보관함에 넣지 못했습니다.');
+    } finally {
+      setMobileShelfSaving(false);
+    }
+  };
+
+  const closeVisualRegionDialog = () => {
+    if (visualRegionSaving) return;
+    setVisualRegionDraft(null);
+    setVisualRegionEditing(null);
+  };
+
+  const handleSaveVisualRegion = async (kind: VisualRegionKind, memo: string) => {
+    if (!activePdfPath || visualRegionSaving) return;
+    const editing = visualRegionEditing;
+    const draft = visualRegionDraft;
+    if (!editing && !draft) return;
+    setVisualRegionSaving(true);
+    try {
+      const response = await fetch('/api/workspace/visual-regions', {
+        method: editing ? 'PATCH' : 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(editing
+          ? { pdfPath: activePdfPath, regionId: editing.id, kind, memo }
+          : { pdfPath: activePdfPath, page: draft!.page, rect: draft!.rect, kind, memo }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload?.error || !payload?.region) {
+        throw new Error(typeof payload?.error === 'string' ? payload.error : '그림·표 기록을 저장하지 못했습니다.');
+      }
+      const next = payload.region as VisualRegion;
+      setVisualRegions((current) => editing
+        ? current.map((region) => region.id === next.id ? next : region)
+        : [...current, next]);
+      setSelectedVisualRegionId(next.id);
+      setFocusRects([next.rect]);
+      setAnnotationListOpen(true);
+      setVisualRegionDraft(null);
+      setVisualRegionEditing(null);
+      showRecordNotice(editing ? '그림·표 기록을 변경했습니다.' : '그림·표 영역을 기록했습니다.', 'visual');
+    } catch {
+      setSelectionNotice('그림·표 기록을 저장하지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+      setVisualRegionSaving(false);
+    }
+  };
+
+  const navigateToVisualRegion = (region: VisualRegion) => {
+    setVisiblePages((current) => new Set([...current, region.page]));
+    rememberPage(region.page);
+    setSelectedVisualRegionId(region.id);
+    setFocusRects([region.rect]);
+    window.requestAnimationFrame(() => {
+      pageShellRefs.current[region.page]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+  };
+
+  const handleDeleteVisualRegion = async (region: VisualRegion) => {
+    if (!activePdfPath || visualRegionSaving) return;
+    if (!window.confirm(`p.${region.page}의 그림·표 기록을 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return;
+    setVisualRegionSaving(true);
+    try {
+      const response = await fetch('/api/workspace/visual-regions', {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ pdfPath: activePdfPath, regionId: region.id }),
+      });
+      const payload = await response.json();
+      if (!response.ok || payload?.error) {
+        throw new Error(typeof payload?.error === 'string' ? payload.error : '그림·표 기록을 삭제하지 못했습니다.');
+      }
+      if (Array.isArray(payload.regions)) {
+        setVisualRegions(payload.regions as VisualRegion[]);
+      } else {
+        setVisualRegions((current) => current.filter((item) => item.id !== region.id));
+      }
+      if (selectedVisualRegionId === region.id) setSelectedVisualRegionId(null);
+      if (visualRegionEditing?.id === region.id) setVisualRegionEditing(null);
+      setSelectionNotice('그림·표 기록을 삭제했습니다.');
+    } catch {
+      setSelectionNotice('그림·표 기록을 삭제하지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+      setVisualRegionSaving(false);
+    }
+  };
+
+  const toggleVisualCaptureMode = () => {
+    const next = !visualCaptureMode;
+    setVisualCaptureMode(next);
+    if (next) {
+      setHighlightMode(null);
+      setEraseMode(false);
+      setSelectionSnapshot(null);
+      setVisualRegionDraft(null);
+      setVisualRegionEditing(null);
+      setSelectionNotice('PDF 위에서 그림·표·수식 영역을 드래그해 주세요. Esc를 누르면 취소합니다.');
+    } else {
+      setVisualRegionPointer(null);
+      setVisualRegionPreview(null);
+    }
+  };
+
+  const patchHighlight = async (
+    targetHighlight: Highlight,
+    update: {
+      type?: Highlight['type'];
+      studyKind?: HighlightStudyKind;
+      resolvedAt?: string | null;
+      workKind?: HighlightWorkKind | null;
+      workDoneAt?: string | null;
+    },
+    successMessage: string,
+    recordTab: ReaderRecordTab = 'learning',
+  ) => {
+    if (!activePdfPath) return;
+    setNoteSaving(true);
+    try {
+      const res = await fetch('/api/workspace/annotations', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          pdfPath: activePdfPath,
+          updates: [{ annotationId: targetHighlight.annotationId || targetHighlight.id, ...update }],
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data?.error) {
+        throw new Error(typeof data?.error === 'string' ? data.error : '하이라이트 상태를 저장하지 못했습니다.');
+      }
+      setHighlights(Array.isArray(data.highlights) ? mergeHighlights(data.highlights as Highlight[]) : []);
+      notifyReaderSummaryChanged();
+      showRecordNotice(successMessage, recordTab);
+    } catch (error) {
+      console.warn('Failed to save PDF highlight state.', error);
+      setSelectionNotice('하이라이트 상태를 저장하지 못했습니다. 다시 시도해 주세요.');
+    } finally {
+      setNoteSaving(false);
+    }
+  };
+
+  const patchSelectedHighlight = async (
+    update: {
+      type?: Highlight['type'];
+      studyKind?: HighlightStudyKind;
+      resolvedAt?: string | null;
+      workKind?: HighlightWorkKind | null;
+      workDoneAt?: string | null;
+    },
+    successMessage: string,
+    recordTab: ReaderRecordTab = 'learning',
+  ) => {
+    if (!selectedHighlight) return;
+    await patchHighlight(selectedHighlight, update, successMessage, recordTab);
+  };
+
+  const handleStudyKindChange = (studyKind: HighlightStudyKind) => {
+    if (!selectedHighlight) return;
+    const next = applyStudyKind(selectedHighlight, studyKind);
+    void patchSelectedHighlight({
+      type: next.type === selectedHighlight.type ? undefined : next.type,
+      studyKind,
+      resolvedAt: next.resolvedAt ?? null,
+    }, `${getStudyKindLabel(studyKind)} 표시로 바꿨습니다.`);
+  };
+
+  const handleResolvedToggle = () => {
+    if (!selectedHighlight || !isUnresolvedHighlight({ ...selectedHighlight, resolvedAt: undefined })) return;
+    void handleResolvedToggleForHighlight(selectedHighlight);
+  };
+
+  const handleResolvedToggleForHighlight = async (highlight: Highlight) => {
+    if (!isUnresolvedHighlight({ ...highlight, resolvedAt: undefined })) return;
+    const key = highlight.annotationId || highlight.id;
+    const resolved = Boolean(highlight.resolvedAt);
+    setResolvingHighlightKey(key);
+    try {
+      await patchHighlight(
+        highlight,
+      { resolvedAt: resolved ? null : new Date().toISOString() },
+      resolved ? '다시 볼 것으로 되돌렸습니다.' : '이해 완료로 표시했습니다.',
+      );
+    } finally {
+      setResolvingHighlightKey(null);
+    }
+  };
+
+  const handleWorkKindChange = (workKind: HighlightWorkKind | undefined) => {
+    if (!selectedHighlight) return;
+    const next = applyWorkKind(selectedHighlight, workKind);
+    void patchSelectedHighlight({
+      workKind: workKind ?? null,
+      workDoneAt: next.workDoneAt ?? null,
+    }, workKind ? `${getWorkKindLabel(workKind)} 업무 근거로 표시했습니다.` : '업무 표시를 해제했습니다.', workKind ? 'work' : 'learning');
+  };
+
+  const handleWorkDoneToggle = () => {
+    if (!selectedHighlight || !isWorkActionKind(selectedHighlight.workKind)) return;
+    const done = isWorkDone(selectedHighlight);
+    void patchSelectedHighlight(
+      { workDoneAt: done ? null : new Date().toISOString() },
+      done ? '업무를 다시 열었습니다.' : '업무 완료로 표시했습니다.',
+      'work',
+    );
+  };
+
+  const handleSelectionAsk = () => {
+    if (!selectionSnapshot || !activePdfPath) return;
+    if (selectionSnapshot.text.length > MAX_SELECTION_CONTEXT_CHARS) {
+      setSelectionNotice('선택 영역이 너무 깁니다. 더 작은 범위를 선택해 주세요.');
+      setSelectionSnapshot(null);
+      return;
+    }
+    const sourceContext: ChatSourceContext = {
+      id: crypto.randomUUID(),
+      scope: 'selection',
+      documentId: activePdf?.documentId,
+      page: selectionSnapshot.page,
+      text: selectionSnapshot.text,
+      rects: selectionSnapshot.rects,
+    };
+    queueChatRequest({
+      id: crypto.randomUUID(),
+      prompt: '선택한 내용을 현재 PDF의 문맥에 맞춰 설명해줘. 핵심 의미부터 설명하고, 원문에 명시되지 않은 추론은 추론이라고 구분해줘.',
+      displayContent: '선택 영역 설명',
+      sourceContext,
+      autoSend: true,
+    });
+    window.getSelection()?.removeAllRanges();
+    setSelectionSnapshot(null);
+  };
+
+  const handleAskFromHighlight = () => {
+    if (!selectedHighlight || !activePdfPath) return;
+    if (selectedHighlight.text.length > MAX_SELECTION_CONTEXT_CHARS) {
+      setSelectionNotice('선택 영역이 너무 깁니다. 더 작은 범위를 선택해 주세요.');
+      return;
+    }
+
+    queueChatRequest({
+      id: crypto.randomUUID(),
+      prompt: '선택한 내용을 현재 PDF의 문맥에 맞춰 설명해줘. 핵심 의미부터 설명하고, 원문에 명시되지 않은 추론은 추론이라고 구분해줘.',
+      displayContent: '하이라이트 설명',
+      sourceContext: {
+        id: crypto.randomUUID(),
+        scope: 'selection',
+        documentId: selectedHighlight.documentId || activePdf?.documentId,
+        page: selectedHighlight.page,
+        text: selectedHighlight.text,
+        rects: getHighlightRects(selectedHighlight),
+        highlightId: selectedHighlight.annotationId || selectedHighlight.id,
+      },
+      autoSend: true,
+    });
+    setNoteDialogOpen(false);
+  };
+
+  const handlePromoteHighlightToKnowledge = () => {
+    if (!selectedHighlight) return;
+    const highlightId = selectedHighlight.annotationId || selectedHighlight.id;
+    setKnowledgePromotionCandidate({
+      text: selectedHighlight.text,
+      sourceName: `${activePdf?.name || 'PDF'} · p.${selectedHighlight.page}`,
+      defaultKind: 'literature_claim',
+      sourceAnchors: [{
+        id: `knowledge-highlight:${highlightId}`,
+        scope: 'selection',
+        documentId: selectedHighlight.documentId || activePdf?.documentId,
+        page: selectedHighlight.page,
+        text: selectedHighlight.text,
+        rects: getHighlightRects(selectedHighlight),
+        highlightId,
+      }],
+      initialMemo: draftNote.trim() || selectedHighlight.note || '',
+    });
+  };
+
+  const queueSelectionStudyCard = (kind: StudyCardKind) => {
+    if (!selectionSnapshot || !activePdfPath) return;
+    if (selectionSnapshot.text.length > MAX_SELECTION_CONTEXT_CHARS) {
+      setSelectionNotice('선택 영역이 너무 깁니다. 더 작은 범위를 선택해 주세요.');
+      setSelectionSnapshot(null);
+      return;
+    }
+    queueStudyCardRequest({
+      id: crypto.randomUUID(),
+      pdfPath: activePdfPath,
+      sourceContext: {
+        id: crypto.randomUUID(),
+        scope: 'selection',
+        documentId: activePdf?.documentId,
+        page: selectionSnapshot.page,
+        text: selectionSnapshot.text,
+        rects: selectionSnapshot.rects,
+      },
+      origin: 'selection',
+      kind,
+    });
+    window.getSelection()?.removeAllRanges();
+    setSelectionSnapshot(null);
+  };
+
+  const handleSelectionStudyCard = () => queueSelectionStudyCard('basic');
+  const handleSelectionClozeCard = () => queueSelectionStudyCard('cloze');
+
+  const handlePageMouseUp = (
+    event: ReactMouseEvent<HTMLDivElement>,
+    targetPage: number,
+    pageShell: HTMLDivElement | null,
+  ) => {
+    if (handleVisualRegionMouseUp(event, targetPage, pageShell)) return;
+    if (eraseMode) {
+      void handleEraseSelection(targetPage, pageShell);
+      return;
+    }
+    if (highlightMode) {
+      void handleHighlightSelection(targetPage, pageShell);
+      return;
+    }
+    const snapshot = getSelectionSnapshot(targetPage, pageShell);
+    setSelectionSnapshot(snapshot);
+  };
+
+  const selectionActionPosition = useMemo(() => {
+    if (!selectionSnapshot || typeof window === 'undefined') return null;
+    // Keep the action bar next to the text that caused it. Aligning its trailing
+    // edge with the selection end makes a short selection feel just as local as a
+    // long one, while the flip prevents it from disappearing below the viewport.
+    const actionWidth = 350;
+    const actionHeight = 36;
+    const gutter = 8;
+    const desiredLeft = selectionSnapshot.viewportRect.right - actionWidth;
+    const left = Math.min(
+      Math.max(gutter, desiredLeft),
+      window.innerWidth - actionWidth - gutter,
+    );
+    const below = selectionSnapshot.viewportRect.bottom + 4;
+    const above = selectionSnapshot.viewportRect.top - actionHeight - 4;
+    const top = below <= window.innerHeight - gutter
+      ? below
+      : Math.max(gutter, above);
+    return { left, top };
+  }, [selectionSnapshot]);
 
   const handleTranslate = async (kind: 'selection' | 'full') => {
     const sourceText = kind === 'selection' ? window.getSelection()?.toString().trim() || '' : '';
@@ -831,13 +1766,13 @@ export function PdfViewer() {
       setTranslationDraft(data as TranslationDraft);
       window.getSelection()?.removeAllRanges();
     } catch (error) {
-      const message = error instanceof Error ? error.message : '번역하지 못했습니다.';
+      console.warn('Failed to translate PDF content.', error);
       setTranslationDraft({
         kind,
         title: '번역 오류',
         sourceMarkdown: sourceText,
         translatedMarkdown: '',
-        bilingualMarkdown: `오류: ${message}`,
+        bilingualMarkdown: `오류: ${PDF_TRANSLATION_FAILED}`,
       });
     } finally {
       setTranslationLoading(false);
@@ -860,7 +1795,8 @@ export function PdfViewer() {
       setTranslationOpen(false);
       setSelectionNotice('번역을 논문 정보에 저장했습니다.');
     } catch (error) {
-      setSelectionNotice(error instanceof Error ? error.message : '번역을 저장하지 못했습니다.');
+      console.warn('Failed to save PDF translation.', error);
+      setSelectionNotice(PDF_TRANSLATION_SAVE_FAILED);
     } finally {
       setTranslationLoading(false);
     }
@@ -868,6 +1804,8 @@ export function PdfViewer() {
 
   const renderPageShell = (targetPage: number) => {
     const pageHighlights = highlightsByPage[targetPage] ?? [];
+    const pageVisualRegions = visualRegionsByPage[targetPage] ?? [];
+    const pageAnchors = anchorsByPage[targetPage] ?? [];
     const shouldRenderPage = viewMode === 'paged' || visiblePages.has(targetPage);
     const pageHeight = Math.round(pageWidth * (pageRatios[targetPage] || 1.414));
 
@@ -878,19 +1816,12 @@ export function PdfViewer() {
           pageShellRefs.current[targetPage] = node;
         }}
         data-page-number={targetPage}
-        className="pdf-page-shell overflow-hidden rounded-xl shadow-ambient"
+        className={`pdf-page-shell overflow-hidden rounded-xl shadow-ambient ${visualCaptureMode ? 'cursor-crosshair select-none' : ''}`}
         style={{ minHeight: `${pageHeight}px`, width: `${pageWidth}px` }}
-        onClick={(event) => handlePageClick(event, pageHighlights)}
-        onMouseUp={() => {
-          const pageShell = pageShellRefs.current[targetPage];
-
-          if (eraseMode) {
-            void handleEraseSelection(targetPage, pageShell);
-            return;
-          }
-
-          void handleHighlightSelection(targetPage, pageShell);
-        }}
+        onClick={(event) => handlePageClick(event, pageHighlights, pageVisualRegions)}
+        onMouseDown={(event) => handleVisualRegionMouseDown(event, targetPage, pageShellRefs.current[targetPage])}
+        onMouseMove={(event) => handleVisualRegionMouseMove(event, targetPage, pageShellRefs.current[targetPage])}
+        onMouseUp={(event) => handlePageMouseUp(event, targetPage, pageShellRefs.current[targetPage])}
       >
         {shouldRenderPage ? (
           <Page
@@ -899,6 +1830,7 @@ export function PdfViewer() {
             devicePixelRatio={renderPixelRatio}
             renderAnnotationLayer={false}
             renderTextLayer
+            onRenderError={handlePageRenderError}
             onLoadSuccess={(page) => {
               const [x1, y1, x2, y2] = page.view;
               const width = Math.abs(x2 - x1);
@@ -947,17 +1879,102 @@ export function PdfViewer() {
               />
             ));
           })}
+          {pageVisualRegions.map((region) => (
+            <span
+              key={region.id}
+              className={`pdf-visual-region-box ${region.id === selectedVisualRegionId ? 'pdf-visual-region-box--selected' : ''}`}
+              style={{
+                left: `${region.rect.x * 100}%`,
+                top: `${region.rect.y * 100}%`,
+                width: `${region.rect.width * 100}%`,
+                height: `${region.rect.height * 100}%`,
+              }}
+              title={region.memo || undefined}
+            />
+          ))}
+          {visualRegionPreview?.page === targetPage && (
+            <span
+              className="pdf-visual-region-box pdf-visual-region-box--preview"
+              style={{
+                left: `${visualRegionPreview.rect.x * 100}%`,
+                top: `${visualRegionPreview.rect.y * 100}%`,
+                width: `${visualRegionPreview.rect.width * 100}%`,
+                height: `${visualRegionPreview.rect.height * 100}%`,
+              }}
+            />
+          )}
         </div>}
+        {shouldRenderPage && targetPage === pageNumber && focusRects.map((rect, index) => (
+          <span
+            key={`source-focus-${index}`}
+            className="pdf-source-focus"
+            style={{
+              left: `${rect.x * 100}%`,
+              top: `${rect.y * 100}%`,
+              width: `${rect.width * 100}%`,
+              height: `${rect.height * 100}%`,
+            }}
+          />
+        ))}
+        {shouldRenderPage && pageAnchors.map((anchor, index) => {
+          const firstRect = anchor.sourceContext.rects?.[0];
+          if (!firstRect) return null;
+          return (
+            <AiAnchorMarker
+              key={`${anchor.session.id}:${anchor.questionMessageId}`}
+              topPercent={firstRect.y * 100 + index * 3}
+              count={1}
+              onClick={() => {
+                openSession(anchor.session);
+                focusChatMessage(anchor.questionMessageId);
+              }}
+            />
+          );
+        })}
       </div>
     );
   };
 
   if (!activePdf) return null;
 
+  const useOverlayRecordPanel = annotationListOpen && !chatOpen;
+  const readerRecordPanel = annotationListOpen && !chatOpen ? (
+    <ReaderRecordPanel
+      key={selectedVisualRegionId
+        ? `visual:${selectedVisualRegionId}`
+        : `records:${recordTabRequest?.id ?? 'default'}`}
+      highlights={highlights}
+      visualRegions={visualRegions}
+      selectedHighlightKey={selectedHighlightKey}
+      selectedVisualRegionId={selectedVisualRegionId}
+      requestedTab={recordTabRequest?.tab}
+      requestedLearningFilter={recordTabRequest?.learningFilter}
+      onClose={() => setAnnotationListOpen(false)}
+      onNavigate={(highlight) => {
+        handlePageChange(highlight.page);
+        setSelectedHighlightKey(highlight.annotationId || highlight.id);
+        setFocusRects(getHighlightRects(highlight));
+      }}
+      onEdit={(highlight) => {
+        handlePageChange(highlight.page);
+        setSelectedHighlightKey(highlight.annotationId || highlight.id);
+        setNoteDialogOpen(true);
+      }}
+      onToggleResolved={(highlight) => void handleResolvedToggleForHighlight(highlight)}
+      resolvingHighlightKey={resolvingHighlightKey}
+      onNavigateVisualRegion={navigateToVisualRegion}
+      onEditVisualRegion={(region) => {
+        navigateToVisualRegion(region);
+        setVisualRegionEditing(region);
+      }}
+      onDeleteVisualRegion={(region) => void handleDeleteVisualRegion(region)}
+    />
+  ) : null;
+
   return (
-    <div className="h-full flex flex-col">
+    <div className="flex h-full min-w-0 flex-col">
       {/* PDF Toolbar */}
-      <div className="min-h-12 px-4 py-1 flex items-center justify-between gap-3 bg-surface shrink-0">
+      <div className="relative z-40 flex min-h-12 shrink-0 items-center justify-between gap-3 bg-surface px-4 py-1">
         {/* Left: file name */}
         <div className="flex items-center gap-2 min-w-0">
           <button
@@ -967,13 +1984,16 @@ export function PdfViewer() {
           >
             <X size={13} strokeWidth={2} />
           </button>
-          <span className="text-xs font-medium text-on-surface truncate">
+          <span className="text-xs font-medium text-on-surface truncate" title={activePdf.name}>
             {activePdf.name}
+          </span>
+          <span className="shrink-0 rounded-md bg-surface-container px-1.5 py-0.5 text-[10px] font-semibold tabular-nums text-on-surface-variant" aria-label={`현재 페이지 ${pageNumber}`}>
+            p.{pageNumber}
           </span>
         </div>
 
         {/* Center: controls */}
-        <div className="flex max-w-full items-center gap-1 glass rounded-lg px-2 py-1 overflow-x-auto">
+        <div className="glass flex max-w-full min-w-0 items-center gap-1 rounded-lg px-2 py-1">
           <button
             onClick={() => handlePageChange(Math.max(1, pageNumber - 1))}
             disabled={!canGoPrev}
@@ -1023,64 +2043,33 @@ export function PdfViewer() {
 
           <div className="w-px h-4 bg-outline-variant/30 mx-0.5" />
 
-          <div className="flex items-center gap-1">
+          <div className="relative">
             <button
-              onClick={() => setViewMode('paged')}
-              className={`h-8 rounded-lg px-2.5 text-[11px] font-medium transition-colors ${
-                viewMode === 'paged'
-                  ? 'bg-on-surface text-surface-container-lowest'
-                  : 'text-on-surface-variant hover:bg-surface-container-high'
-              }`}
-              title="한 페이지 모드"
-            >
-              한 페이지
-            </button>
-            <button
+              type="button"
               onClick={() => {
-                setViewMode('scroll');
-                window.requestAnimationFrame(() => {
-                  const pageShell = pageShellRefs.current[pageNumber];
-                  pageShell?.scrollIntoView({
-                    block: 'start',
-                    behavior: 'smooth',
-                  });
-                });
+                setViewMenuOpen((current) => !current);
+                setMarkMenuOpen(false);
+                setExportMenuOpen(false);
               }}
-              className={`h-8 rounded-lg px-2.5 text-[11px] font-medium transition-colors ${
-                viewMode === 'scroll'
-                  ? 'bg-on-surface text-surface-container-lowest'
-                  : 'text-on-surface-variant hover:bg-surface-container-high'
-              }`}
-              title="세로 스크롤 모드"
+              className="inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[12px] font-medium text-on-surface-variant hover:bg-surface-container-high"
+              aria-label="PDF 보기 방식과 맞춤 설정"
+              aria-expanded={viewMenuOpen}
+              aria-haspopup="menu"
+              aria-controls="pdf-view-menu"
             >
-              스크롤
+              보기
+              <ChevronDown size={12} aria-hidden="true" />
             </button>
+            {viewMenuOpen && (
+              <div id="pdf-view-menu" role="menu" className="absolute left-0 top-full z-30 mt-1 w-36 rounded-xl border border-outline-variant/25 bg-surface-container-lowest p-1 shadow-ambient" aria-label="PDF 보기 방식">
+                <button type="button" role="menuitemradio" aria-checked={viewMode === 'paged'} onClick={() => { setViewMode('paged'); setViewMenuOpen(false); }} className="w-full rounded-lg px-2.5 py-2 text-left text-[12px] text-on-surface hover:bg-surface-container">한 페이지</button>
+                <button type="button" role="menuitemradio" aria-checked={viewMode === 'scroll'} onClick={() => { setViewMode('scroll'); setViewMenuOpen(false); window.requestAnimationFrame(() => pageShellRefs.current[pageNumber]?.scrollIntoView({ block: 'start', behavior: 'smooth' })); }} className="w-full rounded-lg px-2.5 py-2 text-left text-[12px] text-on-surface hover:bg-surface-container">세로 스크롤</button>
+                <div className="my-1 border-t border-outline-variant/20" />
+                <button type="button" role="menuitemradio" aria-checked={fitMode === 'width'} onClick={() => { setFitMode('width'); setViewMenuOpen(false); }} className="w-full rounded-lg px-2.5 py-2 text-left text-[12px] text-on-surface hover:bg-surface-container">폭에 맞춤</button>
+                <button type="button" role="menuitemradio" aria-checked={fitMode === 'page'} onClick={() => { setFitMode('page'); setViewMenuOpen(false); }} className="w-full rounded-lg px-2.5 py-2 text-left text-[12px] text-on-surface hover:bg-surface-container">페이지에 맞춤</button>
+              </div>
+            )}
           </div>
-
-          <div className="w-px h-4 bg-outline-variant/30 mx-0.5" />
-
-          <button
-            onClick={() => setFitMode('width')}
-            className={`h-8 rounded-lg px-2 text-[11px] font-medium transition-colors ${
-              fitMode === 'width'
-                ? 'bg-on-surface text-surface-container-lowest'
-                : 'text-on-surface-variant hover:bg-surface-container-high'
-            }`}
-            title="폭에 맞춤 (0)"
-          >
-            폭
-          </button>
-          <button
-            onClick={() => setFitMode('page')}
-            className={`h-8 rounded-lg px-2 text-[11px] font-medium transition-colors ${
-              fitMode === 'page'
-                ? 'bg-on-surface text-surface-container-lowest'
-                : 'text-on-surface-variant hover:bg-surface-container-high'
-            }`}
-            title="페이지에 맞춤"
-          >
-            쪽
-          </button>
 
           <span className="text-[11px] text-on-surface-variant font-medium tabular-nums w-10 text-center">
             {effectiveZoom}%
@@ -1102,99 +2091,130 @@ export function PdfViewer() {
             <Plus size={13} strokeWidth={2} />
           </button>
 
-          <div className="w-px h-4 bg-outline-variant/30 mx-0.5" />
-
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setMarkMenuOpen((current) => !current);
+                setViewMenuOpen(false);
+                setExportMenuOpen(false);
+              }}
+              className={`inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[12px] font-medium transition-colors ${highlightMode || eraseMode ? 'bg-surface-container-high text-on-surface' : 'text-on-surface-variant hover:bg-surface-container-high'}`}
+              aria-label="하이라이트 표시 도구"
+              aria-expanded={markMenuOpen}
+              aria-haspopup="menu"
+              aria-controls="pdf-mark-menu"
+            >
+              표시
+              <ChevronDown size={12} aria-hidden="true" />
+            </button>
+            {markMenuOpen && (
+              <div id="pdf-mark-menu" role="menu" className="absolute left-0 top-full z-30 mt-1 w-36 rounded-xl border border-outline-variant/25 bg-surface-container-lowest p-1 shadow-ambient" aria-label="하이라이트 표시 도구">
+                <button type="button" role="menuitemradio" aria-checked={highlightMode === 'important'} onClick={() => { setVisualCaptureMode(false); setEraseMode(false); setHighlightMode((current) => current === 'important' ? null : 'important'); setMarkMenuOpen(false); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-tertiary-fixed hover:bg-surface-container"><Highlighter size={13} aria-hidden="true" />중요 표시</button>
+                <button type="button" role="menuitemradio" aria-checked={highlightMode === 'unknown'} onClick={() => { setVisualCaptureMode(false); setEraseMode(false); setHighlightMode((current) => current === 'unknown' ? null : 'unknown'); setMarkMenuOpen(false); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-study-unclear hover:bg-study-unclear-container"><Pen size={13} aria-hidden="true" />이해 필요</button>
+                <div className="my-1 border-t border-outline-variant/20" />
+                <button type="button" role="menuitemcheckbox" aria-checked={eraseMode} onClick={() => { setVisualCaptureMode(false); setHighlightMode(null); setEraseMode((current) => !current); setMarkMenuOpen(false); }} className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-on-surface hover:bg-surface-container"><Eraser size={13} aria-hidden="true" />표시 지우기</button>
+              </div>
+            )}
+          </div>
           <button
-            onClick={() => {
-              setEraseMode(false);
-              setHighlightMode((current) => current === 'unknown' ? null : 'unknown');
-            }}
-            className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
-              highlightMode === 'unknown'
-                ? 'bg-error text-on-error'
+            type="button"
+            onClick={toggleVisualCaptureMode}
+            className={`inline-flex h-8 items-center gap-1 rounded-lg px-2 text-[12px] font-medium transition-colors ${
+              visualCaptureMode
+                ? 'bg-primary text-on-primary'
                 : 'text-on-surface-variant hover:bg-surface-container-high'
             }`}
-            title="확인 필요 하이라이트"
-            aria-label="확인 필요 하이라이트"
+            title="그림·표·수식 영역 기록"
+            aria-label="그림·표·수식 영역 기록 모드"
+            aria-pressed={visualCaptureMode}
           >
-            <Pen size={15} strokeWidth={2} />
+            <ScanLine size={14} strokeWidth={2} aria-hidden="true" />
+            영역 기록
           </button>
-          <button
-            onClick={() => {
-              setEraseMode(false);
-              setHighlightMode((current) => current === 'important' ? null : 'important');
-            }}
-            className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
-              highlightMode === 'important'
-                ? 'bg-tertiary-fixed text-on-tertiary-fixed'
-                : 'text-tertiary-fixed hover:bg-surface-container-high'
-            }`}
-            title="중요 하이라이트"
-            aria-label="중요 하이라이트"
-          >
-            <Highlighter size={15} strokeWidth={2} />
-          </button>
-          <button
-            onClick={() => {
-              setHighlightMode(null);
-              setEraseMode((current) => !current);
-            }}
-            className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
-              eraseMode
-                ? 'bg-on-surface text-surface-container-lowest'
-                : 'text-on-surface-variant hover:bg-surface-container-high'
-            }`}
-            title="하이라이트 지우개"
-            aria-label="하이라이트 지우개"
-          >
-            <Eraser size={15} strokeWidth={2} />
-          </button>
-          <button
-            onClick={() => setAnnotationListOpen((current) => !current)}
-            className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
-              annotationListOpen
-                ? 'bg-on-surface text-surface-container-lowest'
-                : 'text-on-surface-variant hover:bg-surface-container-high'
-            }`}
-            title="하이라이트 목록"
-            aria-label="하이라이트 목록"
-          >
-            <List size={15} strokeWidth={2} />
-          </button>
-          <button
-            onClick={() => void handleOpenExportPreview()}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors"
-            title="하이라이트를 Markdown으로 내보내기"
-            aria-label="하이라이트 Markdown 내보내기"
-          >
-            <FileDown size={12} strokeWidth={2} />
-          </button>
-          <button
-            onMouseDown={(event) => event.preventDefault()}
-            onClick={() => void handleTranslate('selection')}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors"
-            title="선택 영역 번역"
-            aria-label="선택 영역 번역"
-          >
-            <Languages size={12} strokeWidth={2} />
-          </button>
-          <button
-            onClick={() => void handleTranslate('full')}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors"
-            title="전체 논문 한영 대조 번역"
-            aria-label="전체 논문 한영 대조 번역"
-          >
-            <BookOpenText size={12} strokeWidth={2} />
-          </button>
-          <a
-            href={fileUrl}
-            download={activePdf.name}
-            className="w-8 h-8 rounded-lg flex items-center justify-center text-on-surface-variant hover:bg-surface-container-high transition-colors"
-            title="PDF 내려받기"
-            aria-label="PDF 내려받기"
-          >
-            <Download size={12} strokeWidth={2} />
-          </a>
+          <div className="mx-0.5 h-4 w-px bg-outline-variant/30" aria-hidden="true" />
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => {
+                setExportMenuOpen((current) => !current);
+                setViewMenuOpen(false);
+                setMarkMenuOpen(false);
+              }}
+              className="flex h-8 w-8 items-center justify-center rounded-lg text-on-surface-variant hover:bg-surface-container-high transition-colors"
+              title="기록, 내보내기와 문서 도구 더보기"
+              aria-label="기록, 내보내기와 문서 도구 더보기"
+              aria-expanded={exportMenuOpen}
+              aria-haspopup="menu"
+              aria-controls="pdf-document-menu"
+            >
+              <MoreHorizontal size={16} strokeWidth={2} />
+            </button>
+            {exportMenuOpen && (
+              <div id="pdf-document-menu" role="menu" className="absolute right-0 top-full z-30 mt-1 w-52 rounded-xl border border-outline-variant/25 bg-surface-container-lowest p-1 shadow-ambient" aria-label="문서 도구">
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => { openReaderRecords('learning'); setExportMenuOpen(false); }}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium text-on-surface hover:bg-surface-container"
+                >
+                  <List size={13} aria-hidden="true" />기록 보기
+                </button>
+                <div className="my-1 border-t border-outline-variant/20" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => { openStudyReview(); setExportMenuOpen(false); }}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-on-surface hover:bg-surface-container"
+                >
+                  <BookOpenText size={13} aria-hidden="true" />이 PDF의 복습 카드
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  disabled={mobileShelfSaving}
+                  onClick={() => { void handleAddToMobileShelf(); setExportMenuOpen(false); }}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-on-surface hover:bg-surface-container disabled:opacity-50"
+                >
+                  {mobileShelfSaving ? <Loader2 size={13} className="animate-spin" aria-hidden="true" /> : <Smartphone size={13} aria-hidden="true" />}
+                  모바일 보관함에 추가
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => { void handleTranslate('full'); setExportMenuOpen(false); }}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-on-surface hover:bg-surface-container"
+                >
+                  <Languages size={13} aria-hidden="true" />전체 논문 번역
+                </button>
+                <a
+                  href={fileUrl}
+                  download={activePdf.name}
+                  role="menuitem"
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-on-surface hover:bg-surface-container"
+                >
+                  <Download size={13} aria-hidden="true" />PDF 내려받기
+                </a>
+                <div className="my-1 border-t border-outline-variant/20" />
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => void handleOpenExportPreview('highlights')}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] text-on-surface hover:bg-surface-container"
+                >
+                  <FileDown size={13} aria-hidden="true" />하이라이트 Markdown
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => void handleOpenExportPreview('evidence-brief')}
+                  className="flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[12px] font-medium text-on-surface hover:bg-surface-container"
+                >
+                  <FileDown size={13} aria-hidden="true" />업무 Evidence Brief
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Right: chat toggle */}
@@ -1255,102 +2275,62 @@ export function PdfViewer() {
             </div>
           )}
           {textSearchQuery.trim() && !textSearchLoading && textSearchPages.length === 0 && (
-            <span className="w-full pl-5 text-[10px] text-on-surface-variant">검색 결과가 없습니다.</span>
+            <span className="w-full pl-5 text-[10px] text-on-surface-variant">이 PDF에는 일치하는 문장이 없습니다. 다른 표현으로 다시 찾아보세요.</span>
           )}
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1">
-        {annotationListOpen && (
-          <aside className="flex w-64 shrink-0 flex-col border-r border-outline-variant/20 bg-surface-container-lowest">
-            <div className="flex items-center justify-between border-b border-outline-variant/15 px-3 py-3">
-              <div>
-                <div className="text-xs font-semibold text-on-surface">하이라이트</div>
-                <div className="mt-0.5 text-[10px] text-outline">{sortedHighlights.length}개 · 페이지를 눌러 이동</div>
-              </div>
-              <button
-                onClick={() => setAnnotationListOpen(false)}
-                className="flex h-7 w-7 items-center justify-center rounded-lg text-on-surface-variant hover:bg-surface-container"
-                aria-label="하이라이트 목록 닫기"
-              >
-                <X size={14} />
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-2">
-              {sortedHighlights.length === 0 ? (
-                <div className="rounded-lg bg-surface-container px-3 py-4 text-[11px] leading-5 text-on-surface-variant">
-                  PDF에서 문장을 선택한 뒤 중요 또는 확인 필요 하이라이트를 눌러 추가하세요.
-                </div>
-              ) : (
-                <div className="space-y-1.5">
-                  {sortedHighlights.map((highlight) => {
-                    const highlightKey = highlight.annotationId || highlight.id;
-                    return (
-                      <button
-                        key={highlightKey}
-                        onClick={() => {
-                          handlePageChange(highlight.page);
-                          setSelectedHighlightKey(highlightKey);
-                          setNoteDialogOpen(true);
-                        }}
-                        className={`w-full rounded-lg border px-3 py-2 text-left transition-colors ${
-                          highlightKey === selectedHighlightKey
-                            ? 'border-outline bg-surface-container'
-                            : 'border-transparent hover:bg-surface-container-low'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between gap-2 text-[10px] font-semibold text-on-surface-variant">
-                          <span>페이지 {highlight.page}</span>
-                          <span className={highlight.type === 'important' ? 'text-tertiary-fixed' : 'text-error'}>
-                            {highlight.type === 'important' ? '중요' : '확인 필요'}
-                          </span>
-                        </div>
-                        <p className="mt-1 line-clamp-3 text-[11px] leading-5 text-on-surface">{highlight.text || '텍스트 없음'}</p>
-                        {highlight.note?.trim() && (
-                          <p className="mt-1 line-clamp-2 text-[10px] leading-4 text-on-surface-variant">메모: {highlight.note}</p>
-                        )}
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          </aside>
+      <div className="relative z-0 flex min-h-0 min-w-0 flex-1">
+        {readerRecordPanel && useOverlayRecordPanel && (
+          <div className="absolute inset-y-0 right-0 z-30 shadow-ambient">
+            {readerRecordPanel}
+          </div>
         )}
 
         <div ref={containerRef} className="min-w-0 flex-1 overflow-auto bg-surface-dim">
-        <div className="mx-auto min-w-full w-max py-8 px-6">
-          <div className="mb-4 px-2">
-            <div className="text-[11px] uppercase tracking-widest text-on-surface-variant font-medium mb-1">
-              {activePdf.path}
-            </div>
-            <h1 className="text-lg font-semibold text-on-surface truncate">
-              {activePdf.name}
-            </h1>
-            <div className="mt-2 flex items-center gap-2 text-[11px] text-on-surface-variant">
+        <div className="mx-auto min-w-full w-max px-6 py-5">
+          <div className="mb-3 flex min-h-7 items-center gap-2 px-2 text-[12px] text-on-surface-variant" aria-live="polite">
               {eraseMode ? (
                 <span>지우개 모드입니다. 지울 하이라이트에 걸치도록 텍스트를 선택하세요.</span>
+              ) : visualCaptureMode ? (
+                <span>영역 기록 모드 · 그림·표·수식 위를 드래그하세요 · Esc 취소</span>
               ) : highlightMode ? (
                 <span>
-                  {highlightMode === 'important' ? '중요' : '확인 필요'} 하이라이트 모드입니다. 저장할 텍스트를 선택하세요.
+                  {highlightMode === 'important' ? '중요' : '이해 필요'} 하이라이트 모드입니다. 저장할 텍스트를 선택하세요.
                 </span>
               ) : selectedHighlight ? (
-                <span>하이라이트를 선택했습니다. 팝업에서 메모를 작성하거나 수정하세요.</span>
+                <span>원문 기록을 선택했습니다. 학습·업무 후속·메모를 독립적으로 정리할 수 있습니다.</span>
               ) : (
-                <span>텍스트를 드래그해 선택할 수 있습니다. 하이라이트를 누르면 메모를 추가할 수 있습니다.</span>
+                <span>문장을 드래그하면 중요 표시, 메모 또는 AI 질문을 바로 남길 수 있습니다.</span>
               )}
               {annotationSyncing && (
                 <span className="text-outline">주석 저장 중...</span>
               )}
               {selectionNotice && (
-                <span className="text-outline">{selectionNotice}</span>
+                typeof selectionNotice === 'string' ? (
+                  <span className="text-outline">{selectionNotice}</span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 text-outline">
+                    <span>{selectionNotice.message}</span>
+                    {selectionNotice.recordTab && (
+                      <button
+                        type="button"
+                        onClick={() => openReaderRecords(selectionNotice.recordTab!, selectionNotice.recordLearningFilter)}
+                        className="rounded-md px-1.5 py-0.5 text-[10px] font-semibold text-primary hover:bg-primary-container/50"
+                      >
+                        {selectionNotice.recordActionLabel ?? '기록에서 보기'}
+                      </button>
+                    )}
+                  </span>
+                )
               )}
             </div>
-          </div>
 
           <div className="flex justify-center">
             <Document
+              key={`${activePdfPath}:${pdfRendererRetry}`}
               file={fileUrl}
+              options={pdfDocumentOptions}
               loading={
                 <div className="bg-surface-container-lowest rounded-xl shadow-ambient min-h-[560px] w-full max-w-[900px] flex items-center justify-center gap-2 text-sm text-on-surface-variant">
                   <Loader2 size={16} className="animate-spin" />
@@ -1375,19 +2355,39 @@ export function PdfViewer() {
           </div>
         </div>
         </div>
+        {readerRecordPanel && !useOverlayRecordPanel && readerRecordPanel}
       </div>
 
-      <MarkdownPreviewDialog
-        open={exportDialogOpen}
-        title="하이라이트 Markdown 미리보기"
-        description="내려받기 전에 생성된 Markdown을 확인하세요."
-        fileName={exportFileName}
-        markdown={exportMarkdown}
-        loading={exportLoading}
-        confirmLabel="Markdown 내려받기"
-        onCancel={() => setExportDialogOpen(false)}
-        onConfirm={handleConfirmExport}
-      />
+      {exportKind === 'evidence-brief' ? (
+        <EvidenceBriefDialog
+          open={exportDialogOpen}
+          documentName={activePdf.name.replace(/\.pdf$/i, '')}
+          fileName={exportFileName}
+          highlights={highlights}
+          markdownReady={Boolean(exportMarkdown.trim())}
+          loading={exportLoading}
+          onCancel={() => setExportDialogOpen(false)}
+          onNavigate={(highlight) => {
+            setExportDialogOpen(false);
+            handlePageChange(highlight.page);
+            setSelectedHighlightKey(highlight.annotationId || highlight.id);
+            setFocusRects(getHighlightRects(highlight));
+          }}
+          onDownload={handleConfirmExport}
+        />
+      ) : (
+        <MarkdownPreviewDialog
+          open={exportDialogOpen}
+          title="하이라이트 Markdown 미리보기"
+          description="내려받기 전에 생성된 Markdown을 확인하세요."
+          fileName={exportFileName}
+          markdown={exportMarkdown}
+          loading={exportLoading}
+          confirmLabel="Markdown 내려받기"
+          onCancel={() => setExportDialogOpen(false)}
+          onConfirm={handleConfirmExport}
+        />
+      )}
       <MarkdownPreviewDialog
         open={translationOpen}
         title={translationDraft?.title || '논문 번역'}
@@ -1402,14 +2402,36 @@ export function PdfViewer() {
         onConfirm={handleSaveTranslation}
       />
 
+      {selectionSnapshot && selectionActionPosition && (
+        <SelectionActionBar
+          left={selectionActionPosition.left}
+          top={selectionActionPosition.top}
+          onExplain={handleSelectionAsk}
+          onStudyCard={handleSelectionStudyCard}
+          onClozeCard={handleSelectionClozeCard}
+          onImportant={() => void createStudyHighlight(selectionSnapshot, 'important')}
+          onUnclear={() => void createStudyHighlight(selectionSnapshot, 'unclear')}
+          onConcept={() => void createStudyHighlight(selectionSnapshot, 'concept')}
+          onMemorize={() => void createStudyHighlight(selectionSnapshot, 'memorize')}
+          onQuestion={() => void createStudyHighlight(selectionSnapshot, 'question')}
+          onNote={() => void createStudyHighlight(selectionSnapshot, 'important', undefined, { openNote: true })}
+          onWorkKind={(workKind) => void createStudyHighlight(selectionSnapshot, 'important', workKind)}
+          onTranslate={() => {
+            void handleTranslate('selection');
+            clearSelectionAction();
+          }}
+          onDismiss={clearSelectionAction}
+        />
+      )}
+
       {selectedHighlight && noteDialogOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 px-4 py-6">
-          <div className="w-full max-w-2xl rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-ambient">
+          <div className="flex max-h-[calc(100vh-3rem)] w-full max-w-2xl flex-col rounded-2xl border border-outline-variant/20 bg-surface-container-lowest p-5 shadow-ambient">
             <div className="flex items-start justify-between gap-4">
               <div className="min-w-0">
-                <div className="text-sm font-semibold text-on-surface">하이라이트 메모</div>
+                <div className="text-sm font-semibold text-on-surface">하이라이트 기록</div>
                 <p className="mt-1 text-xs leading-5 text-on-surface-variant">
-                  {selectedHighlight.type === 'important' ? '중요' : '확인 필요'} · {selectedHighlight.page}페이지
+                  {getStudyKindLabel(inferStudyKind(selectedHighlight))} · {selectedHighlight.page}페이지
                 </p>
               </div>
               <button
@@ -1420,6 +2442,76 @@ export function PdfViewer() {
               </button>
             </div>
 
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+            <section className="rounded-xl bg-surface-container px-3 py-3" aria-labelledby="highlight-study-record-title">
+              <div id="highlight-study-record-title" className="text-[11px] font-semibold text-on-surface">학습 기록</div>
+              <p className="mt-0.5 text-[10px] text-on-surface-variant">이 문장을 왜 표시했는지 남깁니다.</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <label className="text-[11px] font-medium text-on-surface-variant" htmlFor="highlight-study-kind">표시</label>
+                <select
+                  id="highlight-study-kind"
+                  value={inferStudyKind(selectedHighlight)}
+                  onChange={(event) => handleStudyKindChange(event.target.value as HighlightStudyKind)}
+                  disabled={noteSaving || annotationSyncing}
+                  className="h-8 rounded-lg border border-outline-variant/30 bg-surface-container-lowest px-2 text-xs text-on-surface outline-none focus:border-outline disabled:opacity-60"
+                >
+                  <option value="important">중요</option>
+                  <option value="concept">개념/정의</option>
+                  <option value="memorize">외울 것</option>
+                  <option value="question">질문</option>
+                  <option value="unclear">이해 필요</option>
+                </select>
+                {(inferStudyKind(selectedHighlight) === 'unclear' || inferStudyKind(selectedHighlight) === 'question') && (
+                  <>
+                    <span className="ml-1 text-[10px] font-medium text-on-surface-variant">이해 상태</span>
+                    <span className="text-[10px] font-semibold text-on-surface-variant">{selectedHighlight.resolvedAt ? '✓ 이해 완료' : '다시 볼 것'}</span>
+                    <button
+                      type="button"
+                      onClick={handleResolvedToggle}
+                      disabled={noteSaving || annotationSyncing}
+                      className="rounded-lg border border-outline-variant/30 px-2.5 py-1.5 text-[11px] font-semibold text-on-surface disabled:opacity-50"
+                    >
+                      {selectedHighlight.resolvedAt ? '다시 볼 것으로' : '이해 완료'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </section>
+
+            <section className="mt-3 rounded-xl border border-outline-variant/20 px-3 py-3" aria-labelledby="highlight-work-record-title">
+              <div id="highlight-work-record-title" className="text-[11px] font-semibold text-on-surface">업무 후속</div>
+              <p className="mt-0.5 text-[10px] text-on-surface-variant">이 근거로 업무에서 확인하거나 논의할 일이 있을 때만 추가합니다.</p>
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <label className="text-[11px] font-medium text-on-surface-variant" htmlFor="highlight-work-kind">분류</label>
+                <select
+                  id="highlight-work-kind"
+                  value={selectedHighlight.workKind ?? ''}
+                  onChange={(event) => handleWorkKindChange((event.target.value || undefined) as HighlightWorkKind | undefined)}
+                  disabled={noteSaving || annotationSyncing}
+                  className="h-8 rounded-lg border border-outline-variant/30 bg-surface-container-lowest px-2 text-xs text-on-surface outline-none focus:border-outline disabled:opacity-60"
+                >
+                  <option value="">업무 후속 없음</option>
+                  <option value="finding">Finding</option>
+                  <option value="verify">Verify</option>
+                  <option value="discuss">Discuss</option>
+                  <option value="try">Try</option>
+                </select>
+                {isWorkActionKind(selectedHighlight.workKind) && (
+                  <>
+                    <span className="ml-1 text-[10px] font-semibold text-on-surface-variant">{isWorkDone(selectedHighlight) ? '완료' : '열림'}</span>
+                    <button
+                      type="button"
+                      onClick={handleWorkDoneToggle}
+                      disabled={noteSaving || annotationSyncing}
+                      className="rounded-lg border border-outline-variant/30 px-2.5 py-1.5 text-[11px] font-semibold text-on-surface disabled:opacity-50"
+                    >
+                      {isWorkDone(selectedHighlight) ? '업무 다시 열기' : '업무 완료로 표시'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </section>
+
             <div className="mt-4 rounded-xl bg-surface-container px-4 py-3">
               <div className="text-[11px] font-medium uppercase tracking-widest text-on-surface-variant">
                 하이라이트 원문
@@ -1429,25 +2521,46 @@ export function PdfViewer() {
               </p>
             </div>
 
-            <div className="mt-4">
-              <label className="mb-1 block text-[11px] font-medium text-on-surface-variant">
+            <section className="mt-4" aria-labelledby="highlight-note-title">
+              <label id="highlight-note-title" className="mb-1 block text-[11px] font-semibold text-on-surface">
                 메모
               </label>
+              <p className="mb-2 text-[10px] text-on-surface-variant">학습과 업무 후속이 공유하는 원문 근거 메모입니다.</p>
               <textarea
                 value={draftNote}
                 onChange={(event) => setDraftNote(event.target.value)}
                 disabled={noteSaving}
-                placeholder="이 하이라이트에 메모를 추가하세요..."
+                placeholder={getWorkNotePlaceholder(selectedHighlight.workKind)}
                 className="min-h-32 w-full rounded-lg border border-outline-variant/30 bg-surface px-3 py-2 text-sm text-on-surface outline-none transition-colors focus:border-outline disabled:cursor-not-allowed disabled:opacity-60"
               />
+            </section>
+
             </div>
 
-            <div className="mt-4 flex items-center justify-between gap-3">
-              <p className="text-[11px] text-on-surface-variant">
-                {selectedHighlight.annotationId
-                  ? '메모는 PDF 주석과 PageDock 기록에 함께 저장됩니다.'
-                  : 'PDF 원본에 아직 반영되지 않아 PageDock 기록에 저장합니다.'}
-              </p>
+            <div className="mt-4 flex shrink-0 items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-[11px] text-on-surface-variant">
+                  {selectedHighlight.annotationId
+                    ? '메모는 PDF 주석과 PageDock 기록에 함께 저장됩니다.'
+                    : 'PDF 원본에 아직 반영되지 않아 PageDock 기록에 저장합니다.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleAskFromHighlight}
+                  className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-outline-variant/30 px-2.5 py-1.5 text-[11px] font-semibold text-on-surface hover:bg-surface-container-high"
+                >
+                  <MessageSquare size={12} aria-hidden="true" />
+                  AI에게 묻기
+                </button>
+                <button
+                  type="button"
+                  onClick={handlePromoteHighlightToKnowledge}
+                  className="mt-2 ml-2 inline-flex items-center gap-1.5 rounded-lg border border-outline-variant/30 px-2.5 py-1.5 text-[11px] font-semibold text-on-surface hover:bg-surface-container-high"
+                >
+                  <BookOpenText size={12} aria-hidden="true" />
+                  지식 후보로 보내기
+                </button>
+              </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setNoteDialogOpen(false)}
@@ -1476,6 +2589,19 @@ export function PdfViewer() {
           </div>
         </div>
       )}
+      <VisualRegionDialog
+        key={visualRegionEditing?.id ?? (visualRegionDraft ? `${visualRegionDraft.page}:${visualRegionDraft.rect.x}:${visualRegionDraft.rect.y}:${visualRegionDraft.rect.width}:${visualRegionDraft.rect.height}` : 'closed')}
+        draft={visualRegionDraft}
+        region={visualRegionEditing}
+        saving={visualRegionSaving}
+        onClose={closeVisualRegionDialog}
+        onSave={(kind, memo) => void handleSaveVisualRegion(kind, memo)}
+      />
+      <KnowledgePromotionDialog
+        candidate={knowledgePromotionCandidate}
+        onClose={() => setKnowledgePromotionCandidate(null)}
+        onCaptured={() => setSelectionNotice('지식 후보를 수집함에 보냈습니다. Knowledge에서 검토하세요.')}
+      />
     </div>
   );
 }

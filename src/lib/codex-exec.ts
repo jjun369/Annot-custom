@@ -13,7 +13,8 @@ import {
 } from '@/lib/command-runtime';
 import { isAutoModel } from '@/lib/ai-providers/model-policy';
 import { isAutoReasoningEffort, normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
-import type { ReasoningEffort } from '@/types';
+import { buildProviderSourceContextBlock } from '@/lib/ai-providers/source-context';
+import type { ChatSourceContext, ReasoningEffort } from '@/types';
 
 export interface ExecResult {
   codexSessionId: string;
@@ -42,6 +43,7 @@ interface RunTurnInput {
   sessionKind: 'folder' | 'pdf';
   prompt: string;
   currentPdfPath?: string | null;
+  sourceContext?: ChatSourceContext;
   ephemeral?: boolean;
 }
 
@@ -122,6 +124,7 @@ function buildPrompt({
   sessionKind,
   prompt,
   currentPdfPath,
+  sourceContext,
 }: Omit<RunTurnInput, 'codexSessionId' | 'model'>): string {
   const workspaceRoot = getWorkspaceRoot();
   const contextLines = [
@@ -139,6 +142,7 @@ function buildPrompt({
     '- Use tools and shell commands silently when needed.',
     '- In your final answer to the user, do not include progress updates, tool narration, or chain-of-thought.',
     '- The final answer should contain only the user-facing result.',
+    ...buildProviderSourceContextBlock(sourceContext),
     '',
     'User request:',
     prompt,
@@ -218,18 +222,44 @@ function createCodexArgs(input: RunTurnInput): string[] {
 
 function describeCodexSpawnError(error: Error): Error {
   const code = (error as NodeJS.ErrnoException).code;
-  if (code === 'EACCES' || /access is denied/i.test(error.message)) {
+  if (code === 'EACCES' || code === 'EPERM' || /access is denied|operation not permitted/i.test(error.message)) {
+    const unavailableError = (message: string) => {
+      const nextError = new Error(message) as NodeJS.ErrnoException;
+      nextError.code = 'CODEX_CLI_UNAVAILABLE';
+      return nextError;
+    };
     if (process.platform === 'darwin') {
-      return new Error(
+      return unavailableError(
         'Codex CLI 실행 권한을 확인하지 못했습니다. 공식 Codex 앱 또는 CLI를 다시 설치하고 PageDock에서 연결 상태를 새로고침해 주세요.',
       );
     }
-    return new Error(
+    return unavailableError(
       'Codex CLI를 실행할 권한이 없습니다. WindowsApps에 포함된 실행 파일 대신 ' +
       'standalone Codex CLI를 설치하거나 CODEX_BIN에 실행 가능한 codex.exe 경로를 지정해 주세요.',
     );
   }
   return error;
+}
+
+/**
+ * The Codex desktop app can expose an internal `codex.exe` through PATH, but
+ * that binary is not a standalone CLI and Windows refuses to spawn it from a
+ * different process. In that case the account-authenticated API transport is
+ * a valid fallback. Other CLI failures (for example a real turn failure) must
+ * still surface to the user instead of silently changing transports.
+ */
+export function isCodexCliUnavailableError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  const message = error instanceof Error ? error.message : String(error);
+  return (
+    code === 'CODEX_CLI_UNAVAILABLE' ||
+    code === 'ENOENT' ||
+    code === 'EACCES' ||
+    code === 'EPERM' ||
+    /^spawn (?:EACCES|EPERM)\b/i.test(message) ||
+    /^Could not find the Codex CLI executable\b/i.test(message)
+  );
 }
 
 function collectCatalogRecords(payload: unknown): Array<Record<string, unknown>> {

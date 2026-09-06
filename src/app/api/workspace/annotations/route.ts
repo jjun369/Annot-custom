@@ -8,6 +8,8 @@ import {
 } from '@/lib/pdf-annotations';
 import { Highlight } from '@/types';
 import { normalizeHighlightRects } from '@/lib/highlight-utils';
+import { isHighlightStudyKind, normalizeResolvedAt } from '@/lib/highlight-study';
+import { isHighlightWorkKind, normalizeWorkDoneAt } from '@/lib/highlight-work';
 import {
   deleteSidecarHighlights,
   listSidecarHighlights,
@@ -15,6 +17,7 @@ import {
   updateSidecarHighlights,
   upsertSidecarHighlights,
 } from '@/lib/highlight-sidecar';
+import { markMobileBridgeExportDirtyForPdfPath } from '@/lib/mobile-bridge';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -121,6 +124,7 @@ export async function POST(req: NextRequest) {
       pdfPath.trim(),
       [...(result.highlights || []), ...normalizedHighlights],
     );
+    await markMobileBridgeExportDirtyForPdfPath(pdfPath.trim()).catch(() => undefined);
 
     return NextResponse.json({ ...result, highlights: savedHighlights, embedded, warning }, {
       headers: {
@@ -146,6 +150,10 @@ export async function PATCH(req: NextRequest) {
         note?: string;
         text?: string;
         type?: Highlight['type'];
+        studyKind?: Highlight['studyKind'];
+        resolvedAt?: string | null;
+        workKind?: Highlight['workKind'] | null;
+        workDoneAt?: string | null;
       }>;
     };
 
@@ -159,31 +167,69 @@ export async function PATCH(req: NextRequest) {
 
     const normalizedUpdates = updates
       .filter((update) => typeof update.annotationId === 'string' && update.annotationId.trim().length > 0)
-      .map((update) => ({
-        annotationId: update.annotationId!.trim(),
-        note: typeof update.note === 'string' ? update.note : undefined,
-        text: typeof update.text === 'string' ? update.text : undefined,
-        type: update.type,
-      }));
+      .map((update) => {
+        const normalized: {
+          annotationId: string;
+          note?: string;
+          text?: string;
+          type?: Highlight['type'];
+          studyKind?: Highlight['studyKind'];
+          resolvedAt?: string | null;
+          workKind?: Highlight['workKind'] | null;
+          workDoneAt?: string | null;
+        } = {
+          annotationId: update.annotationId!.trim(),
+          note: typeof update.note === 'string' ? update.note : undefined,
+          text: typeof update.text === 'string' ? update.text : undefined,
+          type: update.type === 'unknown' || update.type === 'important' ? update.type : undefined,
+          studyKind: isHighlightStudyKind(update.studyKind) ? update.studyKind : undefined,
+        };
+        if (Object.prototype.hasOwnProperty.call(update, 'resolvedAt')) {
+          if (update.resolvedAt === null) {
+            normalized.resolvedAt = null;
+          } else {
+            const resolvedAt = normalizeResolvedAt(update.resolvedAt);
+            if (resolvedAt) normalized.resolvedAt = resolvedAt;
+          }
+        }
+        if (Object.prototype.hasOwnProperty.call(update, 'workKind')) {
+          normalized.workKind = isHighlightWorkKind(update.workKind) ? update.workKind : null;
+        }
+        if (Object.prototype.hasOwnProperty.call(update, 'workDoneAt')) {
+          if (update.workDoneAt === null) {
+            normalized.workDoneAt = null;
+          } else {
+            const workDoneAt = normalizeWorkDoneAt(update.workDoneAt);
+            if (workDoneAt) normalized.workDoneAt = workDoneAt;
+          }
+        }
+        return normalized;
+      });
 
     if (normalizedUpdates.length === 0) {
       return NextResponse.json({ error: 'valid annotationId values are required' }, { status: 400 });
     }
 
+    const nativeUpdates = normalizedUpdates
+      .filter((update) => update.note !== undefined || update.text !== undefined || update.type !== undefined)
+      .map(({ annotationId, note, text, type }) => ({ annotationId, note, text, type }));
     let result: { highlights: Highlight[]; updated?: number } = { highlights: [] };
     let embedded = true;
     let warning: string | undefined;
-    try {
-      result = await updatePdfAnnotations(pdfPath.trim(), normalizedUpdates);
-    } catch (error) {
-      embedded = false;
-      warning = friendlyAnnotationError(error, 'PDF 원본 주석을 수정하지 못했습니다.');
+    if (nativeUpdates.length > 0) {
+      try {
+        result = await updatePdfAnnotations(pdfPath.trim(), nativeUpdates);
+      } catch (error) {
+        embedded = false;
+        warning = friendlyAnnotationError(error, 'PDF 원본 주석을 수정하지 못했습니다.');
+      }
     }
     const sidecarHighlights = await updateSidecarHighlights(pdfPath.trim(), normalizedUpdates);
     const highlights = await replaceSidecarHighlights(pdfPath.trim(), [
       ...(result.highlights || []),
       ...sidecarHighlights,
     ]);
+    await markMobileBridgeExportDirtyForPdfPath(pdfPath.trim()).catch(() => undefined);
     return NextResponse.json({ ...result, highlights, embedded, warning }, {
       headers: {
         'Cache-Control': 'no-store',
@@ -234,6 +280,7 @@ export async function DELETE(req: NextRequest) {
       ...(result.highlights || []),
       ...sidecarHighlights,
     ]);
+    await markMobileBridgeExportDirtyForPdfPath(pdfPath.trim()).catch(() => undefined);
     return NextResponse.json({ ...result, highlights, embedded, warning }, {
       headers: {
         'Cache-Control': 'no-store',

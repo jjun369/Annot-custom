@@ -8,6 +8,7 @@ import {
   resetCodexExecutableCache,
   resolveCodexExecutableFresh,
 } from '@/lib/codex-exec';
+import { getCodexAuthStatus } from '@/lib/codex-auth';
 
 const OFFICIAL_INSTALLER_URL = 'https://raw.githubusercontent.com/openai/codex/main/scripts/install/install.ps1';
 const CODEX_SETUP_URL = 'https://chatgpt.com/codex';
@@ -21,6 +22,7 @@ export interface CodexSetupStatus {
   setupUrl: string;
   version?: string;
   authMethod?: string;
+  transport?: 'cli' | 'account-api';
   error?: string;
 }
 
@@ -56,20 +58,21 @@ function runProcess(
   });
 }
 
-async function readCodexVersion(): Promise<string | undefined> {
-  const command = await resolveCodexExecutableFresh();
-  const result = await runProcess(command.command, [...command.argsPrefix, '--version'], { timeoutMs: 30000 });
-  return result.stdout.trim().match(/([0-9]+\.[0-9]+\.[0-9]+(?:[-.][0-9A-Za-z.]+)?)$/)?.[1];
-}
-
 export async function getCodexSetupStatus(): Promise<CodexSetupStatus> {
   const platformDetails = {
     platform: process.platform,
     canAutoInstall: process.platform === 'win32',
     setupUrl: CODEX_SETUP_URL,
   };
+  const accountAuth = await getCodexAuthStatus();
   try {
-    const version = await readCodexVersion();
+    const command = await resolveCodexExecutableFresh();
+    // A resolved executable is enough to call Codex installed. Newer CLI builds
+    // may alter --version formatting or fail that lightweight subcommand while
+    // normal authentication and turns still work.
+    const version = await runProcess(command.command, [...command.argsPrefix, '--version'], { timeoutMs: 30000 })
+      .then((result) => result.stdout.trim().match(/([0-9]+\.[0-9]+\.[0-9]+(?:[-.][0-9A-Za-z.]+)?)/)?.[1])
+      .catch(() => undefined);
     resetCodexExecutableCache();
     const auth = await getCodexCliAuthStatus().catch(() => ({
       authenticated: false,
@@ -78,11 +81,23 @@ export async function getCodexSetupStatus(): Promise<CodexSetupStatus> {
     return {
       ...platformDetails,
       installed: true,
-      authenticated: auth.authenticated,
-      authMethod: auth.authMethod,
+      authenticated: auth.authenticated || accountAuth.authenticated,
+      authMethod: auth.authMethod || (accountAuth.authenticated ? 'OpenAI 계정' : undefined),
+      transport: auth.authenticated ? 'cli' : accountAuth.authenticated ? 'account-api' : 'cli',
+      canAutoInstall: accountAuth.authenticated ? false : platformDetails.canAutoInstall,
       version,
     };
   } catch (error) {
+    if (accountAuth.authenticated) {
+      return {
+        ...platformDetails,
+        installed: true,
+        authenticated: true,
+        canAutoInstall: false,
+        authMethod: 'OpenAI 계정',
+        transport: 'account-api',
+      };
+    }
     return {
       ...platformDetails,
       installed: false,

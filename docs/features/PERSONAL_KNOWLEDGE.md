@@ -6,17 +6,18 @@ Status: Experimental implementation included in the PageDock 0.4.4 working tree.
 
 The user continuously writes loose Korean/English technical notes in ordinary text files. PageDock should accept those notes with almost no preparation, use Codex through the user's ChatGPT OAuth login to propose a coherent topic wiki, preserve contradictions, and keep every derived statement traceable to the untouched source note.
 
-The user is a reviewer, not a classifier. Capture must not require a title, tag, folder, or ontology.
+The user is a reviewer, not a classifier. Ordinary capture must not require a title, tag, folder, or ontology. When a Reader highlight, AI answer, or a deliberately labelled direct note enters the inbox, a single provenance class is allowed because its origin needs to remain visible later; it is not an authority score or a taxonomy.
 
 ## Primary flow
 
-1. Paste text or drop multiple `.txt`, `.md`, or `.markdown` files into the inbox.
-2. Exact duplicate contents are skipped by SHA-256 regardless of filename.
-3. Run one note, the next ten, or the explicitly confirmed full queue. Processing is sequential, stops on the first error, supports both stop-after-current and immediate cancellation, and never creates uncontrolled concurrent Codex turns. Each Codex execution has a 285-second application timeout and the app does not automatically retry it.
-4. Local term matching selects at most eight candidate topics. `knowledge-ai.ts` additionally caps candidate context to about 36,000 characters total and 6,000 per topic. Long topics use explicit head/tail excerpts, and every affected review retains a visible context warning.
-5. Codex returns schema-constrained `create`, `update`, or `conflict` proposals.
-6. The user reviews a line diff, optionally edits the proposed title/summary/Markdown, then accepts or rejects it.
-7. Accepted creates/updates and direct user edits append a monotonic topic revision. Accepted conflicts create a separate open conflict and do not modify the current wiki.
+1. Paste text or drop multiple `.txt`, `.md`, or `.markdown` files into the inbox. A direct note may optionally be marked as a literature claim, work observation, or personal hypothesis.
+2. A Reader highlight or persisted AI answer may use `지식 후보로 보내기` to enter the same inbox with its existing source anchor and explicit provenance class. This is not a direct wiki write.
+3. Exact duplicate contents are skipped by SHA-256 regardless of filename.
+4. Run one note, the next ten, or the explicitly confirmed full queue. Processing is sequential, stops on the first error, supports both stop-after-current and immediate cancellation, and never creates uncontrolled concurrent Codex turns. Each Codex execution has a 285-second application timeout and the app does not automatically retry it.
+5. Local term matching selects at most eight candidate topics. `knowledge-ai.ts` additionally caps candidate context to about 36,000 characters total and 6,000 per topic. Long topics use explicit head/tail excerpts, and every affected review retains a visible context warning.
+6. Codex returns schema-constrained `create`, `update`, or `conflict` proposals.
+7. The user reviews a line diff, optionally edits the proposed title/summary/Markdown, then accepts or rejects it.
+8. Accepted creates/updates and direct user edits append a monotonic topic revision. Accepted conflicts create a separate open conflict and do not modify the current wiki.
 
 ## Authentication contract
 
@@ -65,6 +66,8 @@ Critical invariants:
 - A cancelled Codex run returns the untouched note to `inbox`; it never creates a partial review.
 - Batch processing stops at the first failed note. Retrying always requires an explicit user action.
 - Direct wiki edits create a user-authored revision and preserve source-note links.
+- Provenance classes say only where a note came from. They never create an automatic truth, confidence, expiry, or stale state.
+- Manual review attention does not change the topic body, `updatedAt`, or revision number. A source date alone never requests a review.
 - The current topic revision can never enter the revision trash.
 - Review diffs are calculated only after the user opens the review detail.
 
@@ -93,7 +96,7 @@ Critical invariants:
 4. The wiki has local browsing/search, direct editing, revision restore, recoverable history cleanup, and current-projection Markdown export, but no topic merge/split yet.
 5. Conflict resolution captures an explanation and can open the related wiki for a direct edit, but it does not automatically generate or apply a resolved topic proposal.
 6. Line diff collapses long unchanged runs and preserves common prefixes/suffixes in the large-document fallback. It is still line-based rather than word-based.
-7. Knowledge remains a separate PageDock area by design. Avoid coupling it to PDFs/research tables until actual usage proves that relationship.
+7. Reader/AI promotion preserves a source anchor but Knowledge does not yet navigate that anchor directly or mix multiple source scopes into an AI conversation.
 8. The memo-folder path and fingerprint ledger are device-local; they are not restored as portable library data.
 
 ## Do not do this
@@ -104,7 +107,7 @@ Critical invariants:
 - Do not add automatic model retries; retries must remain explicit because OAuth usage limits still matter.
 - Do not remove the v1 rollback copy or silently truncate candidate context.
 - Do not turn every apparent contradiction into a replacement fact.
-- Do not ask the user to classify notes during capture.
+- Do not require tags, folders, scores, or an ontology during ordinary capture. Provenance choice stays a single optional/confirmed origin label for the narrow flows that need it.
 - Do not add graphs, chat, web research, or elaborate ontologies before the capture/review loop is proven with real notes.
 
 ## Verification

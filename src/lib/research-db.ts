@@ -2,6 +2,7 @@ import { createReadStream, promises as fs } from 'fs';
 import { createHash, randomUUID } from 'crypto';
 import path from 'path';
 import { DatabaseSync } from 'node:sqlite';
+import { createInterface } from 'node:readline';
 
 import { getWorkspaceRoot, resolveFolderPath } from '@/lib/annot-sessions';
 import { getPaperMetadata, updatePaperMetadata } from '@/lib/paper-metadata';
@@ -278,6 +279,12 @@ export async function getResearchDb(): Promise<DatabaseSync> {
   seedProfiles(db);
   connectionCache.set(filePath, db);
   return db;
+}
+
+/** Closes cached local connections for an explicit process shutdown or isolated runtime test. */
+export function closeResearchDatabaseConnections(): void {
+  for (const db of connectionCache.values()) db.close();
+  connectionCache.clear();
 }
 
 function documentFromRow(row: SqlRow): ResearchDocument {
@@ -665,6 +672,127 @@ export async function replaceDocumentChunks(
     throw error;
   }
   await rebuildDocumentFts(documentId);
+}
+
+export interface StagedResearchChunk {
+  page?: number;
+  kind?: string;
+  section?: string;
+  claim?: string;
+  figure?: string;
+  text: string;
+}
+
+const MAX_STAGED_CHUNK_LINE_BYTES = 256 * 1024;
+
+async function readStagedResearchChunks(
+  stagingPath: string,
+  onChunk: (chunk: StagedResearchChunk, ordinal: number) => void | Promise<void>,
+): Promise<number> {
+  const input = createReadStream(stagingPath, { encoding: 'utf8' });
+  const lines = createInterface({ input, crlfDelay: Infinity });
+  let ordinal = 0;
+  try {
+    for await (const line of lines) {
+      if (!line) continue;
+      if (Buffer.byteLength(line, 'utf8') > MAX_STAGED_CHUNK_LINE_BYTES) {
+        throw new Error('임시 색인 조각이 허용된 크기를 초과했습니다.');
+      }
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch {
+        throw new Error('임시 색인 조각을 해석하지 못했습니다.');
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new Error('임시 색인 조각 형식이 올바르지 않습니다.');
+      }
+      const raw = value as Record<string, unknown>;
+      if (typeof raw.text !== 'string'
+        || (raw.page !== undefined && (!Number.isInteger(raw.page) || Number(raw.page) < 1))
+        || (raw.kind !== undefined && typeof raw.kind !== 'string')
+        || (raw.section !== undefined && typeof raw.section !== 'string')
+        || (raw.claim !== undefined && typeof raw.claim !== 'string')
+        || (raw.figure !== undefined && typeof raw.figure !== 'string')) {
+        throw new Error('임시 색인 조각 형식이 올바르지 않습니다.');
+      }
+      await onChunk({
+        page: typeof raw.page === 'number' ? raw.page : undefined,
+        kind: typeof raw.kind === 'string' ? raw.kind : undefined,
+        section: typeof raw.section === 'string' ? raw.section : undefined,
+        claim: typeof raw.claim === 'string' ? raw.claim : undefined,
+        figure: typeof raw.figure === 'string' ? raw.figure : undefined,
+        text: raw.text,
+      }, ordinal);
+      ordinal += 1;
+    }
+  } finally {
+    lines.close();
+  }
+  return ordinal;
+}
+
+/**
+ * Atomically replaces a document's live chunks with NDJSON staged outside the
+ * workspace and database directory. The staging file is deliberately read
+ * sequentially so extraction does not need to retain every chunk in memory.
+ */
+export async function replaceDocumentChunksFromStaging(documentId: string, stagingPath: string): Promise<number> {
+  const db = await getResearchDb();
+  const document = await getDocumentById(documentId);
+  if (!document) throw new Error('문서를 찾지 못했습니다.');
+  const patentRow = db.prepare('SELECT claims_text FROM patent_metadata WHERE document_id = ?').get(documentId) as SqlRow | undefined;
+  const metadata = document.currentPath ? await getPaperMetadata(document.currentPath) : null;
+  const bodyChunks: string[] = [];
+  await readStagedResearchChunks(stagingPath, (chunk) => { bodyChunks.push(chunk.text); });
+  const body = [
+    document.abstractText,
+    String(patentRow?.claims_text || ''),
+    metadata?.noteMarkdown || '',
+    ...bodyChunks,
+  ].join('\n');
+  const tags = [...document.tags, ...(metadata?.aiKeywords || []), ...(metadata?.personalTags || [])];
+
+  db.exec('BEGIN IMMEDIATE');
+  try {
+    db.prepare('DELETE FROM document_chunks WHERE document_id = ?').run(documentId);
+    const insert = db.prepare(`
+      INSERT INTO document_chunks(id, document_id, ordinal, page, chunk_kind, section, claim, figure, text, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+    const chunkCount = await readStagedResearchChunks(stagingPath, (chunk, ordinal) => {
+      insert.run(
+        randomUUID(), documentId, ordinal, chunk.page || null, chunk.kind || 'page', chunk.section || null,
+        chunk.claim || null, chunk.figure || null, chunk.text, now(),
+      );
+    });
+    db.prepare('UPDATE documents SET indexed_at = ?, updated_at = ? WHERE id = ?').run(now(), now(), documentId);
+    db.prepare('DELETE FROM document_fts WHERE document_id = ?').run(documentId);
+    db.prepare('INSERT INTO document_fts(document_id, title, body, tags) VALUES (?, ?, ?, ?)')
+      .run(documentId, document.displayTitle, body, tags.join(' '));
+    db.exec('COMMIT');
+    return chunkCount;
+  } catch (error) {
+    db.exec('ROLLBACK');
+    throw error;
+  }
+}
+
+export async function updateInferredDocumentTitleIfUnchanged(
+  documentId: string,
+  expectedTitle: string,
+  inferredTitle: string,
+): Promise<boolean> {
+  const nextTitle = inferredTitle.trim();
+  if (!nextTitle || nextTitle === expectedTitle) return false;
+  const db = await getResearchDb();
+  const result = db.prepare(`
+    UPDATE documents SET display_title = ?, updated_at = ?
+    WHERE id = ? AND display_title = ?
+  `).run(nextTitle, now(), documentId, expectedTitle);
+  if (!Number(result.changes)) return false;
+  await rebuildDocumentFts(documentId);
+  return true;
 }
 
 export async function getDocumentChunks(documentId: string): Promise<Array<{ id: string; page?: number; kind: string; section?: string; claim?: string; figure?: string; text: string }>> {

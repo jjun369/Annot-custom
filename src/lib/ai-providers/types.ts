@@ -1,4 +1,4 @@
-import { SessionKind, AIProvider, ReasoningEffort } from '@/types';
+import { SessionKind, AIProvider, ChatSourceContext, ReasoningEffort } from '@/types';
 
 export interface ProviderReasoningLevel {
   effort: ReasoningEffort;
@@ -50,6 +50,17 @@ export interface ProviderTurnInput {
   sessionKind: SessionKind;
   prompt: string;
   currentPdfPath?: string | null;
+  sourceContext?: ChatSourceContext;
+  /**
+   * Existing messages used when a provider cannot resume its native session
+   * (for example, the desktop Codex app has account auth but no standalone
+   * CLI). Kept bounded by the caller and optional so other providers retain
+   * their existing session contract.
+   */
+  conversation?: Array<{
+    role: 'user' | 'assistant';
+    content: string;
+  }>;
 }
 
 export interface ProviderTurnResult {

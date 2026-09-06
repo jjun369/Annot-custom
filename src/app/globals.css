@@ -7,19 +7,19 @@
   --font-serif: Georgia, 'Noto Serif KR', serif;
 
   /* Surface Hierarchy */
-  --color-surface: #f7fafc;
-  --color-surface-dim: #e1e9ed;
-  --color-surface-container-lowest: #ffffff;
-  --color-surface-container-low: #f0f5f8;
-  --color-surface-container: #e7eff3;
-  --color-surface-container-high: #dfe8ed;
-  --color-surface-container-highest: #d7e5eb;
+  --color-surface: #f8f7f4;
+  --color-surface-dim: #e6e8e5;
+  --color-surface-container-lowest: #fffefb;
+  --color-surface-container-low: #f2f3f0;
+  --color-surface-container: #e8ebe7;
+  --color-surface-container-high: #e0e4df;
+  --color-surface-container-highest: #d8ddd7;
 
   /* Primary */
-  --color-primary: #397f75;
-  --color-primary-dim: #306c64;
+  --color-primary: #47796f;
+  --color-primary-dim: #3b675f;
   --color-on-primary: #ffffff;
-  --color-primary-container: #d8eee9;
+  --color-primary-container: #dcece5;
 
   /* Secondary */
   --color-secondary: #5d5f65;
@@ -27,13 +27,21 @@
   --color-secondary-container: #e3e5ea;
 
   /* Tertiary / Highlight */
-  --color-tertiary-fixed: #fcb259;
+  --color-tertiary-fixed: #c98d42;
   --color-on-tertiary-fixed: #3a2e00;
 
-  /* Error / Unknown highlight */
-  --color-error: #9f403d;
-  --color-error-container: #fe8983;
+  /* Errors stay distinct from study states. */
+  --color-error: #a6514d;
+  --color-error-container: #f6d8d4;
   --color-on-error: #ffffff;
+
+  /* Quiet, role-specific study states. Never rely on these colors alone. */
+  --color-study-unclear: #a8642d;
+  --color-study-unclear-container: #f7e4d0;
+  --color-study-resolved: #3f8068;
+  --color-study-resolved-container: #dcefe6;
+  --color-ai-reference: #665798;
+  --color-ai-reference-container: #e9e5f5;
 
   /* Text */
   --color-on-surface: #283439;
@@ -43,7 +51,7 @@
 }
 
 :root {
-  --background: #f7fafc;
+  --background: #f8f7f4;
   --foreground: #283439;
 }
 
@@ -108,13 +116,13 @@ body {
 
 /* Highlight styles */
 .highlight-important {
-  background-color: rgba(252, 178, 89, 0.35);
+  background-color: rgba(229, 177, 81, 0.33);
   border-radius: 2px;
   padding: 0 2px;
 }
 
 .highlight-unknown {
-  background-color: rgba(254, 137, 131, 0.35);
+  background-color: rgba(226, 153, 87, 0.31);
   border-radius: 2px;
   padding: 0 2px;
 }
@@ -193,9 +201,79 @@ body {
 }
 
 .pdf-highlight-box--important {
-  background: rgba(252, 178, 89, 0.32);
+  background: rgba(229, 177, 81, 0.3);
 }
 
 .pdf-highlight-box--unknown {
-  background: rgba(254, 137, 131, 0.28);
+  background: rgba(226, 153, 87, 0.28);
+  box-shadow: inset 0 0 0 1px rgba(168, 100, 45, 0.52);
+}
+
+.pdf-visual-region-box {
+  position: absolute;
+  z-index: 5;
+  border: 1px solid rgba(59, 130, 246, 0.42);
+  border-radius: 3px;
+  background: rgba(147, 197, 253, 0.055);
+  box-sizing: border-box;
+}
+
+.pdf-visual-region-box--selected {
+  border: 2px solid rgba(30, 64, 175, 0.98);
+  background: rgba(96, 165, 250, 0.16);
+  box-shadow: 0 0 0 2px rgba(191, 219, 254, 0.86);
+}
+
+.pdf-visual-region-box--preview {
+  border-style: dashed;
+  border-color: rgba(37, 99, 235, 0.96);
+  background: rgba(147, 197, 253, 0.16);
+}
+
+.pdf-ai-anchor-marker {
+  position: absolute;
+  right: 6px;
+  z-index: 6;
+  display: inline-flex;
+  min-width: 24px;
+  height: 22px;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border: 1px solid rgba(71, 85, 105, 0.25);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: rgb(71, 85, 105);
+  box-shadow: 0 2px 7px rgba(15, 23, 42, 0.16);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.pdf-ai-anchor-marker:hover,
+.pdf-ai-anchor-marker:focus-visible {
+  background: rgb(236, 253, 245);
+  color: rgb(4, 120, 87);
+  outline: 2px solid rgb(16, 185, 129);
+  outline-offset: 2px;
+}
+
+.pdf-source-focus {
+  position: absolute;
+  z-index: 5;
+  pointer-events: none;
+  border: 2px solid rgba(16, 185, 129, 0.92);
+  border-radius: 3px;
+  background: rgba(167, 243, 208, 0.15);
+  animation: pdf-source-focus-fade 1.8s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pdf-source-focus {
+    animation: none;
+  }
+}
+
+@keyframes pdf-source-focus-fade {
+  from { opacity: 1; }
+  to { opacity: 0; }
 }

@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { TreeNode } from '@/types';
+import { ReaderSummary, TreeNode } from '@/types';
 import { useWorkspace } from '@/lib/workspace-store';
+import { formatReaderSummaryActivity } from '@/lib/reader-summary';
 import { ChevronRight, Ellipsis, FileText, Folder, FolderInput, FolderOpen, Pencil, Trash2 } from 'lucide-react';
 import { findNode, getParentFolderPath } from '@/lib/tree-utils';
 import { TreePromptDialog } from './TreePromptDialog';
@@ -12,9 +13,10 @@ interface TreeItemProps {
   node: TreeNode;
   depth: number;
   selectedPath: string | null;
+  readerSummaries: Record<string, ReaderSummary>;
 }
 
-export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
+export function TreeItem({ node, depth, selectedPath, readerSummaries }: TreeItemProps) {
   const { refreshTree, selectNode } = useWorkspace();
   const { confirm, notify } = useFeedback();
   const [expanded, setExpanded] = useState(depth < 1); // auto-expand first level
@@ -26,6 +28,13 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
   const isSelected = selectedPath === node.path;
   const isFolder = node.type === 'folder';
   const hasChildren = isFolder && (node.children?.length ?? 0) > 0;
+  const readerSummary = node.type === 'pdf' ? readerSummaries[node.path] : undefined;
+  const readerSummaryLabel = readerSummary ? [
+    readerSummary.page ? `p.${readerSummary.page}에서 이어 읽기` : null,
+    readerSummary.unresolvedCount > 0 ? `이해 필요 ${readerSummary.unresolvedCount}` : null,
+    readerSummary.openWorkCount > 0 ? `업무 열림 ${readerSummary.openWorkCount}` : null,
+    formatReaderSummaryActivity(readerSummary.lastOpenedAt),
+  ].filter((value): value is string => Boolean(value)).join(' · ') : '';
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -190,8 +199,15 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
             )}
           </span>
 
-          <span className={`text-xs truncate ${isFolder ? 'font-medium' : 'font-normal'}`}>
-            {node.name}
+          <span className="min-w-0 flex-1">
+            <span className={`block truncate text-xs ${isFolder ? 'font-medium' : 'font-normal'}`}>
+              {node.name}
+            </span>
+            {!isFolder && readerSummaryLabel && (
+              <span className="mt-0.5 block truncate text-[9px] leading-3 text-outline" title={readerSummaryLabel}>
+                {readerSummaryLabel}
+              </span>
+            )}
           </span>
         </button>
 
@@ -255,6 +271,7 @@ export function TreeItem({ node, depth, selectedPath }: TreeItemProps) {
           node={child}
           depth={depth + 1}
           selectedPath={selectedPath}
+          readerSummaries={readerSummaries}
         />
       ))}
 

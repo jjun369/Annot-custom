@@ -38,6 +38,8 @@ import type { KnowledgeImportSettings, KnowledgeImportSettingsSummary } from '@/
 import type {
   CaptureKnowledgeResult,
   KnowledgeConflict,
+  KnowledgeProvenance,
+  KnowledgeProvenanceKind,
   KnowledgeRevisionTrashItem,
   KnowledgeSnapshot,
   KnowledgeStoreInfo,
@@ -81,10 +83,20 @@ function dateLabel(value: string): string {
   return new Date(value).toLocaleString('ko-KR', { dateStyle: 'short', timeStyle: 'short' });
 }
 
+function isOriginDate(value: string): boolean {
+  return /^\d{4}-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?$/.test(value);
+}
+
+function today(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
 export default function KnowledgePage() {
   const [data, setData] = useState<KnowledgeSnapshot>(EMPTY);
   const [view, setView] = useState<View>('inbox');
   const [noteText, setNoteText] = useState('');
+  const [noteProvenanceKind, setNoteProvenanceKind] = useState<KnowledgeProvenanceKind>('personal_hypothesis');
+  const [noteOriginDate, setNoteOriginDate] = useState(today);
   const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
   const [codexStatus, setCodexStatus] = useState<CodexSetupStatus | null>(null);
   const [authCheckError, setAuthCheckError] = useState('');
@@ -197,7 +209,7 @@ export default function KnowledgePage() {
   const visibleReviews = pendingReviews.slice(0, reviewVisible);
   const visibleTopics = filteredTopics.slice(0, topicVisible);
 
-  async function captureInputs(notes: Array<{ text: string; sourceName: string }>): Promise<boolean> {
+  async function captureInputs(notes: Array<{ text: string; sourceName: string; provenance?: KnowledgeProvenance }>): Promise<boolean> {
     setCaptureBusy(true);
     setMessage(null);
     try {
@@ -219,7 +231,19 @@ export default function KnowledgePage() {
 
   async function captureText(): Promise<void> {
     if (!noteText.trim()) return;
-    const captured = await captureInputs([{ text: noteText, sourceName: '직접 입력' }]);
+    const originDate = noteOriginDate.trim();
+    if (originDate && !isOriginDate(originDate)) {
+      setMessage({ text: '원본 날짜는 YYYY-MM 또는 YYYY-MM-DD 형식으로 입력해 주세요.', error: true });
+      return;
+    }
+    const captured = await captureInputs([{
+      text: noteText,
+      sourceName: '직접 입력',
+      provenance: {
+        kind: noteProvenanceKind,
+        ...(originDate ? { originDate } : {}),
+      },
+    }]);
     if (captured) {
       setNoteText('');
       window.localStorage.removeItem(DRAFT_KEY);
@@ -433,7 +457,7 @@ export default function KnowledgePage() {
         setAuthCheckError('AI 실행 전에 ChatGPT OAuth 연결을 다시 확인해 주세요. 자동으로 로그아웃하지는 않았습니다.');
       }
       setMessage(error instanceof Error && error.name === 'AbortError'
-        ? { text: '현재 AI 정리를 취소했습니다. 원본 메모는 수집함에 그대로 남습니다.' }
+        ? { text: '현재 AI 정리 초안을 취소했습니다. 원본 메모는 모아둔 메모에 그대로 남습니다.' }
         : { text: error instanceof Error ? error.message : '분석하지 못했습니다.', error: true });
       return false;
     } finally {
@@ -542,6 +566,22 @@ export default function KnowledgePage() {
     setMessage({ text: `직접 수정 내용을 버전 ${result.topic.revision}로 저장했습니다.` });
   }
 
+  async function requestTopicReview(topic: KnowledgeTopic): Promise<void> {
+    await responseJson<{ topic: KnowledgeTopic }>(await fetch('/api/knowledge/topics', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'request-review', topicId: topic.id, reason: 'manual' }),
+    }));
+    await refresh();
+    setMessage({ text: '본문을 바꾸지 않고 재검토 대상으로 표시했습니다.' });
+  }
+
+  async function completeTopicReview(topic: KnowledgeTopic): Promise<void> {
+    await responseJson<{ topic: KnowledgeTopic }>(await fetch('/api/knowledge/topics', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'complete-review', topicId: topic.id }),
+    }));
+    await refresh();
+    setMessage({ text: '본문이나 revision을 바꾸지 않고 내가 검토한 시점만 기록했습니다.' });
+  }
+
   async function trashRevision(topic: KnowledgeTopic, revision: number): Promise<void> {
     if (!window.confirm(`'${topic.title}'의 버전 ${revision}을 휴지통으로 옮길까요? 휴지통에서 다시 복원할 수 있습니다.`)) return;
     await responseJson(await fetch('/api/knowledge/revision-trash', {
@@ -579,29 +619,48 @@ export default function KnowledgePage() {
       <AppHeader active="knowledge" />
       <div className="flex min-h-0 flex-1">
         <aside className="w-60 shrink-0 border-r border-outline-variant/25 bg-surface-container-lowest p-3">
-          <div className="px-2 pb-3 pt-2"><div className="text-[11px] font-bold tracking-[0.12em] text-primary">개인 지식</div><h1 className="mt-1 text-lg font-bold">지식 정리</h1><p className="mt-1 text-xs leading-5 text-on-surface-variant">메모는 던지고, 중요한 변경만 확인하세요.</p></div>
+          <div className="px-2 pb-3 pt-2"><div className="text-[11px] font-bold tracking-[0.12em] text-primary">개인 기록</div><h1 className="mt-1 text-lg font-bold">개인 메모</h1><p className="mt-1 text-xs leading-5 text-on-surface-variant">메모를 이 PC에 모으고, 내가 확인한 내용만 정리된 노트에 남깁니다.</p></div>
           <nav className="space-y-1">{([
-            ['inbox', '수집함', Inbox, inboxNotes.length],
-            ['review', '검토함', Merge, pendingReviews.length],
-            ['conflicts', '충돌함', AlertTriangle, openConflicts.length],
-            ['wiki', '위키', BookOpenText, data.topics.length],
+            ['inbox', '모아둔 메모', Inbox, inboxNotes.length],
+            ['review', '확인할 제안', Merge, pendingReviews.length],
+            ['conflicts', '서로 다른 기록', AlertTriangle, openConflicts.length],
+            ['wiki', '정리된 노트', BookOpenText, data.topics.length],
           ] as const).map(([id, label, Icon, count]) => <button key={id} onClick={() => setView(id)} className={`flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-semibold ${view === id ? 'bg-primary-container text-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}><Icon size={15} /><span className="flex-1 text-left">{label}</span><span className="rounded-full bg-white px-2 py-0.5 text-[10px]">{count}</span></button>)}</nav>
-          <div className={`mt-6 rounded-xl border p-3 text-[10px] leading-5 ${oauthReady && !authNeedsAttention ? 'border-emerald-200 bg-emerald-50 text-emerald-900' : 'border-amber-200 bg-amber-50 text-amber-900'}`}>
-            <div className="flex items-center gap-1.5 font-bold"><ShieldCheck size={13} />{authNeedsAttention ? '연결 확인 필요' : oauthReady ? 'ChatGPT OAuth 연결됨' : codexStatus?.authMethod === 'API key' ? 'API key 인증은 사용 불가' : 'ChatGPT OAuth 필요'}</div>
-            <p className="mt-1">{authNeedsAttention ? authCheckError : 'API 키 과금은 사용하지 않습니다. 정리할 원문과 관련 후보 문서는 OpenAI 모델에 전달됩니다.'}</p>
-            <div className="mt-2 grid gap-1.5"><button onClick={() => void refreshCodex()} className="w-full rounded-lg bg-white/70 px-3 py-2 font-bold">로그인 상태 확인</button>{!oauthReady && codexStatus?.installed && <button onClick={() => void loginCodex()} disabled={loginBusy} className="w-full rounded-lg bg-primary px-3 py-2 font-bold text-on-primary disabled:opacity-40">{loginBusy ? '로그인 기다리는 중…' : 'ChatGPT 다시 연결'}</button>}</div>
-          </div>
-          <div className="mt-3 rounded-xl bg-surface-container-low p-3 text-[11px] leading-5 text-on-surface-variant"><div className="font-bold">지식 저장소</div><div className="mt-1">활성 {formatBytes(storeInfo.activeBytes)} · 버전 휴지통 {storeInfo.revisionTrashCount}개 ({formatBytes(storeInfo.revisionTrashBytes)})</div></div>
+          <details className={`mt-6 rounded-xl border p-3 text-[10px] leading-5 ${authNeedsAttention ? 'border-amber-200 bg-amber-50 text-amber-900' : 'border-outline-variant/25 bg-surface-container-low text-on-surface-variant'}`}>
+            <summary className="flex cursor-pointer items-center gap-1.5 font-bold"><ShieldCheck size={13} />AI 참고 범위</summary>
+            <div className="mt-2">
+              <div className="font-semibold">{authNeedsAttention ? 'AI 연결 확인 필요' : oauthReady ? '원격 AI 연결됨' : codexStatus?.authMethod === 'API key' ? '원격 AI 사용 불가' : '원격 AI는 필요할 때 연결'}</div>
+              <p className="mt-1">{authNeedsAttention ? authCheckError : oauthReady ? '원격 AI로 정리 초안을 만들 때만 선택한 원문과 관련 후보 메모가 OpenAI 모델에 전달됩니다.' : '메모 보관과 검토는 로컬에서 계속 사용할 수 있습니다. AI 초안이 필요할 때만 ChatGPT OAuth를 연결하세요.'}</p>
+              <div className="mt-2 grid gap-1.5"><button onClick={() => void refreshCodex()} className="w-full rounded-lg bg-surface-container-lowest px-3 py-2 font-bold text-on-surface">AI 연결 상태 확인</button>{!oauthReady && codexStatus?.installed && <button onClick={() => void loginCodex()} disabled={loginBusy} className="w-full rounded-lg bg-primary px-3 py-2 font-bold text-on-primary disabled:opacity-40">{loginBusy ? '로그인 기다리는 중…' : '원격 AI 연결'}</button>}</div>
+              <div className="mt-3 border-t border-outline-variant/20 pt-2">저장소 · 활성 {formatBytes(storeInfo.activeBytes)} · 버전 휴지통 {storeInfo.revisionTrashCount}개 ({formatBytes(storeInfo.revisionTrashBytes)})</div>
+            </div>
+          </details>
         </aside>
 
         <section className="min-w-0 flex-1 overflow-y-auto"><div className="mx-auto max-w-6xl p-6 lg:p-8">
-          {message && <div className={`mb-5 flex items-center gap-2 rounded-xl px-4 py-3 text-xs ${message.error ? 'bg-red-50 text-error' : 'bg-primary-container text-primary'}`}>{message.error ? <AlertTriangle size={14} /> : <Check size={14} />}{message.text}<button onClick={() => setMessage(null)} className="ml-auto"><X size={13} /></button></div>}
+          {message && <div role="status" aria-live="polite" className={`mb-5 flex items-center gap-2 rounded-xl px-4 py-3 text-xs ${message.error ? 'bg-red-50 text-error' : 'bg-primary-container text-primary'}`}>{message.error ? <AlertTriangle size={14} /> : <Check size={14} />}{message.text}<button onClick={() => setMessage(null)} className="ml-auto" aria-label="알림 닫기"><X size={13} /></button></div>}
 
           {view === 'inbox' && <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.75fr)]">
-            <section><h2 className="text-xl font-bold">아무렇게나 적거나 파일을 던지세요</h2><p className="mt-1 text-xs text-on-surface-variant">원문은 그대로 보관하며 같은 내용은 두 번 수집하지 않습니다.</p>
+            <section><h2 className="text-xl font-bold">모아둔 메모</h2><p className="mt-1 text-xs text-on-surface-variant">아직 정리된 노트에 반영하지 않은 개인 메모입니다. 원문은 그대로 보관하며 같은 내용은 두 번 담지 않습니다.</p>
               <div onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void captureFiles(event.dataTransfer.files); }} className="mt-4 rounded-2xl border border-outline-variant/25 bg-surface-container-lowest p-4 shadow-sm">
+                <p className="mb-3 rounded-lg bg-surface-container-low px-3 py-2 text-[11px] leading-5 text-on-surface-variant">이 메모는 이 PC의 로컬 수집함에 저장됩니다. <strong className="font-semibold text-on-surface">AI로 전송되지 않습니다.</strong></p>
                 <textarea value={noteText} onChange={(event) => setNoteText(event.target.value)} placeholder="기술 메모, 관찰, 질문, 실험 결과, 나중에 확인할 것…" className="h-48 w-full resize-y bg-transparent text-sm leading-7 outline-none placeholder:text-outline" maxLength={100_000} />
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-outline-variant/20 pt-3"><span className="text-[10px] text-outline">{noteText.length.toLocaleString()}자 · 입력 중인 초안은 이 PC에 자동 저장됩니다</span><div className="flex gap-2"><label className="flex cursor-pointer items-center gap-1.5 rounded-xl bg-surface-container px-3 py-2.5 text-xs font-bold"><Upload size={14} />파일 여러 개<input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" multiple className="hidden" onChange={(event) => { if (event.target.files) void captureFiles(event.target.files); event.target.value = ''; }} /></label><button onClick={() => void captureText()} disabled={!noteText.trim() || captureBusy} className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-on-primary disabled:opacity-40">{captureBusy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}수집함에 넣기</button></div></div>
+                <div className="mt-3 flex flex-wrap items-end justify-between gap-3 border-t border-outline-variant/20 pt-3">
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label className="block text-[10px] font-semibold text-on-surface-variant">메모 성격
+                      <select value={noteProvenanceKind} onChange={(event) => setNoteProvenanceKind(event.target.value as KnowledgeProvenanceKind)} className="mt-1 block h-8 rounded-lg border border-outline-variant/30 bg-white px-2 text-[11px] text-on-surface outline-none">
+                        <option value="personal_hypothesis">개인 가설</option>
+                        <option value="work_observation">업무 관찰</option>
+                        <option value="literature_claim">문헌 주장</option>
+                      </select>
+                    </label>
+                    <label className="block text-[10px] font-semibold text-on-surface-variant">원본 날짜 (선택)
+                      <input value={noteOriginDate} onChange={(event) => setNoteOriginDate(event.target.value)} maxLength={10} placeholder="YYYY-MM-DD" className="mt-1 h-8 w-32 rounded-lg border border-outline-variant/30 bg-white px-2 text-[11px] text-on-surface outline-none" />
+                    </label>
+                  </div>
+                  <p className="w-full text-[10px] leading-4 text-on-surface-variant">출처와 성격을 표시하는 정보이며, 사실 여부나 신뢰도를 의미하지 않습니다.</p>
+                  <div className="flex flex-wrap items-center justify-end gap-2"><span className="text-[10px] text-outline">{noteText.length.toLocaleString()}자 · 입력 중인 초안은 이 PC에 자동 저장됩니다</span><label className="flex cursor-pointer items-center gap-1.5 rounded-xl bg-surface-container px-3 py-2.5 text-xs font-bold"><Upload size={14} />파일 여러 개<input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" multiple className="hidden" onChange={(event) => { if (event.target.files) void captureFiles(event.target.files); event.target.value = ''; }} /></label><button onClick={() => void captureText()} disabled={!noteText.trim() || captureBusy} className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-on-primary disabled:opacity-40">{captureBusy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}메모 보관</button></div>
+                </div>
               </div>
               <KnowledgeFolderCard
                 directory={folderDirectory}
@@ -615,16 +674,16 @@ export default function KnowledgePage() {
                 onPreview={(file) => void previewKnowledgeFolderFile(file)}
               />
             </section>
-            <section><div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-bold">정리 대기 {inboxNotes.length}개</h2>{batchProgress && <p className="mt-1 text-[10px] text-primary">{batchProgress.done}/{batchProgress.total} 처리 중 · 오류가 나면 자동 중지</p>}</div>{batchProgress ? <div className="flex gap-2"><button onClick={() => { stopBatch.current = true; }} className="rounded-lg bg-surface-container px-3 py-2 text-[10px] font-bold text-on-surface-variant">현재 작업 후 중지</button><button onClick={cancelCurrent} className="flex items-center gap-1 rounded-lg bg-red-50 px-3 py-2 text-[10px] font-bold text-error"><StopCircle size={13} />즉시 취소</button></div> : <div className="flex gap-2"><button onClick={() => void processBatch(inboxNotes.slice(0, 10))} disabled={!oauthReady || !inboxNotes.length || !!processingId} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary disabled:opacity-40"><Sparkles size={13} />다음 10개</button>{inboxNotes.length > 10 && <button onClick={() => void processEverything()} disabled={!oauthReady || !!processingId} className="rounded-lg bg-surface-container px-3 py-2 text-[10px] font-bold text-on-surface-variant disabled:opacity-40">전체</button>}</div>}</div>
-              <div className="mt-3 space-y-3">{visibleInboxNotes.map((note) => <article key={note.id} className="rounded-2xl border border-outline-variant/25 bg-surface-container-lowest p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-xs font-bold">{note.title}</h3><span className="mt-1 block text-[10px] text-outline">{note.sourceName} · {dateLabel(note.createdAt)} · {note.rawText.length.toLocaleString()}자{note.rawText.length > 20_000 ? ' · 큰 작업' : ''}</span></div>{processingId === note.id && !batchProgress ? <button onClick={cancelCurrent} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-[10px] font-bold text-error"><StopCircle size={12} />즉시 취소</button> : <button onClick={() => void processOne(note.id)} disabled={!oauthReady || !!processingId || !!batchProgress} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-container px-3 py-2 text-[10px] font-bold text-primary disabled:opacity-40">{note.status === 'error' ? <RotateCcw size={12} /> : <Sparkles size={12} />}{note.status === 'error' ? '다시 정리' : '정리'}</button>}</div><p className="mt-3 line-clamp-4 whitespace-pre-wrap text-[11px] leading-5 text-on-surface-variant">{note.rawText}</p>{note.error && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[10px] leading-5 text-error">{note.error}</p>}</article>)}{inboxNotes.length > inboxVisible && <button onClick={() => setInboxVisible((value) => value + PAGE_SIZE)} className="w-full rounded-xl bg-surface-container py-3 text-xs font-bold text-on-surface-variant">메모 {Math.min(PAGE_SIZE, inboxNotes.length - inboxVisible)}개 더 보기</button>}{!inboxNotes.length && <div className="rounded-2xl border border-dashed border-outline-variant/40 p-8 text-center text-xs text-on-surface-variant"><FileInput className="mx-auto mb-2" size={22} />정리를 기다리는 메모가 없습니다.</div>}</div>
+              <section><div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-bold">다음으로 정리해 볼 메모 {inboxNotes.length}개</h2><p className="mt-1 text-[10px] text-on-surface-variant">원격 AI는 사용자가 요청할 때만 초안을 제안하며, 확인 전에는 정리된 노트를 바꾸지 않습니다.</p>{batchProgress && <p className="mt-1 text-[10px] text-primary">{batchProgress.done}/{batchProgress.total} 처리 중 · 오류가 나면 자동 중지</p>}</div>{batchProgress ? <div className="flex gap-2"><button onClick={() => { stopBatch.current = true; }} className="rounded-lg bg-surface-container px-3 py-2 text-[10px] font-bold text-on-surface-variant">현재 작업 후 중지</button><button onClick={cancelCurrent} className="flex items-center gap-1 rounded-lg bg-red-50 px-3 py-2 text-[10px] font-bold text-error"><StopCircle size={13} />즉시 취소</button></div> : <div className="flex gap-2"><button onClick={() => void processBatch(inboxNotes.slice(0, 10))} disabled={!oauthReady || !inboxNotes.length || !!processingId} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary disabled:opacity-40"><Sparkles size={13} />원격 AI로 초안 만들기</button>{inboxNotes.length > 10 && <button onClick={() => void processEverything()} disabled={!oauthReady || !!processingId} className="rounded-lg bg-surface-container px-3 py-2 text-[10px] font-bold text-on-surface-variant disabled:opacity-40">모든 메모의 초안 만들기</button>}</div>}</div>
+              <div className="mt-3 space-y-3">{visibleInboxNotes.map((note) => <article key={note.id} className="rounded-2xl border border-outline-variant/25 bg-surface-container-lowest p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-xs font-bold">{note.title}</h3><span className="mt-1 block text-[10px] text-outline">{note.sourceName} · {dateLabel(note.createdAt)} · {note.rawText.length.toLocaleString()}자{note.rawText.length > 20_000 ? ' · 큰 작업' : ''}</span></div>{processingId === note.id && !batchProgress ? <button onClick={cancelCurrent} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-[10px] font-bold text-error"><StopCircle size={12} />즉시 취소</button> : <button onClick={() => void processOne(note.id)} disabled={!oauthReady || !!processingId || !!batchProgress} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-container px-3 py-2 text-[10px] font-bold text-primary disabled:opacity-40">{note.status === 'error' ? <RotateCcw size={12} /> : <Sparkles size={12} />}{note.status === 'error' ? '원격 AI로 다시 정리' : '원격 AI로 정리'}</button>}</div><p className="mt-3 line-clamp-4 whitespace-pre-wrap text-[11px] leading-5 text-on-surface-variant">{note.rawText}</p>{note.error && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[10px] leading-5 text-error">{note.error}</p>}</article>)}{inboxNotes.length > inboxVisible && <button onClick={() => setInboxVisible((value) => value + PAGE_SIZE)} className="w-full rounded-xl bg-surface-container py-3 text-xs font-bold text-on-surface-variant">메모 {Math.min(PAGE_SIZE, inboxNotes.length - inboxVisible)}개 더 보기</button>}{!inboxNotes.length && <div className="rounded-2xl border border-dashed border-outline-variant/40 p-8 text-center text-xs text-on-surface-variant"><FileInput className="mx-auto mb-2" size={22} />정리를 기다리는 메모가 없습니다.</div>}</div>
             </section>
           </div>}
 
-          {view === 'review' && <section><h2 className="text-xl font-bold">변경안 검토</h2><p className="mt-1 text-xs text-on-surface-variant">초록색은 추가, 빨간색은 삭제입니다. 승인 전에 제목과 본문을 직접 고칠 수 있습니다.</p><div className="mt-5 space-y-4">{visibleReviews.map((review) => <KnowledgeReviewCard key={review.id} review={review} note={data.notes.find((item) => item.id === review.noteId)} topic={data.topics.find((item) => item.id === review.topicId)} busy={reviewBusyId === review.id} onSave={saveReview} onResolve={resolveReview} />)}{pendingReviews.length > reviewVisible && <button onClick={() => setReviewVisible((value) => value + PAGE_SIZE)} className="w-full rounded-xl bg-surface-container py-3 text-xs font-bold text-on-surface-variant">변경안 {Math.min(PAGE_SIZE, pendingReviews.length - reviewVisible)}개 더 보기</button>}{!pendingReviews.length && <div className="rounded-2xl border border-dashed border-outline-variant/40 p-12 text-center text-xs text-on-surface-variant"><Check className="mx-auto mb-2 text-primary" size={24} />확인할 변경안이 없습니다.</div>}</div></section>}
+          {view === 'review' && <section><h2 className="text-xl font-bold">제안 내용 확인</h2><p className="mt-1 text-xs text-on-surface-variant">추가된 내용과 빠진 내용을 비교한 뒤, 제목과 본문을 직접 고칠 수 있습니다.</p><div className="mt-5 space-y-4">{visibleReviews.map((review) => <KnowledgeReviewCard key={review.id} review={review} note={data.notes.find((item) => item.id === review.noteId)} topic={data.topics.find((item) => item.id === review.topicId)} busy={reviewBusyId === review.id} onSave={saveReview} onResolve={resolveReview} />)}{pendingReviews.length > reviewVisible && <button onClick={() => setReviewVisible((value) => value + PAGE_SIZE)} className="w-full rounded-xl bg-surface-container py-3 text-xs font-bold text-on-surface-variant">제안 {Math.min(PAGE_SIZE, pendingReviews.length - reviewVisible)}개 더 보기</button>}{!pendingReviews.length && <div className="rounded-2xl border border-dashed border-outline-variant/40 p-12 text-center text-xs text-on-surface-variant"><Check className="mx-auto mb-2 text-primary" size={24} />확인할 제안이 없습니다.</div>}</div></section>}
 
           {view === 'conflicts' && <section><h2 className="text-xl font-bold">미해결 충돌</h2><p className="mt-1 text-xs text-on-surface-variant">충돌을 등록해도 현재 위키 본문은 바뀌지 않습니다. 위키를 직접 수정한 뒤 해결 이유를 남길 수 있습니다.</p><div className="mt-5 space-y-4">{openConflicts.map((conflict) => <KnowledgeConflictCard key={conflict.id} conflict={conflict} topic={data.topics.find((item) => item.id === conflict.topicId)} note={data.notes.find((item) => item.id === conflict.noteId)} onOpenTopic={(topicId) => { setSelectedTopicId(topicId); setView('wiki'); }} onResolve={closeConflict} />)}{!openConflicts.length && <div className="rounded-2xl border border-dashed border-outline-variant/40 p-12 text-center text-xs text-on-surface-variant"><Check className="mx-auto mb-2 text-primary" size={24} />미해결 충돌이 없습니다.</div>}</div></section>}
 
-          {view === 'wiki' && <section><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-xl font-bold">개인 위키</h2><p className="mt-1 text-xs text-on-surface-variant">현재 revision만 일반 Markdown 폴더로 내보낼 수 있습니다.</p></div><button type="button" onClick={() => void exportKnowledge()} disabled={exportBusy} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary disabled:opacity-40">{exportBusy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}Markdown 내보내기</button></div><div className="grid min-h-[calc(100vh-7.5rem)] gap-5 lg:grid-cols-[280px_minmax(0,1fr)]"><aside className="rounded-2xl border border-outline-variant/25 bg-white p-3"><div className="relative"><Search size={13} className="absolute left-3 top-2.5 text-outline" /><input value={topicSearch} onChange={(event) => { setTopicSearch(event.target.value); setTopicVisible(50); }} placeholder="위키 검색" className="w-full rounded-lg bg-surface-container-low py-2 pl-8 pr-3 text-xs outline-none" /></div><div className="mt-2 space-y-1">{visibleTopics.map((topic) => <button key={topic.id} onClick={() => setSelectedTopicId(topic.id)} className={`w-full rounded-xl px-3 py-2.5 text-left ${selectedTopicId === topic.id ? 'bg-primary-container text-primary' : 'hover:bg-surface-container'}`}><span className="block truncate text-xs font-bold">{topic.title}</span><span className="mt-1 block line-clamp-2 text-[10px] leading-4 text-on-surface-variant">{topic.summary}</span></button>)}{filteredTopics.length > topicVisible && <button onClick={() => setTopicVisible((value) => value + 50)} className="w-full rounded-lg bg-surface-container py-2 text-[10px] font-bold text-on-surface-variant">위키 50개 더 보기</button>}</div></aside>{selectedTopic ? <KnowledgeWikiPanel key={`${selectedTopic.id}-${selectedTopic.revision}`} topic={selectedTopic} notes={data.notes} openConflictCount={openConflicts.filter((item) => item.topicId === selectedTopic.id).length} trashItems={revisionTrash.filter((item) => item.topicId === selectedTopic.id)} dateLabel={dateLabel} onOpenConflicts={() => setView('conflicts')} onEdit={(update) => editTopic(selectedTopic, update)} onRestore={(revision) => restoreRevision(selectedTopic, revision)} onTrash={(revision) => trashRevision(selectedTopic, revision)} onRestoreTrash={restoreTrashRevision} onDeleteTrash={deleteTrashRevision} /> : <article className="flex min-h-80 items-center justify-center rounded-2xl border border-outline-variant/25 bg-white p-6 text-xs text-on-surface-variant"><BookOpenText className="mr-2" size={18} />위키 문서를 선택하세요.</article>}</div></section>}
+          {view === 'wiki' && <section><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-xl font-bold">정리된 노트</h2><p className="mt-1 text-xs text-on-surface-variant">내가 확인한 현재 메모만 일반 Markdown 폴더로 내보낼 수 있습니다.</p></div><button type="button" onClick={() => void exportKnowledge()} disabled={exportBusy} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary disabled:opacity-40">{exportBusy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}Markdown 내보내기</button></div><div className="grid min-h-[calc(100vh-7.5rem)] gap-5 lg:grid-cols-[280px_minmax(0,1fr)]"><aside className="rounded-2xl border border-outline-variant/25 bg-white p-3"><div className="relative"><Search size={13} className="absolute left-3 top-2.5 text-outline" /><input value={topicSearch} onChange={(event) => { setTopicSearch(event.target.value); setTopicVisible(50); }} placeholder="정리된 노트 검색" className="w-full rounded-lg bg-surface-container-low py-2 pl-8 pr-3 text-xs outline-none" /></div><div className="mt-2 space-y-1">{visibleTopics.map((topic) => <button key={topic.id} onClick={() => setSelectedTopicId(topic.id)} className={`w-full rounded-xl px-3 py-2.5 text-left ${selectedTopicId === topic.id ? 'bg-primary-container text-primary' : 'hover:bg-surface-container'}`}><span className="block truncate text-xs font-bold">{topic.title}</span><span className="mt-1 block line-clamp-2 text-[10px] leading-4 text-on-surface-variant">{topic.summary}</span></button>)}{filteredTopics.length > topicVisible && <button onClick={() => setTopicVisible((value) => value + 50)} className="w-full rounded-lg bg-surface-container py-2 text-[10px] font-bold text-on-surface-variant">문서 50개 더 보기</button>}</div></aside>{selectedTopic ? <KnowledgeWikiPanel key={`${selectedTopic.id}-${selectedTopic.revision}`} topic={selectedTopic} notes={data.notes} openConflictCount={openConflicts.filter((item) => item.topicId === selectedTopic.id).length} trashItems={revisionTrash.filter((item) => item.topicId === selectedTopic.id)} dateLabel={dateLabel} onOpenConflicts={() => setView('conflicts')} onEdit={(update) => editTopic(selectedTopic, update)} onRestore={(revision) => restoreRevision(selectedTopic, revision)} onTrash={(revision) => trashRevision(selectedTopic, revision)} onRestoreTrash={restoreTrashRevision} onDeleteTrash={deleteTrashRevision} onRequestReview={() => requestTopicReview(selectedTopic)} onCompleteReview={() => completeTopicReview(selectedTopic)} /> : <article className="flex min-h-80 items-center justify-center rounded-2xl border border-outline-variant/25 bg-white p-6 text-xs text-on-surface-variant"><BookOpenText className="mr-2" size={18} />정리된 노트를 선택하세요.</article>}</div></section>}
         </div></section>
       </div>
       {splitPreview && <KnowledgeSplitDialog sourceName={splitPreview.sourceName} charCount={splitPreview.charCount} segments={splitPreview.segments} warnings={splitPreview.warnings} allowSingle={splitPreview.charCount <= 100_000} busy={splitBusy} onCancel={() => { if (!splitBusy) { setSplitPreview(null); setManualQueue([]); } }} onImport={(mode) => void importSplitPreview(mode)} />}

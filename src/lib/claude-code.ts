@@ -10,6 +10,8 @@ import {
   resolveExecutable,
 } from '@/lib/command-runtime';
 import { AUTO_MODEL_ID, isAutoModel } from '@/lib/ai-providers/model-policy';
+import { buildProviderSourceContextBlock } from '@/lib/ai-providers/source-context';
+import type { ChatSourceContext } from '@/types';
 
 export interface ClaudeCodeAuthStatus {
   authenticated: boolean;
@@ -44,6 +46,7 @@ interface ClaudeRunTurnInput {
   sessionKind: 'folder' | 'pdf';
   prompt: string;
   currentPdfPath?: string | null;
+  sourceContext?: ChatSourceContext;
 }
 
 interface ClaudeStreamEvent {
@@ -92,6 +95,7 @@ function buildPrompt({
   sessionKind,
   prompt,
   currentPdfPath,
+  sourceContext,
 }: Omit<ClaudeRunTurnInput, 'providerSessionId' | 'model'>): string {
   const workspaceRoot = getWorkspaceRoot();
   const contextLines = [
@@ -109,6 +113,7 @@ function buildPrompt({
     '- Use tools and shell commands silently when needed.',
     '- In your final answer to the user, do not include progress updates, tool narration, or chain-of-thought.',
     '- The final answer should contain only the user-facing result.',
+    ...buildProviderSourceContextBlock(sourceContext),
     '',
     'User request:',
     prompt,

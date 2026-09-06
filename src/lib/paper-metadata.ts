@@ -3,7 +3,8 @@ import { promises as fs } from 'fs';
 import path from 'path';
 
 import { getWorkspaceRoot, resolveFolderPath } from '@/lib/annot-sessions';
-import { PaperMetadata, PaperTranslation, ReadingStatus } from '@/types';
+import { normalizeReadingPosition } from '@/lib/reading-position';
+import { PaperMetadata, PaperTranslation, ReadingPosition, ReadingStatus } from '@/types';
 
 const METADATA_VERSION = 1;
 
@@ -23,7 +24,19 @@ export interface PaperMetadataUpdate {
   analyzedAt?: string;
   analysisModel?: string;
   lastOpenedAt?: string;
+  readingPosition?: ReadingPosition;
   translations?: PaperTranslation[];
+}
+
+const SEARCHABLE_METADATA_FIELDS = new Set<keyof PaperMetadataUpdate>([
+  'aiKeywords',
+  'personalTags',
+  'summaryKo',
+  'noteMarkdown',
+]);
+
+export function metadataUpdatesAffectSearchIndex(updates: Record<string, unknown>): boolean {
+  return Object.keys(updates).some((key) => SEARCHABLE_METADATA_FIELDS.has(key as keyof PaperMetadataUpdate));
 }
 
 function normalizePdfPath(pdfPath: string): string {
@@ -93,6 +106,7 @@ function normalizeMetadata(pdfPath: string, value: Partial<StoredPaperMetadata>)
     readingStatus,
     rating: clampScale(value.rating),
     importance: clampScale(value.importance),
+    readingPosition: normalizeReadingPosition(value.readingPosition),
     updatedAt: typeof value.updatedAt === 'string' ? value.updatedAt : new Date(0).toISOString(),
     translations: Array.isArray(value.translations)
       ? value.translations.filter((item): item is PaperTranslation => (
@@ -198,7 +212,10 @@ export async function movePaperMetadata(oldPdfPath: string, newPdfPath: string):
   const hasData = current.updatedAt !== new Date(0).toISOString()
     || current.summaryKo.length > 0
     || current.noteMarkdown.length > 0
-    || current.translations.length > 0;
+    || current.translations.length > 0
+    || Boolean(current.readingPosition)
+    || Boolean(current.lastOpenedAt)
+    || current.readingStatus !== 'unread';
   if (!hasData) return;
   await writeJsonAtomic(target, normalizeMetadata(nextPath, current));
   await fs.rm(source, { force: true });

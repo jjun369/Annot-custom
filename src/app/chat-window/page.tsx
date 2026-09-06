@@ -1,13 +1,12 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { Suspense, useCallback, useMemo, useState } from 'react';
+import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 
 import { ChatPanel } from '@/components/workspace/ChatPanel';
 import { WorkspaceContext, WorkspaceState } from '@/lib/workspace-store';
 import { Session, SessionKind, TreeNode } from '@/types';
-
-const WORKSPACE_SYNC_CHANNEL = 'annot-workspace-sync';
 
 export default function ChatWindowPage() {
   return (
@@ -34,32 +33,16 @@ function ChatWindowContent() {
     activeSessionId: initialSessionId,
     explorerOpen: false,
     chatOpen: true,
+    activePdfPage: 1,
+    pendingChatRequest: null,
+    pendingPdfSourceNavigation: null,
+    focusChatMessageId: null,
+    chatRevision: 0,
+    pendingStudyCardRequest: null,
+    pendingReaderReviewRequest: null,
+    studyReviewOpen: false,
+    studyCardsRevision: 0,
   });
-  const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
-
-  useEffect(() => {
-    const channel = new BroadcastChannel(WORKSPACE_SYNC_CHANNEL);
-    const timeout = window.setTimeout(() => setConnectionState('disconnected'), 1800);
-    channel.onmessage = (event: MessageEvent) => {
-      if (event.data?.type !== 'context') return;
-      window.clearTimeout(timeout);
-      setConnectionState('connected');
-      setState((current) => ({
-        ...current,
-        activeSessionFolder: event.data.activeSessionFolder,
-        activeSessionKind: event.data.activeSessionKind,
-        activeSessionPdfPath: event.data.activeSessionPdfPath,
-        activeSessionId: event.data.activeSessionId,
-        activePdf: event.data.activePdf,
-      }));
-    };
-    channel.postMessage({ type: 'detached-chat-hello' });
-    return () => {
-      window.clearTimeout(timeout);
-      channel.close();
-    };
-  }, []);
-
   const openSession = useCallback((session: Pick<Session, 'id' | 'folderPath' | 'sessionKind' | 'pdfPath'>) => {
     setState((current) => ({
       ...current,
@@ -79,6 +62,22 @@ function ChatWindowContent() {
     closePdf: () => undefined,
     toggleExplorer: () => undefined,
     toggleChat: () => window.close(),
+    openChat: () => undefined,
+    setActivePdfPage: () => undefined,
+    queueChatRequest: () => undefined,
+    consumeChatRequest: () => undefined,
+    navigateToPdfSource: () => undefined,
+    consumePdfSourceNavigation: () => undefined,
+    focusChatMessage: () => undefined,
+    consumeFocusChatMessage: () => undefined,
+    notifyChatSaved: () => undefined,
+    queueStudyCardRequest: () => undefined,
+    consumeStudyCardRequest: () => undefined,
+    openPdfReview: () => undefined,
+    consumeReaderReviewRequest: () => undefined,
+    openStudyReview: () => undefined,
+    closeStudyReview: () => undefined,
+    notifyStudyCardsChanged: () => undefined,
     refreshTree: async () => null,
   }), [openSession, state]);
 
@@ -94,18 +93,20 @@ function ChatWindowContent() {
                   {state.activePdf?.name || state.activeSessionFolder}
                 </div>
               </div>
-              <div className={`flex shrink-0 items-center gap-1.5 text-[10px] ${connectionState === 'connected' ? 'text-primary' : connectionState === 'disconnected' ? 'text-error' : 'text-outline'}`}>
-                <span className={`h-1.5 w-1.5 rounded-full ${connectionState === 'connected' ? 'bg-primary' : connectionState === 'disconnected' ? 'bg-error' : 'bg-outline'}`} />
-                {connectionState === 'connected' ? '메인 창 연결됨' : connectionState === 'disconnected' ? '메인 창 연결 끊김' : '연결 확인 중'}
-              </div>
             </div>
             <div className="min-h-0 flex-1">
               <ChatPanel />
             </div>
           </div>
         ) : (
-          <div className="flex h-full items-center justify-center p-8 text-center text-sm text-on-surface-variant">
-            원래 PageDock 창에서 폴더나 PDF를 선택해 주세요.
+          <div className="flex h-full items-center justify-center p-8 text-center">
+            <div className="max-w-sm space-y-3">
+              <p className="text-sm font-semibold text-on-surface">이전 대화의 문맥을 불러오지 못했습니다.</p>
+              <p className="text-sm leading-6 text-on-surface-variant">기존 대화는 PageDock에 보존됩니다. 이 창에서는 새 대화를 시작하지 않습니다.</p>
+              <Link href="/" className="inline-flex rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary">
+                PageDock 열기
+              </Link>
+            </div>
           </div>
         )}
       </main>

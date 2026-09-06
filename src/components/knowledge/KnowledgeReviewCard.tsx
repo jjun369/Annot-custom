@@ -44,6 +44,9 @@ export function KnowledgeReviewCard({ review, note, topic, busy, onSave, onResol
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full border border-ai-reference/20 bg-ai-reference-container/65 px-2 py-1 text-[9px] font-bold text-ai-reference" title="AI가 만든 초안입니다. 사실 여부와 반영은 사용자가 결정합니다.">
+              AI 초안 · 확인 전
+            </span>
             <span className={`rounded-full px-2 py-1 text-[9px] font-bold ${review.kind === 'create' ? 'bg-blue-100 text-blue-800' : conflict ? 'bg-amber-100 text-amber-800' : 'bg-primary-container text-primary'}`}>
               {review.kind === 'create' ? '새 문서' : conflict ? '충돌 등록' : '문서 갱신'}
             </span>
@@ -65,7 +68,7 @@ export function KnowledgeReviewCard({ review, note, topic, busy, onSave, onResol
       {review.conflictSummary && <div className="mt-4 flex gap-2 rounded-xl bg-amber-50 p-3 text-[11px] leading-5 text-amber-900"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{review.conflictSummary}</div>}
       {!!review.contextWarnings.length && <div className="mt-4 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] leading-5 text-amber-900"><div className="flex items-center gap-2 font-bold"><AlertTriangle size={14} />AI에 전달된 문맥 안내</div><ul className="mt-1 list-disc pl-5">{review.contextWarnings.map((warning) => <li key={warning}>{warning}</li>)}</ul></div>}
 
-      {!editing && !expanded && <button onClick={() => setExpanded(true)} className="mt-4 w-full rounded-xl border border-outline-variant/30 bg-surface-container-low py-3 text-xs font-bold text-primary">원본과 변경 내용 확인</button>}
+      {!editing && !expanded && <button onClick={() => setExpanded(true)} className="mt-4 w-full rounded-xl border border-outline-variant/30 bg-surface-container-low py-3 text-xs font-bold text-primary">원본과 바뀐 점 보기</button>}
 
       {editing ? (
         <div className="mt-4 space-y-3 rounded-xl border border-primary/20 bg-primary-container/20 p-4">

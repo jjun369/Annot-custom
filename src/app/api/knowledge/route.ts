@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
-import { captureKnowledgeNotes, getKnowledgeSnapshot, getKnowledgeStoreInfo } from '@/lib/knowledge-store';
+import {
+  captureKnowledgeNotes,
+  getKnowledgeSnapshot,
+  getKnowledgeStoreInfo,
+  normalizeKnowledgeProvenance,
+  normalizeKnowledgeSourceAnchors,
+} from '@/lib/knowledge-store';
 
 export async function GET() {
   const [snapshot, storeInfo] = await Promise.all([getKnowledgeSnapshot(), getKnowledgeStoreInfo()]);
@@ -12,10 +18,22 @@ export async function POST(request: NextRequest) {
     const body = await request.json() as {
       text?: string;
       sourceName?: string;
-      notes?: Array<{ text?: string; sourceName?: string }>;
+      provenance?: unknown;
+      sourceAnchors?: unknown;
+      notes?: Array<{ text?: string; sourceName?: string; provenance?: unknown; sourceAnchors?: unknown }>;
     };
-    const inputs = body.notes?.map((note) => ({ text: note.text ?? '', sourceName: note.sourceName }))
-      ?? [{ text: body.text ?? '', sourceName: body.sourceName }];
+    const inputs = body.notes?.map((note) => ({
+      text: note.text ?? '',
+      sourceName: note.sourceName,
+      provenance: normalizeKnowledgeProvenance(note.provenance),
+      sourceAnchors: normalizeKnowledgeSourceAnchors(note.sourceAnchors),
+    }))
+      ?? [{
+        text: body.text ?? '',
+        sourceName: body.sourceName,
+        provenance: normalizeKnowledgeProvenance(body.provenance),
+        sourceAnchors: normalizeKnowledgeSourceAnchors(body.sourceAnchors),
+      }];
     return NextResponse.json(await captureKnowledgeNotes(inputs), { status: 201 });
   } catch (error) {
     return NextResponse.json({

@@ -1,27 +1,43 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Clock, FileText, Loader2, MessageSquare, Search, SlidersHorizontal } from 'lucide-react';
+import { ArrowRight, CircleHelp, Clock, FileText, Loader2, MessageSquare, Search, SlidersHorizontal } from 'lucide-react';
 
 import { useFeedback } from '@/components/common/FeedbackProvider';
 import { PaperInspector } from '@/components/workspace/PaperInspector';
 import { PaperListItem } from '@/components/workspace/PaperListItem';
 import { useWorkspace } from '@/lib/workspace-store';
 import { collectPdfs } from '@/lib/tree-utils';
-import { PaperMetadata, Session, TreeNode } from '@/types';
+import { PaperMetadata, ReaderSummary, Session, TreeNode } from '@/types';
 
 interface LibraryInfoSummary {
   oneDriveLikely: boolean;
   latestBackup?: { modifiedAt: string } | null;
 }
 
+function formatResumeActivity(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const openedAt = new Date(value);
+  if (Number.isNaN(openedAt.getTime())) return undefined;
+
+  const today = new Date();
+  const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate()).getTime();
+  const startOfOpenedDay = new Date(openedAt.getFullYear(), openedAt.getMonth(), openedAt.getDate()).getTime();
+  const elapsedDays = Math.round((startOfToday - startOfOpenedDay) / 86_400_000);
+  if (elapsedDays === 0) return '오늘 읽음';
+  if (elapsedDays === 1) return '어제 읽음';
+  if (elapsedDays > 1 && elapsedDays < 7) return `${elapsedDays}일 전 읽음`;
+  return `${openedAt.toLocaleDateString('ko-KR', { month: 'numeric', day: 'numeric' })} 읽음`;
+}
+
 export function FolderView() {
-  const { selectedNode, openPdf, openSession } = useWorkspace();
+  const { selectedNode, openPdf, openPdfReview, openSession } = useWorkspace();
   const { notify } = useFeedback();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [creatingSession, setCreatingSession] = useState(false);
   const [paperMetadata, setPaperMetadata] = useState<Record<string, PaperMetadata>>({});
+  const [readerSummaries, setReaderSummaries] = useState<Record<string, ReaderSummary>>({});
   const [metadataLoading, setMetadataLoading] = useState(false);
   const [libraryInfo, setLibraryInfo] = useState<LibraryInfoSummary | null>(null);
   const [selectedPaperPath, setSelectedPaperPath] = useState<string | null>(null);
@@ -30,6 +46,7 @@ export function FolderView() {
   const [sortBy, setSortBy] = useState<'name' | 'opened' | 'importance'>('name');
   const isFolderSelected = selectedNode?.type === 'folder';
   const folderPath = isFolderSelected ? selectedNode.path : null;
+  const isLibraryRoot = isFolderSelected && selectedNode.path === '';
   const pdfs = useMemo(
     () => selectedNode?.type === 'folder' ? collectPdfs(selectedNode) : [],
     [selectedNode],
@@ -95,6 +112,30 @@ export function FolderView() {
     return () => { cancelled = true; };
   }, [notify, selectedNode]);
 
+  useEffect(() => {
+    if (pdfs.length === 0) {
+      setReaderSummaries({});
+      return;
+    }
+    let cancelled = false;
+    const loadReaderSummaries = async () => {
+      try {
+        const res = await fetch('/api/workspace/reader-summary', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ paths: pdfs.map((pdf) => pdf.path) }),
+          cache: 'no-store',
+        });
+        const data = await res.json() as { summaries?: Record<string, ReaderSummary> };
+        if (!cancelled && res.ok && data.summaries) setReaderSummaries(data.summaries);
+      } catch {
+        if (!cancelled) setReaderSummaries({});
+      }
+    };
+    void loadReaderSummaries();
+    return () => { cancelled = true; };
+  }, [pdfs]);
+
   const visiblePdfs = useMemo(() => {
     const query = paperQuery.trim().toLocaleLowerCase('ko-KR');
     return pdfs
@@ -135,6 +176,20 @@ export function FolderView() {
     [pdfs, selectedPaperPath],
   );
   const selectedMetadata = selectedPaper ? paperMetadata[selectedPaper.path] : undefined;
+  const recentReadingPapers = useMemo(() => pdfs
+    .map((pdf) => ({
+      pdf,
+      metadata: paperMetadata[pdf.path],
+      readerSummary: readerSummaries[pdf.path],
+    }))
+    .filter((item) => Boolean(item.metadata?.readingPosition || item.readerSummary?.page))
+    .sort((a, b) => (
+      (b.metadata?.lastOpenedAt || b.readerSummary?.lastOpenedAt || '')
+        .localeCompare(a.metadata?.lastOpenedAt || a.readerSummary?.lastOpenedAt || '')
+    )),
+  [paperMetadata, pdfs, readerSummaries]);
+  const resumePaper = recentReadingPapers[0] ?? null;
+  const recentReadingRows = recentReadingPapers.slice(1, 4);
 
   useEffect(() => {
     if (!folderPath) {
@@ -212,13 +267,23 @@ export function FolderView() {
     }
   };
 
+  const resumePage = resumePaper?.metadata?.readingPosition?.page ?? resumePaper?.readerSummary?.page;
+  const resumeUnresolvedCount = resumePaper?.readerSummary?.unresolvedCount ?? 0;
+  const resumeActivity = formatResumeActivity(
+    resumePaper?.metadata?.lastOpenedAt ?? resumePaper?.readerSummary?.lastOpenedAt,
+  );
+
   return (
     <div className="h-full overflow-hidden">
       <div className="mx-auto flex h-full max-w-[1480px] flex-col px-5 py-5 lg:px-7 lg:py-6">
         <header className="mb-5 flex shrink-0 flex-wrap items-start justify-between gap-4">
           <div className="min-w-0">
-            <div className="text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">연구 폴더</div>
-            <h1 className="mt-1 truncate text-2xl font-bold tracking-tight text-on-surface">{selectedNode.name}</h1>
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-on-surface-variant">
+              {isLibraryRoot ? '내 라이브러리' : '연구 폴더'}
+            </div>
+            <h1 className="mt-1 truncate text-2xl font-bold tracking-tight text-on-surface">
+              {isLibraryRoot ? '내 라이브러리' : selectedNode.name}
+            </h1>
             <p className="mt-1 text-xs text-on-surface-variant">
               PDF {pdfs.length}개 · 표시 {visiblePdfs.length}개 · 이전 대화 {sessions.length}개
             </p>
@@ -234,16 +299,80 @@ export function FolderView() {
               </span>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => void handleCreateSession()}
-            disabled={creatingSession}
-            className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-primary px-3.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
-          >
-            {creatingSession ? <Loader2 size={14} className="animate-spin" /> : <MessageSquare size={14} />}
-            {creatingSession ? '대화 시작 중...' : '폴더 연구 대화'}
-          </button>
+          {!isLibraryRoot && (
+            <button
+              type="button"
+              onClick={() => void handleCreateSession()}
+              disabled={creatingSession}
+              className="inline-flex h-9 shrink-0 items-center gap-2 rounded-xl bg-primary px-3.5 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50"
+            >
+              {creatingSession ? <Loader2 size={14} className="animate-spin" /> : <MessageSquare size={14} />}
+              {creatingSession ? '대화 시작 중...' : '폴더 연구 대화'}
+            </button>
+          )}
         </header>
+
+        {resumePaper && resumePage ? (
+          <section className="mb-4 shrink-0 rounded-xl border border-primary/25 bg-primary-container/35 px-4 py-3.5" aria-labelledby="continue-reading-title">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div id="continue-reading-title" className="flex items-center gap-1.5 text-[10px] font-bold text-primary"><Clock size={12} aria-hidden="true" />계속 읽기</div>
+                <p className="mt-1 truncate text-sm font-semibold text-on-surface">{resumePaper.pdf.name}</p>
+                <p className="mt-1 text-[11px] text-on-surface-variant">
+                  p.{resumePage} 읽는 중{resumeActivity ? ` · ${resumeActivity}` : ''}
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => openPdf(resumePaper.pdf)}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-primary px-3 text-[11px] font-semibold text-on-primary transition-opacity hover:opacity-90"
+                >
+                  이어서 읽기 <ArrowRight size={12} aria-hidden="true" />
+                </button>
+                {resumeUnresolvedCount > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => openPdfReview(resumePaper.pdf)}
+                    className="inline-flex h-7 items-center gap-1 rounded-lg border border-study-unclear/25 px-2 text-[11px] font-semibold text-study-unclear hover:bg-study-unclear-container"
+                    aria-label={`${resumePaper.pdf.name}의 다시 볼 것 ${resumeUnresolvedCount}개 열기`}
+                  >
+                    <CircleHelp size={12} aria-hidden="true" />다시 볼 것 {resumeUnresolvedCount}
+                  </button>
+                )}
+              </div>
+            </div>
+            {recentReadingRows.length > 0 && (
+              <div className="mt-3 border-t border-primary/15 pt-2">
+                <p className="sr-only">최근 이어 읽은 문서</p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1">
+                  {recentReadingRows.map(({ pdf, metadata, readerSummary }) => {
+                    const page = metadata?.readingPosition?.page ?? readerSummary?.page;
+                    if (!page) return null;
+                    const unresolvedCount = readerSummary?.unresolvedCount ?? 0;
+                    const activity = formatResumeActivity(metadata?.lastOpenedAt ?? readerSummary?.lastOpenedAt);
+                    return (
+                      <button
+                        key={pdf.path}
+                        type="button"
+                        onClick={() => openPdf(pdf)}
+                        className="max-w-full truncate text-left text-[10px] font-medium text-on-surface-variant hover:text-primary"
+                        title={`${pdf.name} p.${page}에서 이어 읽기`}
+                      >
+                        {pdf.name} · p.{page}{activity ? ` · ${activity}` : ''}{unresolvedCount ? ` · 다시 볼 것 ${unresolvedCount}` : ''}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </section>
+        ) : pdfs.length > 0 && !metadataLoading ? (
+          <section className="mb-4 shrink-0 rounded-xl border border-outline-variant/20 bg-surface-container-low px-4 py-3" aria-label="계속 읽기 안내">
+            <p className="text-xs font-semibold text-on-surface">최근 읽은 논문이 없습니다.</p>
+            <p className="mt-1 text-[11px] text-on-surface-variant">논문을 열면 마지막 읽은 위치와 다시 볼 기록을 여기에 보여 드립니다.</p>
+          </section>
+        ) : null}
 
         <div className="mb-4 flex shrink-0 flex-wrap items-center gap-2 rounded-xl border border-outline-variant/20 bg-surface-container-low px-3 py-2">
           <div className="flex min-w-[220px] flex-1 items-center gap-2 rounded-lg border border-outline-variant/30 bg-surface-container-lowest px-2.5">
@@ -313,6 +442,7 @@ export function FolderView() {
                       pdf={pdf}
                       relativePath={relativePath}
                       metadata={metadata}
+                      readerSummary={readerSummaries[pdf.path]}
                       selected={selectedPaperPath === pdf.path}
                       onSelect={() => setSelectedPaperPath(pdf.path)}
                       onOpen={() => openPdf(pdf)}

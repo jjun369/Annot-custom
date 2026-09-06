@@ -10,6 +10,13 @@ export function collectPdfs(node: TreeNode): TreeNode[] {
   return pdfs;
 }
 
+export function hasPdfDescendant(node: TreeNode | null): boolean {
+  if (!node) return false;
+  if (node.type === 'pdf') return true;
+
+  return (node.children ?? []).some((child) => hasPdfDescendant(child));
+}
+
 export function findNode(root: TreeNode, targetPath: string): TreeNode | null {
   if (root.path === targetPath) return root;
 

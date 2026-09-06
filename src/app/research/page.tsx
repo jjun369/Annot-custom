@@ -66,6 +66,34 @@ interface DocumentDetail {
   filenameSuggestion: { fileName: string; confident: boolean };
 }
 
+type IndexJobState = 'starting' | 'extracting' | 'cancelling' | 'committing' | 'succeeded' | 'cancelled' | 'failed';
+
+interface IndexJob {
+  id: string;
+  documentId: string;
+  state: IndexJobState;
+  totalPages?: number;
+  pagesProcessed: number;
+  chunks: number;
+  warnings: string[];
+  error?: { code: string; message: string };
+}
+
+function isActiveIndexJob(job: IndexJob | null | undefined): boolean {
+  return Boolean(job && ['starting', 'extracting', 'cancelling', 'committing'].includes(job.state));
+}
+
+function indexJobLabel(job: IndexJob): string {
+  if (job.state === 'starting') return '본문 색인 준비 중…';
+  if (job.state === 'cancelling') return '본문 색인 취소 중…';
+  if (job.state === 'committing') return `${job.pagesProcessed} / ${job.totalPages ?? job.pagesProcessed} 페이지 완료 · 색인 저장 중…`;
+  if (job.state === 'extracting') {
+    const percent = job.totalPages ? Math.floor((job.pagesProcessed / job.totalPages) * 100) : 0;
+    return `본문 색인 중 · ${job.pagesProcessed} / ${job.totalPages ?? '?'} 페이지 · ${percent}%`;
+  }
+  return '본문 색인';
+}
+
 const REPORT_LABELS: Record<string, string> = {
   oneSentenceIdea: '한 문장 핵심 아이디어',
   existingProblem: '해결하려는 기존 문제',
@@ -97,6 +125,8 @@ export default function ResearchPage() {
   const [selectedProjectId, setSelectedProjectId] = useState<string>('');
   const [selectedDocumentId, setSelectedDocumentId] = useState<string>('');
   const [detail, setDetail] = useState<DocumentDetail | null>(null);
+  const [indexJob, setIndexJob] = useState<IndexJob | null>(null);
+  const [indexJobRecoveryNotice, setIndexJobRecoveryNotice] = useState<{ documentId: string; message: string } | null>(null);
   const [query, setQuery] = useState('');
   const [searchSource, setSearchSource] = useState<SearchSource>('local');
   const [localResults, setLocalResults] = useState<ResearchSearchResult[]>([]);
@@ -118,6 +148,12 @@ export default function ResearchPage() {
   const [kindDraft, setKindDraft] = useState<ResearchDocument['kind']>('paper');
   const [patentDraft, setPatentDraft] = useState<PatentMetadata | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const completedIndexJobs = useRef(new Set<string>());
+
+  const activeIndexing = isActiveIndexJob(indexJob);
+  const indexingCurrentDocument = activeIndexing && indexJob?.documentId === detail?.document.id;
+  const activeIndexJobId = activeIndexing ? indexJob?.id : undefined;
+  const activeIndexDocumentId = activeIndexing ? indexJob?.documentId : undefined;
 
   const selectedProject = useMemo(
     () => data?.projects.find((project) => project.id === selectedProjectId) || null,
@@ -188,6 +224,50 @@ export default function ResearchPage() {
     const timer = window.setInterval(() => void loadDetail(selectedDocumentId), 2500);
     return () => window.clearInterval(timer);
   }, [detail?.analyses, loadDetail, selectedDocumentId]);
+
+  useEffect(() => {
+    if (!activeIndexJobId || !activeIndexDocumentId) return;
+    let disposed = false;
+    const poll = async () => {
+      try {
+        const response = await fetch(`/api/research/documents/index?jobId=${encodeURIComponent(activeIndexJobId)}`, { cache: 'no-store' });
+        const payload = await response.json();
+        if (disposed) return;
+        if (!response.ok || payload.error) {
+          if (response.status === 404) {
+            const message = payload.error || '색인 작업 상태를 찾을 수 없습니다. 기존 색인은 그대로 유지되며 다시 시작할 수 있습니다.';
+            setIndexJobRecoveryNotice({ documentId: activeIndexDocumentId, message });
+            setIndexJob(null);
+            notify(message, 'error');
+            return;
+          }
+          throw new Error(payload.error || '색인 진행 상황을 확인하지 못했습니다.');
+        }
+        const next = payload.job as IndexJob;
+        setIndexJob(next);
+        if (!isActiveIndexJob(next) && !completedIndexJobs.current.has(next.id)) {
+          completedIndexJobs.current.add(next.id);
+          if (next.state === 'succeeded') {
+            notify(`${next.pagesProcessed}페이지를 ${next.chunks}개 검색 단위로 색인했습니다.`, 'success');
+            void loadBootstrap();
+            if (next.documentId === selectedDocumentId) void loadDetail(next.documentId);
+          } else if (next.state === 'cancelled') {
+            notify('본문 색인을 취소했습니다. 기존 색인은 그대로 유지됩니다.', 'success');
+          } else if (next.state === 'failed') {
+            notify(next.error?.message || '본문 색인에 실패했습니다. 기존 색인은 그대로 유지됩니다.', 'error');
+          }
+        }
+      } catch (error) {
+        if (!disposed) notify(error instanceof Error ? error.message : '색인 진행 상황을 확인하지 못했습니다.', 'error');
+      }
+    };
+    void poll();
+    const timer = window.setInterval(() => void poll(), 750);
+    return () => {
+      disposed = true;
+      window.clearInterval(timer);
+    };
+  }, [activeIndexDocumentId, activeIndexJobId, loadBootstrap, loadDetail, notify, selectedDocumentId]);
 
   const runSearch = async () => {
     if (query.trim().length < 2) return;
@@ -393,7 +473,6 @@ export default function ResearchPage() {
 
   const indexDocument = async () => {
     if (!detail) return;
-    setBusy('index');
     try {
       const response = await fetch('/api/research/documents/index', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -401,11 +480,24 @@ export default function ResearchPage() {
       });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || '색인에 실패했습니다.');
-      notify(`${payload.pages}페이지를 ${payload.chunks}개 검색 단위로 색인했습니다.`, 'success');
-      await loadDetail(detail.document.id);
+      setIndexJob(payload.job as IndexJob);
+      setIndexJobRecoveryNotice(null);
+      if (payload.reused) notify('이미 진행 중인 본문 색인을 계속 표시합니다.', 'success');
     } catch (error) {
       notify(error instanceof Error ? error.message : '색인에 실패했습니다.', 'error');
-    } finally { setBusy(''); }
+    }
+  };
+
+  const cancelIndexDocument = async () => {
+    if (!indexJob) return;
+    try {
+      const response = await fetch(`/api/research/documents/index?jobId=${encodeURIComponent(indexJob.id)}`, { method: 'DELETE' });
+      const payload = await response.json();
+      if (!response.ok || payload.error) throw new Error(payload.error || '색인을 취소하지 못했습니다.');
+      setIndexJob(payload.job as IndexJob);
+    } catch (error) {
+      notify(error instanceof Error ? error.message : '색인을 취소하지 못했습니다.', 'error');
+    }
   };
 
   const applySuggestedFilename = async () => {
@@ -653,21 +745,31 @@ export default function ResearchPage() {
                     {detail.document.missing && <span className="font-semibold text-error">원문 경로 확인 필요</span>}
                   </div>
                 </div>
-                <button onClick={() => void saveDocument()} disabled={busy === 'save-document'} className="rounded-lg bg-primary px-3 py-2 text-[10px] font-semibold text-on-primary">저장</button>
+                <button onClick={() => void saveDocument()} disabled={busy === 'save-document'} className="rounded-lg bg-surface-container px-3 py-2 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container-high disabled:opacity-50">저장</button>
               </div>
 
               <div className="mt-4 flex flex-wrap gap-2">
-                {detail.document.currentPath && <Link href={`/?pdf=${encodeURIComponent(detail.document.currentPath)}`} className="flex items-center gap-1 rounded-lg bg-surface-container px-3 py-2 text-[10px] font-semibold"><BookOpen size={12} />PDF 열기</Link>}
-                <button onClick={() => void indexDocument()} disabled={!detail.document.currentPath || busy === 'index'} className="flex items-center gap-1 rounded-lg bg-surface-container px-3 py-2 text-[10px] font-semibold disabled:opacity-50">{busy === 'index' ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}본문 색인</button>
+                {detail.document.currentPath && <Link href={`/?pdf=${encodeURIComponent(detail.document.currentPath)}`} className="flex items-center gap-1 rounded-lg bg-primary px-3 py-2 text-[10px] font-semibold text-on-primary hover:opacity-90"><BookOpen size={12} />PDF 열기</Link>}
+                <button onClick={() => void indexDocument()} disabled={!detail.document.currentPath || activeIndexing} className="flex items-center gap-1 rounded-lg bg-surface-container px-3 py-2 text-[10px] font-semibold disabled:opacity-50">{indexingCurrentDocument ? <Loader2 size={12} className="animate-spin" /> : <Database size={12} />}{indexingCurrentDocument ? '본문 색인 중' : activeIndexing ? '다른 문서 색인 중' : '본문 색인'}</button>
                 <button onClick={() => void applySuggestedFilename()} disabled={!detail.document.currentPath || busy === 'rename'} className="flex items-center gap-1 rounded-lg bg-surface-container px-3 py-2 text-[10px] font-semibold disabled:opacity-50"><FileText size={12} />추천 파일명 확인</button>
                 {selectedProjectId && <button onClick={() => void linkDocument(detail.document.id, !detail.projectIds.includes(selectedProjectId)).catch((error) => notify(error.message, 'error'))} className="flex items-center gap-1 rounded-lg bg-surface-container px-3 py-2 text-[10px] font-semibold"><Tags size={12} />{detail.projectIds.includes(selectedProjectId) ? '프로젝트에서 빼기' : '프로젝트에 연결'}</button>}
-                <button onClick={() => void startAnalysis()} disabled={!detail.document.indexedAt || busy === 'analysis'} className="flex items-center gap-1 rounded-lg bg-violet-100 px-3 py-2 text-[10px] font-semibold text-violet-800 disabled:opacity-50"><Sparkles size={12} />Codex 정밀분석</button>
+                <button onClick={() => void startAnalysis()} disabled={!detail.document.indexedAt || busy === 'analysis'} title="선택한 문서의 색인된 원문을 원격 AI로 분석합니다." className="flex items-center gap-1 rounded-lg bg-surface-container px-3 py-2 text-[10px] font-semibold text-on-surface disabled:opacity-50"><Sparkles size={12} />원문 기반 AI 분석</button>
               </div>
+
+              {indexingCurrentDocument && indexJob && (
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-on-surface">
+                  <div className="flex items-center gap-2"><Loader2 size={13} className="animate-spin text-primary" /><span>{indexJobLabel(indexJob)}</span></div>
+                  <button onClick={() => void cancelIndexDocument()} disabled={indexJob.state === 'cancelling' || indexJob.state === 'committing'} className="rounded-md bg-surface-container px-2 py-1 text-[10px] font-semibold disabled:opacity-50">{indexJob.state === 'committing' ? '저장 중' : indexJob.state === 'cancelling' ? '취소 중' : '취소'}</button>
+                </div>
+              )}
+              {indexJobRecoveryNotice?.documentId === detail.document.id && (
+                <div className="mt-3 rounded-xl border border-amber-300/50 bg-amber-50 px-3 py-2 text-xs text-amber-900">{indexJobRecoveryNotice.message}</div>
+              )}
 
               <div className="mt-4 rounded-xl bg-surface-container p-3">
                 <div className="text-[10px] font-bold uppercase tracking-wider text-on-surface-variant">추천 파일명</div>
                 <div className="mt-1 break-all text-xs">{detail.filenameSuggestion.fileName}</div>
-                {!detail.filenameSuggestion.confident && <div className="mt-1 text-[10px] text-amber-700">저자·연도 또는 특허번호가 부족합니다. 적용 전에 확인하세요.</div>}
+                {!detail.filenameSuggestion.confident && <div className="mt-1 text-[10px] leading-4 text-amber-800">저자·연도 또는 특허번호가 일부 비어 있습니다. 읽기와 저장에는 영향이 없으며, 파일명은 직접 고칠 수 있습니다.</div>}
               </div>
 
               {kindDraft === 'patent' && patentDraft && (
@@ -690,14 +792,14 @@ export default function ResearchPage() {
                   {detail.analyses.map((analysis) => (
                     <article key={analysis.id} className="rounded-xl border border-outline-variant/20 p-4">
                       <div className="flex items-center justify-between"><span className="text-[10px] font-semibold">{analysis.status === 'succeeded' ? '분석 완료' : analysis.status === 'failed' ? '분석 실패' : '분석 중'}</span><span className="text-[10px] text-outline">{new Date(analysis.createdAt).toLocaleString('ko-KR')}</span></div>
-                      {(analysis.status === 'queued' || analysis.status === 'running') && <div className="mt-3 flex items-center gap-2 text-xs text-on-surface-variant"><Loader2 size={13} className="animate-spin" />Codex가 원문 근거를 확인하고 있습니다.</div>}
+                      {(analysis.status === 'queued' || analysis.status === 'running') && <div className="mt-3 flex items-center gap-2 text-xs text-on-surface-variant"><Loader2 size={13} className="animate-spin" />AI가 원문 근거를 확인하고 있습니다.</div>}
                       {analysis.error && <p className="mt-2 text-xs text-error">{analysis.error}</p>}
                       {analysis.status === 'succeeded' && <div className="mt-3 space-y-4">{Object.entries(analysis.report).filter(([key]) => key !== 'evidence').map(([key, value]) => <section key={key}><div className="text-[10px] font-bold uppercase tracking-wide text-on-surface-variant">{REPORT_LABELS[key] || key}</div><p className="selectable-text mt-1 whitespace-pre-wrap text-xs leading-6 text-on-surface">{String(value || '')}</p></section>)}
                         {analysis.evidence.length > 0 && <section><div className="text-[10px] font-bold uppercase tracking-wide text-on-surface-variant">원문 근거</div><div className="mt-2 space-y-2">{analysis.evidence.map((anchor) => <a key={anchor.id} href={detail.document.currentPath && anchor.page ? `/?pdf=${encodeURIComponent(detail.document.currentPath)}&page=${anchor.page}` : '#'} className="block rounded-lg bg-surface-container px-3 py-2 text-[11px] leading-5"><span className="font-semibold text-primary">{EVIDENCE_LABELS[anchor.level]} {anchor.page ? `· ${anchor.page}쪽` : ''}</span><span className="selectable-text mt-1 block">“{anchor.quote}”</span>{anchor.note && <span className="mt-1 block text-on-surface-variant">{anchor.note}</span>}</a>)}</div></section>}
                       </div>}
                     </article>
                   ))}
-                  {detail.analyses.length === 0 && <div className="rounded-xl bg-surface-container p-4 text-xs text-on-surface-variant">본문을 색인한 뒤 Codex 정밀분석을 실행할 수 있습니다.</div>}
+                  {detail.analyses.length === 0 && <div className="rounded-xl bg-surface-container p-4 text-xs text-on-surface-variant">본문을 색인한 뒤, 필요할 때 원문 기반 AI 분석을 실행할 수 있습니다.</div>}
                 </div>
               </div>
             </div>

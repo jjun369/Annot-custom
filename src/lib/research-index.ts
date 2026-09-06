@@ -10,7 +10,7 @@ import {
 
 const MAX_CHUNK_LENGTH = 6000;
 
-function splitText(value: string): string[] {
+export function splitResearchText(value: string): string[] {
   const text = value.replace(/\u0000/g, '').trim();
   if (!text) return [];
   if (text.length <= MAX_CHUNK_LENGTH) return [text];
@@ -30,7 +30,7 @@ function splitText(value: string): string[] {
   return chunks;
 }
 
-function inferFirstPageTitle(text: string): string | null {
+export function inferFirstPageTitle(text: string): string | null {
   const candidates = text
     .split(/\r?\n/)
     .map((line) => line.replace(/\s+/g, ' ').trim())
@@ -44,7 +44,7 @@ export async function indexResearchDocument(documentId: string): Promise<{ pages
   if (!document) throw new Error('문서를 찾지 못했습니다.');
   if (!document.currentPath) throw new Error('PDF 원문이 연결되지 않은 문서입니다.');
   const pages = await extractPdfTextByPage(document.currentPath);
-  const chunks = pages.flatMap((page) => splitText(page.text).map((text) => ({
+  const chunks = pages.flatMap((page) => splitResearchText(page.text).map((text) => ({
     page: page.page,
     kind: 'page',
     text,

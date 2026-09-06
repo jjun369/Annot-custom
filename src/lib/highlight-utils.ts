@@ -137,34 +137,62 @@ export function normalizeHighlight<T extends Highlight>(highlight: T): T {
 }
 
 export function buildHighlightSignature(highlight: Highlight): string {
-  if (highlight.annotationId) {
-    return `annotation:${highlight.annotationId}`;
-  }
-
   const rects = getHighlightRects(highlight)
     .map(rectKey)
     .join('|');
 
   return [
     highlight.page,
-    highlight.type,
     highlight.text.trim().toLowerCase(),
     rects,
   ].join('::');
 }
 
+function mergeHighlightPair<T extends Highlight>(existing: T, incoming: T): T {
+  const rects = getHighlightRects(incoming).length > 0
+    ? getHighlightRects(incoming)
+    : getHighlightRects(existing);
+  return {
+    ...existing,
+    ...incoming,
+    id: incoming.id || existing.id,
+    annotationId: incoming.annotationId || existing.annotationId,
+    documentId: incoming.documentId || existing.documentId,
+    text: incoming.text || existing.text,
+    note: incoming.note ?? existing.note,
+    rects,
+    position: rects[0] ?? incoming.position ?? existing.position,
+    studyKind: incoming.studyKind ?? existing.studyKind,
+    resolvedAt: incoming.resolvedAt ?? existing.resolvedAt,
+    workKind: incoming.workKind ?? existing.workKind,
+    workDoneAt: incoming.workKind === 'finding'
+      ? undefined
+      : incoming.workKind
+        ? incoming.workDoneAt
+        : incoming.workDoneAt ?? existing.workDoneAt,
+    createdAt: incoming.createdAt ?? existing.createdAt,
+    updatedAt: incoming.updatedAt ?? existing.updatedAt,
+  } as T;
+}
+
 export function mergeHighlights<T extends Highlight>(highlights: T[]): T[] {
-  const seen = new Set<string>();
   const merged: T[] = [];
 
   for (const rawHighlight of highlights) {
     const highlight = normalizeHighlight(rawHighlight);
-    const signature = buildHighlightSignature(highlight);
-    if (seen.has(signature)) {
+    const geometrySignature = buildHighlightSignature(highlight);
+    const existingIndex = merged.findIndex((candidate) => {
+      if (highlight.annotationId && candidate.annotationId) {
+        return highlight.annotationId === candidate.annotationId;
+      }
+      if (highlight.id && candidate.id && highlight.id === candidate.id) return true;
+      return buildHighlightSignature(candidate) === geometrySignature;
+    });
+    if (existingIndex >= 0) {
+      merged[existingIndex] = mergeHighlightPair(merged[existingIndex], highlight);
       continue;
     }
 
-    seen.add(signature);
     merged.push(highlight);
   }
 

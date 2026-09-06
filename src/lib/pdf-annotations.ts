@@ -5,6 +5,8 @@ import { buildExecutableCandidates, resolveExecutable } from '@/lib/command-runt
 import { getCommonPythonCandidateBases } from '@/lib/platform-paths';
 import { mergeHighlights, normalizeHighlightRects } from '@/lib/highlight-utils';
 import { resolveFolderPath } from '@/lib/annot-sessions';
+import { getWorkKindLabel, isWorkDone } from '@/lib/highlight-work';
+import { selectWorkEvidenceGroups } from '@/lib/work-evidence';
 import { Highlight } from '@/types';
 
 export interface PdfHighlightPayload {
@@ -602,4 +604,67 @@ export function buildPdfHighlightsMarkdown(pdfPath: string, highlights: PdfHighl
 
 export function getPdfHighlightsMarkdownFileName(pdfPath: string): string {
   return `${path.basename(pdfPath).replace(/\.pdf$/i, '')}.highlights.md`;
+}
+
+function escapeMarkdownHeading(value: string): string {
+  return value.replace(/\r?\n/g, ' ').replace(/\s+/g, ' ').trim().replace(/#/g, '\\#');
+}
+
+function fallbackWorkHeading(highlight: PdfHighlight): string {
+  const excerpt = escapeMarkdownHeading(highlight.text);
+  return excerpt.length > 100 ? `${excerpt.slice(0, 97)}...` : excerpt || '원문 근거';
+}
+
+function buildPdfSourceLink(pdfPath: string, page: number): string {
+  return `/?pdf=${encodeURIComponent(pdfPath)}&page=${page}`;
+}
+
+function formatWorkEvidenceSection(
+  title: string,
+  highlights: PdfHighlight[],
+  pdfPath: string,
+): string[] {
+  if (highlights.length === 0) return [`## ${title}`, '', 'None.', ''];
+
+  const lines = [`## ${title}`, ''];
+  highlights.forEach((highlight, index) => {
+    const kind = highlight.workKind!;
+    const label = getWorkKindLabel(kind).toUpperCase();
+    const isDone = isWorkDone(highlight);
+    const heading = escapeMarkdownHeading(highlight.note || '') || fallbackWorkHeading(highlight);
+    const prefix = kind === 'finding' ? 'FINDING' : `${isDone ? '✓ ' : ''}${label}`;
+
+    lines.push(`### ${index + 1}. ${prefix} — ${heading}`);
+    lines.push('');
+    lines.push(`> ${escapeMarkdownBlock(highlight.text)}`);
+    lines.push('');
+    lines.push(`[p. ${highlight.page}](${buildPdfSourceLink(pdfPath, highlight.page)})`);
+    lines.push('');
+  });
+  return lines;
+}
+
+/**
+ * A compact, current-PDF brief for meeting or working notes. It exports only
+ * highlights explicitly promoted to a Work classification, never all marks.
+ */
+export function buildPdfEvidenceBriefMarkdown(pdfPath: string, highlights: PdfHighlight[]): string {
+  const normalizedHighlights = mergeHighlights(highlights).sort(compareHighlights);
+  const { findings, openFollowUps, completedFollowUps } = selectWorkEvidenceGroups(normalizedHighlights);
+  const title = path.basename(pdfPath).replace(/\.pdf$/i, '');
+
+  return [
+    `# Evidence Brief — ${title}`,
+    '',
+    `Source PDF: \`${pdfPath}\``,
+    `Generated: ${new Date().toISOString()}`,
+    '',
+    ...formatWorkEvidenceSection('Findings', findings, pdfPath),
+    ...formatWorkEvidenceSection('Open Follow-ups', openFollowUps, pdfPath),
+    ...formatWorkEvidenceSection('Completed Follow-ups', completedFollowUps, pdfPath),
+  ].join('\n').trimEnd() + '\n';
+}
+
+export function getPdfEvidenceBriefMarkdownFileName(pdfPath: string): string {
+  return `${path.basename(pdfPath).replace(/\.pdf$/i, '')}.evidence-brief.md`;
 }

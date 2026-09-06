@@ -3,6 +3,8 @@ import { appendMessage, getSession, updateSession } from '@/lib/annot-sessions';
 import { getProviderRuntime } from '@/lib/ai-providers';
 import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
 import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
+import { normalizeChatSourceContext } from '@/lib/ai-providers/source-context';
+import { markMobileBridgeExportDirtyForDocument } from '@/lib/mobile-bridge';
 import type { ReasoningEffort } from '@/types';
 
 export async function POST(req: NextRequest) {
@@ -15,6 +17,7 @@ export async function POST(req: NextRequest) {
       model,
       reasoningEffort,
       currentPdfPath,
+      sourceContext: requestedSourceContext,
     } = body as {
       folderPath?: string;
       sessionId?: string;
@@ -22,6 +25,7 @@ export async function POST(req: NextRequest) {
       model?: string;
       reasoningEffort?: ReasoningEffort;
       currentPdfPath?: string | null;
+      sourceContext?: unknown;
     };
 
     if (!folderPath || !sessionId || !prompt?.trim()) {
@@ -39,11 +43,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (requestedSourceContext && session.sessionKind !== 'pdf') {
+      return NextResponse.json(
+        { error: 'PDF 대화에서만 원문 위치를 연결할 수 있습니다.' },
+        { status: 400 },
+      );
+    }
+    const sourceContext = requestedSourceContext
+      ? normalizeChatSourceContext(requestedSourceContext, { documentId: session.documentId })
+      : undefined;
+    if (requestedSourceContext && !sourceContext) {
+      return NextResponse.json(
+        { error: '선택 영역 정보가 올바르지 않습니다. 더 작은 한 페이지 범위를 선택해 주세요.' },
+        { status: 400 },
+      );
+    }
+    if (sourceContext && !session.documentId) {
+      // Older PDF sessions may not yet have a registered document id. Their
+      // persisted session PDF remains authoritative; never adopt a client id.
+      delete sourceContext.documentId;
+    }
+
     const userMessage = {
       id: `u-${Date.now()}`,
       role: 'user' as const,
       content: prompt.trim(),
       timestamp: new Date().toISOString(),
+      sourceContext,
     };
     const sessionModel = normalizeModelPreference(session.model);
     const resolvedModel = normalizeModelPreference(model || sessionModel);
@@ -70,7 +96,15 @@ export async function POST(req: NextRequest) {
               folderPath,
               prompt: prompt.trim(),
               sessionKind: session.sessionKind,
-              currentPdfPath: currentPdfPath ?? session.pdfPath ?? null,
+              currentPdfPath: session.pdfPath ?? currentPdfPath ?? null,
+              sourceContext,
+              conversation: session.messages
+                .filter((message) => message.role === 'user' || message.role === 'assistant')
+                .slice(-24)
+                .map((message) => ({
+                  role: message.role,
+                  content: message.content,
+                })),
             }, {
               onEvent: (event) => {
                 writeEvent(event);
@@ -84,6 +118,8 @@ export async function POST(req: NextRequest) {
               timestamp: new Date().toISOString(),
               model: resolvedModel,
               reasoningEffort: resolvedReasoningEffort,
+              sourceContext,
+              replyToMessageId: userMessage.id,
             };
 
             const nextMessages = appendMessage(
@@ -97,6 +133,7 @@ export async function POST(req: NextRequest) {
               providerSessionId: turn.providerSessionId,
               model: resolvedModel,
             });
+            await markMobileBridgeExportDirtyForDocument(sourceContext?.documentId ?? session.documentId).catch(() => undefined);
 
             writeEvent({
               type: 'final',
