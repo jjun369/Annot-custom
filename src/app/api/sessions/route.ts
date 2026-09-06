@@ -5,7 +5,7 @@ import { AIProvider, ReasoningEffort, SessionKind } from '@/types';
 import { ensureDocumentForPath } from '@/lib/research-db';
 
 function parseSessionKind(value: string | null): SessionKind | undefined {
-  if (value === 'folder' || value === 'pdf') {
+  if (value === 'folder' || value === 'pdf' || value === 'sidechat') {
     return value;
   }
 
@@ -61,7 +61,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'folderPath is required' }, { status: 400 });
     }
 
-    const sessionKind = body?.sessionKind === 'pdf' ? 'pdf' : 'folder';
+    const sessionKind: SessionKind = body?.sessionKind === 'pdf'
+      ? 'pdf'
+      : body?.sessionKind === 'sidechat' ? 'sidechat' : 'folder';
     const pdfPath = typeof body?.pdfPath === 'string' ? body.pdfPath : null;
     const provider = parseAIProvider(typeof body?.provider === 'string' ? body.provider : null) ?? DEFAULT_AI_PROVIDER;
 

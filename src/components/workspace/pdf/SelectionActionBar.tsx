@@ -9,6 +9,7 @@ export interface SelectionActionBarProps {
   top: number;
   onExplain: () => void;
   onDeepSeek: () => void;
+  onSideChat: () => void;
   onStudyCard: () => void;
   onClozeCard: () => void;
   onImportant: () => void;
@@ -31,6 +32,7 @@ export function SelectionActionBar({
   top,
   onExplain,
   onDeepSeek,
+  onSideChat,
   onStudyCard,
   onClozeCard,
   onImportant,
@@ -151,6 +153,7 @@ export function SelectionActionBar({
             <div className="my-1 border-t border-outline-variant/20" />
             <p className="px-2 py-1 text-[10px] font-semibold tracking-wide text-on-surface-variant">AI</p>
             <button type="button" role="menuitem" onMouseDown={preserveSelection} onClick={action(onDeepSeek)} className="w-full rounded-lg px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-primary-container/50">DeepSeek 웹에 물어보기</button>
+            <button type="button" role="menuitem" onMouseDown={preserveSelection} onClick={action(onSideChat)} className="w-full rounded-lg px-2 py-1.5 text-left text-[12px] font-semibold text-ai-reference hover:bg-ai-reference-container/60">사이드채팅에 보내기</button>
             <button type="button" role="menuitem" onMouseDown={preserveSelection} onClick={action(onTranslate)} className="w-full rounded-lg px-2 py-1.5 text-left text-[12px] text-on-surface hover:bg-surface-container">선택 영역 번역</button>
           </div>
         )}

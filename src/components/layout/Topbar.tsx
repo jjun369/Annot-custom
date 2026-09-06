@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Search, MessageSquare, X, Loader2, FileText } from 'lucide-react';
+import { Search, MessageSquare, PanelRightOpen, X, Loader2, FileText } from 'lucide-react';
 import { useWorkspace } from '@/lib/workspace-store';
 import { PaperMetadata, TreeNode } from '@/types';
 import { AppHeader } from '@/components/layout/AppHeader';
@@ -24,6 +24,16 @@ export function Topbar() {
   const [results, setResults] = useState<SearchResult[]>([]);
   const [searching, setSearching] = useState(false);
   const searchInputRef = useRef<HTMLInputElement>(null);
+
+  const openSideChat = () => {
+    if (window.pageDockDesktop?.sideChat) {
+      void window.pageDockDesktop.sideChat.open();
+      return;
+    }
+    // A normal browser is useful for local UI review too. Do not infer popup
+    // success from window.open: browsers may return null for a blocked popup.
+    void window.open('/side-chat', '_blank', 'popup,width=1260,height=860');
+  };
 
   useEffect(() => {
     const handleShortcut = (event: KeyboardEvent) => {
@@ -75,8 +85,19 @@ export function Topbar() {
       <AppHeader
         active="library"
         onSearch={() => setSearchOpen(true)}
-        actions={activeSessionFolder ? (
+        actions={(
           <div className="mr-1 flex items-center gap-1 border-r border-outline-variant/35 pr-2">
+            <button
+              type="button"
+              onClick={openSideChat}
+              className="flex h-9 items-center gap-2 rounded-lg px-2.5 text-xs font-medium text-on-surface-variant transition-colors hover:bg-surface-container hover:text-on-surface"
+              aria-label="독립 사이드채팅 열기"
+              title="PDF 대화와 분리된 사이드채팅 열기"
+            >
+              <PanelRightOpen size={15} strokeWidth={2} />
+              <span className="hidden lg:inline">사이드채팅</span>
+            </button>
+            {activeSessionFolder && (
             <button
               onClick={toggleChat}
               className={`flex h-9 items-center gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors ${
@@ -89,8 +110,9 @@ export function Topbar() {
               <MessageSquare size={15} strokeWidth={2} />
               <span className="hidden lg:inline">AI 대화</span>
             </button>
+            )}
           </div>
-        ) : undefined}
+        )}
       />
       {searchOpen && (
         <div

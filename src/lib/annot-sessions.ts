@@ -167,8 +167,10 @@ async function inferPdfPathFromSession(folderPath: string, session: StoredSessio
 
 function normalizeSession(folderPath: string, session: StoredSessionRecord): StoredSession {
   const normalizedFolderPath = sanitizeRelativePath(folderPath);
-  const sessionKind = session.sessionKind === 'pdf' || typeof session.pdfPath === 'string' ? 'pdf' : 'folder';
-  const normalizedPdfPath = typeof session.pdfPath === 'string' && session.pdfPath.length > 0
+  const sessionKind: SessionKind = session.sessionKind === 'sidechat'
+    ? 'sidechat'
+    : session.sessionKind === 'pdf' || typeof session.pdfPath === 'string' ? 'pdf' : 'folder';
+  const normalizedPdfPath = sessionKind === 'pdf' && typeof session.pdfPath === 'string' && session.pdfPath.length > 0
     ? normalizePdfPath(session.pdfPath)
     : undefined;
   const provider = session.provider ?? DEFAULT_AI_PROVIDER;
@@ -562,7 +564,9 @@ export async function createSession(
 ): Promise<StoredSession> {
   await ensureFolderExists(folderPath);
 
-  const sessionKind = options.sessionKind === 'pdf' ? 'pdf' : 'folder';
+  const sessionKind = options.sessionKind === 'pdf'
+    ? 'pdf'
+    : options.sessionKind === 'sidechat' ? 'sidechat' : 'folder';
   const provider = options.provider ?? DEFAULT_AI_PROVIDER;
   const pdfPath = sessionKind === 'pdf' && options.pdfPath
     ? normalizePdfPath(options.pdfPath)
@@ -573,7 +577,7 @@ export async function createSession(
     id: randomUUID(),
     folderPath: sanitizeRelativePath(folderPath),
     sessionKind,
-    pdfPath,
+    pdfPath: sessionKind === 'pdf' ? pdfPath : undefined,
     documentId: options.documentId,
     provider,
     title,
@@ -663,6 +667,8 @@ export function buildSessionTitle(
   if (sessionKind === 'pdf' && pdfPath) {
     return `${path.basename(pdfPath).replace(/\.pdf$/i, '')} 대화`;
   }
+
+  if (sessionKind === 'sidechat') return 'PageDock 사이드채팅';
 
   const folderName = folderPath.split('/').filter(Boolean).at(-1) || 'Workspace';
   return `${folderName} 연구 대화`;

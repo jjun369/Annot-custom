@@ -14,7 +14,7 @@ import {
 import { isAutoModel } from '@/lib/ai-providers/model-policy';
 import { isAutoReasoningEffort, normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
 import { buildProviderSourceContextBlock } from '@/lib/ai-providers/source-context';
-import type { ChatSourceContext, ReasoningEffort } from '@/types';
+import type { ChatSourceContext, ReasoningEffort, SessionKind } from '@/types';
 
 export interface ExecResult {
   codexSessionId: string;
@@ -40,7 +40,7 @@ interface RunTurnInput {
   model: string;
   reasoningEffort?: ReasoningEffort;
   folderPath: string;
-  sessionKind: 'folder' | 'pdf';
+  sessionKind: SessionKind;
   prompt: string;
   currentPdfPath?: string | null;
   sourceContext?: ChatSourceContext;
@@ -127,15 +127,23 @@ function buildPrompt({
   sourceContext,
 }: Omit<RunTurnInput, 'codexSessionId' | 'model'>): string {
   const workspaceRoot = getWorkspaceRoot();
-  const contextLines = [
-    'PageDock session context:',
-    `- Workspace root: ${workspaceRoot}`,
-    `- Current session folder: ${folderPath || '.'}`,
-    `- Session type: ${sessionKind === 'pdf' ? 'PDF-focused reading session' : 'Folder-wide research session'}`,
-    currentPdfPath ? `- Current PDF open in the viewer: ${currentPdfPath}` : '- No PDF is currently open in the viewer.',
-    sessionKind === 'pdf'
-      ? '- Treat the current PDF as the primary document for this conversation. Only branch out when it materially helps.'
-      : '- Prefer the current folder first, but you may inspect other files in the workspace if needed.',
+  const contextLines = sessionKind === 'sidechat'
+    ? [
+      'PageDock independent side-chat context:',
+      '- This conversation is separate from every PDF and folder conversation.',
+      '- No PageDock Library, PDF path, work note, Knowledge note, or other file context is provided implicitly.',
+    ]
+    : [
+      'PageDock session context:',
+      `- Workspace root: ${workspaceRoot}`,
+      `- Current session folder: ${folderPath || '.'}`,
+      `- Session type: ${sessionKind === 'pdf' ? 'PDF-focused reading session' : 'Folder-wide research session'}`,
+      currentPdfPath ? `- Current PDF open in the viewer: ${currentPdfPath}` : '- No PDF is currently open in the viewer.',
+      sessionKind === 'pdf'
+        ? '- Treat the current PDF as the primary document for this conversation. Only branch out when it materially helps.'
+        : '- Prefer the current folder first, but you may inspect other files in the workspace if needed.',
+    ];
+  contextLines.push(
     '- When writing math, wrap standalone equations in \\[ ... \\] (or $$ ... $$). Do not emit bare equation lines.',
     '- Wrap inline math in \\( ... \\) or $ ... $. Do not leave LaTeX commands bare inside prose.',
     '- Keep inline variables or short expressions inline, for example `x`, `M_t`, or `alpha_t`.',
@@ -146,7 +154,7 @@ function buildPrompt({
     '',
     'User request:',
     prompt,
-  ];
+  );
 
   return contextLines.join('\n');
 }
@@ -205,7 +213,7 @@ function createCodexArgs(input: RunTurnInput): string[] {
       '--sandbox',
       'read-only',
       '--cd',
-      getWorkspaceRoot(),
+      input.sessionKind === 'sidechat' ? os.tmpdir() : getWorkspaceRoot(),
     );
   }
 

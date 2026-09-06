@@ -25,4 +25,6 @@ Publication age alone is never a reason to relabel, expire, hide, or replace kno
 
 The user remains able to work without AI: drafts persist locally, wiki Markdown can be edited directly into a new revision, historical revisions can be moved to recoverable trash, and authentication failures never disable local browsing or force an automatic logout.
 
+An optional side-chat popup may hold a free local AI conversation or a deliberately bounded cross-check outside the active PDF history. It preserves the Reader's source identity when handed off, keeps provider/web state separate, and uses visible prompt copy plus user-controlled web paste/send rather than consumer-web automation. The Reader and its exact-source return remain the primary workflow.
+
 Out of scope for 0.4: macOS/Linux support, company data or internal models, FTO/legal conclusions, cloud collaboration, bulk crawling, embeddings, weekly radar, technology maps, automatic terminology dictionaries, and WebView2 migration.

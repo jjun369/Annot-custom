@@ -5,13 +5,16 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 
-const { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, session, shell } = require('electron');
+const { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, session, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
 
 const isDevelopment = process.argv.includes('--dev') || !app.isPackaged;
 const isSmokeTest = process.argv.includes('--smoke-test');
 let mainWindow = null;
 let deepSeekWindow = null;
+let sideChatWindow = null;
+const sideChatWebViews = new Map();
+let activeSideChatWebProvider = null;
 let serverProcess = null;
 let baseUrl = null;
 let isQuitting = false;
@@ -27,6 +30,19 @@ if (!hasSingleInstanceLock) {
 const DEEPSEEK_WEB_URL = 'https://chat.deepseek.com/';
 const DEEPSEEK_WEB_PARTITION = 'persist:pagedock-deepseek-web';
 const MAX_DEEPSEEK_PROMPT_CHARS = 16_000;
+const SIDE_CHAT_WEB_PARTITIONS = new Map([
+  ['deepseek', 'persist:pagedock-sidechat-deepseek-web'],
+  ['chatgpt', 'persist:pagedock-sidechat-chatgpt-web'],
+  ['claude', 'persist:pagedock-sidechat-claude-web'],
+  ['gemini', 'persist:pagedock-sidechat-gemini-web'],
+]);
+const SIDE_CHAT_WEB_PROVIDERS = new Map([
+  ['deepseek', { url: 'https://chat.deepseek.com/', hostnames: ['chat.deepseek.com', 'deepseek.com'] }],
+  ['chatgpt', { url: 'https://chatgpt.com/', hostnames: ['chatgpt.com', 'www.chatgpt.com'] }],
+  ['claude', { url: 'https://claude.ai/', hostnames: ['claude.ai', 'www.claude.ai'] }],
+  ['gemini', { url: 'https://gemini.google.com/', hostnames: ['gemini.google.com'] }],
+]);
+const MAX_SIDE_CHAT_COPY_CHARS = 100_000;
 
 function isDeepSeekUrl(targetUrl) {
   try {
@@ -35,6 +51,23 @@ function isDeepSeekUrl(targetUrl) {
       parsed.hostname === 'deepseek.com'
       || parsed.hostname.endsWith('.deepseek.com')
     );
+  } catch {
+    return false;
+  }
+}
+
+function getSideChatProvider(providerId) {
+  return typeof providerId === 'string' ? SIDE_CHAT_WEB_PROVIDERS.get(providerId) : undefined;
+}
+
+function isSideChatProviderUrl(providerId, targetUrl) {
+  const provider = getSideChatProvider(providerId);
+  if (!provider) return false;
+  try {
+    const parsed = new URL(targetUrl);
+    return parsed.protocol === 'https:' && provider.hostnames.some((hostname) => (
+      parsed.hostname === hostname || parsed.hostname.endsWith(`.${hostname}`)
+    ));
   } catch {
     return false;
   }
@@ -258,6 +291,193 @@ async function clearDeepSeekWebSession() {
   }
 }
 
+function encodeSideChatHandoff(handoff) {
+  if (!handoff || typeof handoff !== 'object') return '';
+  try {
+    const sourceContext = handoff.sourceContext;
+    if (!sourceContext || typeof sourceContext !== 'object') return '';
+    const rawPdfPath = typeof handoff.pdfPath === 'string' ? handoff.pdfPath.trim().replace(/\\/g, '/') : '';
+    const pdfPath = rawPdfPath
+      && !path.isAbsolute(rawPdfPath)
+      && !rawPdfPath.startsWith('/')
+      && !/^[A-Za-z]:\//.test(rawPdfPath)
+      && !rawPdfPath.split('/').some((part) => part === '..')
+      ? rawPdfPath
+      : undefined;
+    return `?handoff=${encodeURIComponent(JSON.stringify({ sourceContext, ...(pdfPath ? { pdfPath } : {}) }))}`;
+  } catch {
+    return '';
+  }
+}
+
+async function openSideChatWindow(handoff) {
+  if (sideChatWindow && !sideChatWindow.isDestroyed()) {
+    if (sideChatWindow.isMinimized()) sideChatWindow.restore();
+    sideChatWindow.focus();
+    if (handoff && typeof handoff === 'object') {
+      sideChatWindow.webContents.send('pagedock:sidechat-handoff', handoff);
+    }
+    return { mode: 'focused' };
+  }
+
+  const window = new BrowserWindow({
+    width: 1260,
+    height: 860,
+    minWidth: 900,
+    minHeight: 620,
+    title: 'PageDock 사이드채팅',
+    icon: getWindowIcon(),
+    backgroundColor: '#f5f8f7',
+    show: false,
+    autoHideMenuBar: true,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      preload: path.join(__dirname, 'preload.cjs'),
+    },
+  });
+  sideChatWindow = window;
+  window.once('ready-to-show', () => window.show());
+  window.on('closed', () => {
+    for (const view of sideChatWebViews.values()) {
+      try { window.contentView.removeChildView(view); } catch { /* already detached */ }
+      try { view.webContents.close({ waitForBeforeUnload: false }); } catch { /* already closed */ }
+    }
+    sideChatWebViews.clear();
+    activeSideChatWebProvider = null;
+    if (sideChatWindow === window) sideChatWindow = null;
+  });
+  const internalOrigin = baseUrl ? new URL(baseUrl).origin : null;
+  const isInternalUrl = (targetUrl) => {
+    if (!internalOrigin) return false;
+    try {
+      return new URL(targetUrl).origin === internalOrigin;
+    } catch {
+      return false;
+    }
+  };
+  window.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+    if (isInternalUrl(targetUrl)) return { action: 'allow' };
+    void shell.openExternal(targetUrl);
+    return { action: 'deny' };
+  });
+  window.webContents.on('will-navigate', (event, targetUrl) => {
+    if (isInternalUrl(targetUrl)) return;
+    event.preventDefault();
+    void shell.openExternal(targetUrl);
+  });
+
+  try {
+    await window.loadURL(`${baseUrl}/side-chat${encodeSideChatHandoff(handoff)}`);
+    return { mode: 'window' };
+  } catch {
+    if (!window.isDestroyed()) window.close();
+    throw new Error('사이드채팅 창을 열지 못했습니다.');
+  }
+}
+
+async function showSideChatWebProvider(providerId) {
+  const provider = getSideChatProvider(providerId);
+  if (!provider) throw new Error('지원하지 않는 웹 AI입니다.');
+  if (!sideChatWindow || sideChatWindow.isDestroyed()) {
+    throw new Error('사이드채팅 창이 열려 있지 않습니다.');
+  }
+  if (!WebContentsView) {
+    await shell.openExternal(provider.url);
+    return { mode: 'external-fallback' };
+  }
+
+  let view = sideChatWebViews.get(providerId);
+  if (!view) {
+    const partition = SIDE_CHAT_WEB_PARTITIONS.get(providerId);
+    view = new WebContentsView({
+      webPreferences: {
+        partition,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true,
+      },
+    });
+    sideChatWebViews.set(providerId, view);
+    sideChatWindow.contentView.addChildView(view);
+    view.setVisible(false);
+    view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
+      if (isSideChatProviderUrl(providerId, targetUrl)) {
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            autoHideMenuBar: true,
+            webPreferences: {
+              partition,
+              contextIsolation: true,
+              nodeIntegration: false,
+              sandbox: true,
+              webSecurity: true,
+            },
+          },
+        };
+      }
+      void shell.openExternal(targetUrl);
+      return { action: 'deny' };
+    });
+    view.webContents.on('will-navigate', (event, targetUrl) => {
+      if (isSideChatProviderUrl(providerId, targetUrl)) return;
+      event.preventDefault();
+      void shell.openExternal(targetUrl);
+    });
+    view.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
+      if (isMainFrame && sideChatWindow && !sideChatWindow.isDestroyed()) {
+        sideChatWindow.webContents.send('pagedock:sidechat-web-failed', { providerId, errorCode, errorDescription });
+      }
+    });
+    try {
+      await view.webContents.loadURL(provider.url);
+    } catch {
+      sideChatWindow.contentView.removeChildView(view);
+      sideChatWebViews.delete(providerId);
+      await shell.openExternal(provider.url);
+      return { mode: 'external-fallback' };
+    }
+  }
+
+  for (const [id, candidate] of sideChatWebViews) {
+    candidate.setVisible(id === providerId);
+  }
+  activeSideChatWebProvider = providerId;
+  view.setBounds({ x: 0, y: 118, width: sideChatWindow.getContentBounds().width, height: Math.max(160, sideChatWindow.getContentBounds().height - 118) });
+  view.webContents.focus();
+  return { mode: 'embedded' };
+}
+
+function hideSideChatWebProvider() {
+  for (const view of sideChatWebViews.values()) view.setVisible(false);
+  activeSideChatWebProvider = null;
+}
+
+function setSideChatWebBounds(bounds) {
+  if (!sideChatWindow || sideChatWindow.isDestroyed() || !activeSideChatWebProvider) return;
+  const view = sideChatWebViews.get(activeSideChatWebProvider);
+  if (!view || !bounds || typeof bounds !== 'object') return;
+  const values = ['x', 'y', 'width', 'height'].map((key) => Number(bounds[key]));
+  if (values.some((value) => !Number.isFinite(value)) || values[2] < 120 || values[3] < 100) return;
+  view.setBounds({ x: Math.floor(values[0]), y: Math.floor(values[1]), width: Math.floor(values[2]), height: Math.floor(values[3]) });
+}
+
+function validateSideChatSourceJump(request) {
+  if (!request || typeof request !== 'object' || typeof request.pdfPath !== 'string' || !request.pdfPath.trim()) return null;
+  const page = Number(request.page);
+  if (!Number.isFinite(page) || page < 1 || page > 1_000_000) return null;
+  if (path.isAbsolute(request.pdfPath) || request.pdfPath.includes('..')) return null;
+  const rects = Array.isArray(request.rects) ? request.rects.slice(0, 128).filter((rect) => (
+    rect && ['x', 'y', 'width', 'height'].every((key) => Number.isFinite(Number(rect[key])))
+  )).map((rect) => ({
+    x: Number(rect.x), y: Number(rect.y), width: Number(rect.width), height: Number(rect.height),
+  })) : undefined;
+  return { id: typeof request.id === 'string' && request.id ? request.id : `sidechat-source-${Date.now()}`, pdfPath: request.pdfPath.trim().replace(/\\/g, '/'), page: Math.floor(page), ...(rects?.length ? { rects } : {}) };
+}
+
 function configureDesktopIpc() {
   ipcMain.handle('pagedock:select-directory', async () => {
     const options = {
@@ -283,6 +503,25 @@ function configureDesktopIpc() {
     return true;
   });
   ipcMain.handle('pagedock:deepseek-web-read-clipboard', () => clipboard.readText());
+  ipcMain.handle('pagedock:sidechat-open', async (_event, handoff) => openSideChatWindow(handoff));
+  ipcMain.handle('pagedock:sidechat-web-show', async (_event, providerId) => showSideChatWebProvider(providerId));
+  ipcMain.handle('pagedock:sidechat-web-hide', () => hideSideChatWebProvider());
+  ipcMain.on('pagedock:sidechat-web-bounds', (_event, bounds) => setSideChatWebBounds(bounds));
+  ipcMain.handle('pagedock:sidechat-copy-text', (_event, text) => {
+    if (typeof text !== 'string' || !text.trim() || text.length > MAX_SIDE_CHAT_COPY_CHARS) {
+      throw new Error('복사할 사이드채팅 내용이 올바르지 않습니다.');
+    }
+    clipboard.writeText(text);
+    return true;
+  });
+  ipcMain.handle('pagedock:sidechat-source-jump', (_event, request) => {
+    const safeRequest = validateSideChatSourceJump(request);
+    if (!safeRequest || !mainWindow || mainWindow.isDestroyed()) return { delivered: false };
+    mainWindow.webContents.send('pagedock:sidechat-source-jump', safeRequest);
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.focus();
+    return { delivered: true };
+  });
 }
 
 function configureApplicationMenu() {

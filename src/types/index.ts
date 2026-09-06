@@ -13,7 +13,7 @@ export interface TreeNode {
 
 // ── Sessions ────────────────────────────────────────────────────
 
-export type SessionKind = 'folder' | 'pdf';
+export type SessionKind = 'folder' | 'pdf' | 'sidechat';
 export type AIProvider = 'codex' | 'claude';
 export type ReasoningEffort = 'auto' | 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
@@ -133,15 +133,21 @@ export interface ChatMessage {
   timestamp: string;
   model?: string;
   sourceContext?: ChatSourceContext;
+  /** Mutable path hint for returning from a sidechat; documentId remains authoritative. */
+  sourcePdfPath?: string;
   replyToMessageId?: string;
   /** Stable local request identity for a selection question saved before AI. */
   deepSeekRequestId?: string;
+  /** Stable id for a sidechat question saved before optional provider use. */
+  sideChatQuestionRequestId?: string;
   /**
    * Explicitly imported alternative answers. They never replace a primary
    * provider answer and may be anchored to either an assistant reply or a
    * pre-saved bounded user question.
    */
   secondaryPerspectives?: ChatSecondaryPerspective[];
+  /** Explicitly pasted answers from the isolated web-AI tabs in a sidechat. */
+  sideChatPerspectives?: SideChatWebPerspective[];
 }
 
 /**
@@ -164,6 +170,25 @@ export interface ChatSecondaryPerspective {
   importedAt: string;
   /** The DeepSeek web UI model is not reliably observable by PageDock. */
   model: null;
+}
+
+export type SideChatWebProviderId = 'deepseek' | 'chatgpt' | 'claude' | 'gemini';
+export type SideChatOutboundMode = 'question' | 'source-question' | 'source-question-answer';
+
+/**
+ * A web-AI answer explicitly pasted back into an independent sidechat. The
+ * model label is optional and user-supplied; PageDock does not verify it.
+ */
+export interface SideChatWebPerspective {
+  id: string;
+  provider: SideChatWebProviderId;
+  acquisition: 'user-paste';
+  promptMode: SideChatOutboundMode;
+  promptSnapshot: string;
+  promptSha256: string;
+  responseText: string;
+  importedAt: string;
+  model?: string | null;
 }
 
 export interface SessionTurnSummary {

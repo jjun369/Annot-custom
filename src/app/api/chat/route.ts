@@ -6,6 +6,7 @@ import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
 import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
 import { normalizeChatSourceContext } from '@/lib/ai-providers/source-context';
 import { markMobileBridgeExportDirtyForDocument } from '@/lib/mobile-bridge';
+import { hasInvalidSideChatPdfPathHint, normalizeSideChatPdfPathHint } from '@/lib/side-chat';
 import type { ReasoningEffort } from '@/types';
 
 export async function POST(req: NextRequest) {
@@ -19,6 +20,7 @@ export async function POST(req: NextRequest) {
       reasoningEffort,
       currentPdfPath,
       sourceContext: requestedSourceContext,
+      sourcePdfPath,
       userMessageId,
     } = body as {
       folderPath?: string;
@@ -28,6 +30,7 @@ export async function POST(req: NextRequest) {
       reasoningEffort?: ReasoningEffort;
       currentPdfPath?: string | null;
       sourceContext?: unknown;
+      sourcePdfPath?: unknown;
       userMessageId?: string;
     };
 
@@ -46,12 +49,19 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (requestedSourceContext && session.sessionKind !== 'pdf') {
+    if (requestedSourceContext && session.sessionKind === 'folder') {
       return NextResponse.json(
         { error: 'PDF 대화에서만 원문 위치를 연결할 수 있습니다.' },
         { status: 400 },
       );
     }
+    if (hasInvalidSideChatPdfPathHint(sourcePdfPath)) {
+      return NextResponse.json(
+        { error: '원문 파일 경로가 올바르지 않습니다.' },
+        { status: 400 },
+      );
+    }
+    const normalizedSourcePdfPath = normalizeSideChatPdfPathHint(sourcePdfPath);
     const sourceContext = requestedSourceContext
       ? normalizeChatSourceContext(requestedSourceContext, { documentId: session.documentId })
       : undefined;
@@ -61,7 +71,7 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
-    if (sourceContext && !session.documentId) {
+    if (sourceContext && !session.documentId && session.sessionKind === 'pdf') {
       // Older PDF sessions may not yet have a registered document id. Their
       // persisted session PDF remains authoritative; never adopt a client id.
       delete sourceContext.documentId;
@@ -73,6 +83,7 @@ export async function POST(req: NextRequest) {
       content: prompt.trim(),
       timestamp: new Date().toISOString(),
       sourceContext,
+      sourcePdfPath: normalizedSourcePdfPath,
     };
     const sessionModel = normalizeModelPreference(session.model);
     const resolvedModel = normalizeModelPreference(model || sessionModel);
@@ -113,7 +124,9 @@ export async function POST(req: NextRequest) {
               folderPath,
               prompt: prompt.trim(),
               sessionKind: session.sessionKind,
-              currentPdfPath: session.pdfPath ?? currentPdfPath ?? null,
+            currentPdfPath: session.sessionKind === 'sidechat'
+              ? null
+              : session.pdfPath ?? currentPdfPath ?? null,
               sourceContext,
               conversation: session.messages
                 .filter((message) => message.role === 'user' || message.role === 'assistant')
@@ -148,7 +161,9 @@ export async function POST(req: NextRequest) {
               providerSessionId: turn.providerSessionId,
               model: resolvedModel,
             }));
-            await markMobileBridgeExportDirtyForDocument(sourceContext?.documentId ?? session.documentId).catch(() => undefined);
+            if (session.sessionKind === 'pdf') {
+              await markMobileBridgeExportDirtyForDocument(sourceContext?.documentId ?? session.documentId).catch(() => undefined);
+            }
 
             writeEvent({
               type: 'final',

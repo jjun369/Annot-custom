@@ -60,6 +60,16 @@ function writeLastReaderPath(pdfPath: string | null): void {
   }
 }
 
+function findPdfByDocumentId(root: TreeNode | null, documentId: string | undefined): TreeNode | null {
+  if (!root || !documentId) return null;
+  if (root.type === 'pdf' && root.documentId === documentId) return root;
+  for (const child of root.children ?? []) {
+    const match = findPdfByDocumentId(child, documentId);
+    if (match) return match;
+  }
+  return null;
+}
+
 export default function AppPage() {
   const [state, setState] = useState<WorkspaceState>({
     treeRoot: null,
@@ -243,16 +253,27 @@ export default function AppPage() {
 
   const navigateToPdfSource = useCallback((request: PdfSourceNavigation) => {
     setState((s) => {
-      const target = s.treeRoot ? findNode(s.treeRoot, request.pdfPath) : null;
+      const target = s.treeRoot
+        ? findNode(s.treeRoot, request.pdfPath) || findPdfByDocumentId(s.treeRoot, request.documentId)
+        : null;
       const next = target?.type === 'pdf' ? openPdfInContext(s, target) : s;
+      const navigation = target?.type === 'pdf' && target.path !== request.pdfPath
+        ? { ...request, pdfPath: target.path }
+        : request;
       return {
         ...next,
         chatOpen: true,
         activePdfPage: request.page,
-        pendingPdfSourceNavigation: request,
+        pendingPdfSourceNavigation: navigation,
       };
     });
   }, [openPdfInContext]);
+
+  useEffect(() => {
+    const onSourceJump = (request: PdfSourceNavigation) => navigateToPdfSource(request);
+    const unsubscribe = window.pageDockDesktop?.sideChat?.onSourceJump(onSourceJump);
+    return () => unsubscribe?.();
+  }, [navigateToPdfSource]);
 
   const consumePdfSourceNavigation = useCallback((requestId: string) => {
     setState((s) => s.pendingPdfSourceNavigation?.id === requestId

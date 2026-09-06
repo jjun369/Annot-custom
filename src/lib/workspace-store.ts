@@ -16,6 +16,7 @@ export interface PendingChatRequest {
 export interface PdfSourceNavigation {
   id: string;
   pdfPath: string;
+  documentId?: string;
   page: number;
   rects?: HighlightRect[];
 }

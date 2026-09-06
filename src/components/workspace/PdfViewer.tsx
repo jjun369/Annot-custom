@@ -1626,6 +1626,16 @@ export function PdfViewer() {
     setSelectionSnapshot(null);
   };
 
+  const openSideChatWithSource = (sourceContext: ChatSourceContext) => {
+    if (window.pageDockDesktop?.sideChat) {
+      void window.pageDockDesktop.sideChat.open({ sourceContext, pdfPath: activePdfPath });
+      setSelectionNotice('선택 원문을 사이드채팅 초안으로 전달했습니다. 직접 전송해 주세요.');
+      return;
+    }
+    const handoff = encodeURIComponent(JSON.stringify({ sourceContext }));
+    void window.open(`/side-chat?handoff=${handoff}`, '_blank', 'popup,width=1260,height=860');
+  };
+
   const handleAskFromHighlight = () => {
     if (!selectedHighlight || !activePdfPath) return;
     if (selectedHighlight.text.length > MAX_SELECTION_CONTEXT_CHARS) {
@@ -2426,6 +2436,23 @@ export function PdfViewer() {
               },
               autoSend: false,
               deepSeekDirect: true,
+            });
+            window.getSelection()?.removeAllRanges();
+            setSelectionSnapshot(null);
+          }}
+          onSideChat={() => {
+            if (!selectionSnapshot || !activePdfPath) return;
+            if (selectionSnapshot.text.length > MAX_SELECTION_CONTEXT_CHARS) {
+              setSelectionNotice('선택 영역이 너무 깁니다. 더 작은 범위를 선택해 주세요.');
+              return;
+            }
+            openSideChatWithSource({
+              id: crypto.randomUUID(),
+              scope: 'selection',
+              documentId: activePdf?.documentId,
+              page: selectionSnapshot.page,
+              text: selectionSnapshot.text,
+              rects: selectionSnapshot.rects,
             });
             window.getSelection()?.removeAllRanges();
             setSelectionSnapshot(null);
