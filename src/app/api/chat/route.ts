@@ -1,5 +1,6 @@
+import { randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
-import { appendMessage, getSession, updateSession } from '@/lib/annot-sessions';
+import { appendMessage, getSession, mutateSession } from '@/lib/annot-sessions';
 import { getProviderRuntime } from '@/lib/ai-providers';
 import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
 import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
@@ -18,6 +19,7 @@ export async function POST(req: NextRequest) {
       reasoningEffort,
       currentPdfPath,
       sourceContext: requestedSourceContext,
+      userMessageId,
     } = body as {
       folderPath?: string;
       sessionId?: string;
@@ -26,6 +28,7 @@ export async function POST(req: NextRequest) {
       reasoningEffort?: ReasoningEffort;
       currentPdfPath?: string | null;
       sourceContext?: unknown;
+      userMessageId?: string;
     };
 
     if (!folderPath || !sessionId || !prompt?.trim()) {
@@ -65,7 +68,7 @@ export async function POST(req: NextRequest) {
     }
 
     const userMessage = {
-      id: `u-${Date.now()}`,
+      id: userMessageId?.trim() || `u-${randomUUID()}`,
       role: 'user' as const,
       content: prompt.trim(),
       timestamp: new Date().toISOString(),
@@ -80,6 +83,20 @@ export async function POST(req: NextRequest) {
       : undefined;
     const runtime = getProviderRuntime(session.provider);
     const encoder = new TextEncoder();
+
+    await mutateSession(folderPath, sessionId, (currentSession) => {
+      const existingUserMessage = currentSession.messages.find((message) => message.id === userMessage.id);
+      if (existingUserMessage) {
+        if (existingUserMessage.role !== 'user' || existingUserMessage.content !== userMessage.content) {
+          throw new Error('같은 질문 ID에 다른 내용이 연결되어 있습니다.');
+        }
+        return currentSession;
+      }
+      return {
+        ...currentSession,
+        messages: appendMessage(currentSession.messages, userMessage),
+      };
+    });
 
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -100,6 +117,7 @@ export async function POST(req: NextRequest) {
               sourceContext,
               conversation: session.messages
                 .filter((message) => message.role === 'user' || message.role === 'assistant')
+                .filter((message) => message.id !== userMessage.id)
                 .slice(-24)
                 .map((message) => ({
                   role: message.role,
@@ -112,7 +130,7 @@ export async function POST(req: NextRequest) {
             });
 
             const assistantMessage = {
-              id: `a-${Date.now()}`,
+              id: `a-${randomUUID()}`,
               role: 'assistant' as const,
               content: turn.content,
               timestamp: new Date().toISOString(),
@@ -122,17 +140,14 @@ export async function POST(req: NextRequest) {
               replyToMessageId: userMessage.id,
             };
 
-            const nextMessages = appendMessage(
-              appendMessage(session.messages, userMessage),
-              assistantMessage,
-            );
-
-            const messageSavedSession = await updateSession(folderPath, sessionId, {
-              messages: nextMessages,
-              provider: session.provider,
+            const messageSavedSession = await mutateSession(folderPath, sessionId, (currentSession) => ({
+              ...currentSession,
+              messages: currentSession.messages.some((message) => message.id === userMessage.id)
+                ? appendMessage(currentSession.messages, assistantMessage)
+                : appendMessage(appendMessage(currentSession.messages, userMessage), assistantMessage),
               providerSessionId: turn.providerSessionId,
               model: resolvedModel,
-            });
+            }));
             await markMobileBridgeExportDirtyForDocument(sourceContext?.documentId ?? session.documentId).catch(() => undefined);
 
             writeEvent({

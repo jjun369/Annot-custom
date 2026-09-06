@@ -9,6 +9,8 @@ export interface PendingChatRequest {
   displayContent?: string;
   sourceContext?: ChatSourceContext;
   autoSend: boolean;
+  /** Open the composer for a local-first DeepSeek question without a primary turn. */
+  deepSeekDirect?: boolean;
 }
 
 export interface PdfSourceNavigation {

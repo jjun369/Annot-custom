@@ -2407,6 +2407,29 @@ export function PdfViewer() {
           left={selectionActionPosition.left}
           top={selectionActionPosition.top}
           onExplain={handleSelectionAsk}
+          onDeepSeek={() => {
+            if (!selectionSnapshot || !activePdfPath) return;
+            if (selectionSnapshot.text.length > MAX_SELECTION_CONTEXT_CHARS) {
+              setSelectionNotice('선택 영역이 너무 깁니다. 더 작은 범위를 선택해 주세요.');
+              return;
+            }
+            queueChatRequest({
+              id: crypto.randomUUID(),
+              prompt: '이 선택 원문에서 이해하기 어려운 점을 질문해줘.',
+              sourceContext: {
+                id: crypto.randomUUID(),
+                scope: 'selection',
+                documentId: activePdf?.documentId,
+                page: selectionSnapshot.page,
+                text: selectionSnapshot.text,
+                rects: selectionSnapshot.rects,
+              },
+              autoSend: false,
+              deepSeekDirect: true,
+            });
+            window.getSelection()?.removeAllRanges();
+            setSelectionSnapshot(null);
+          }}
           onStudyCard={handleSelectionStudyCard}
           onClozeCard={handleSelectionClozeCard}
           onImportant={() => void createStudyHighlight(selectionSnapshot, 'important')}

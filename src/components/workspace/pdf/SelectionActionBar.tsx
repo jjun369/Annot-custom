@@ -8,6 +8,7 @@ export interface SelectionActionBarProps {
   left: number;
   top: number;
   onExplain: () => void;
+  onDeepSeek: () => void;
   onStudyCard: () => void;
   onClozeCard: () => void;
   onImportant: () => void;
@@ -29,6 +30,7 @@ export function SelectionActionBar({
   left,
   top,
   onExplain,
+  onDeepSeek,
   onStudyCard,
   onClozeCard,
   onImportant,
@@ -148,6 +150,7 @@ export function SelectionActionBar({
             <button type="button" role="menuitem" onMouseDown={preserveSelection} onClick={action(() => onWorkKind('try'))} className="w-full rounded-lg px-2 py-1.5 text-left text-[12px] text-on-surface hover:bg-surface-container">Try</button>
             <div className="my-1 border-t border-outline-variant/20" />
             <p className="px-2 py-1 text-[10px] font-semibold tracking-wide text-on-surface-variant">AI</p>
+            <button type="button" role="menuitem" onMouseDown={preserveSelection} onClick={action(onDeepSeek)} className="w-full rounded-lg px-2 py-1.5 text-left text-[12px] font-semibold text-primary hover:bg-primary-container/50">DeepSeek 웹에 물어보기</button>
             <button type="button" role="menuitem" onMouseDown={preserveSelection} onClick={action(onTranslate)} className="w-full rounded-lg px-2 py-1.5 text-left text-[12px] text-on-surface hover:bg-surface-container">선택 영역 번역</button>
           </div>
         )}

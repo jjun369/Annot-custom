@@ -1,11 +1,8 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { Send, Sparkles, Loader2, ChevronDown, X, CheckCircle2, AlertCircle, FileDown, RefreshCw, MapPin, Layers3, BookOpenText, ArrowLeftRight, ClipboardPaste, ExternalLink } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
+import { Send, Sparkles, Loader2, ChevronDown, X, CheckCircle2, AlertCircle, FileDown, RefreshCw, MapPin, Layers3, BookOpenText } from 'lucide-react';
+import { ChatMarkdown } from '@/components/workspace/ChatMarkdown';
 import { DEFAULT_AI_PROVIDER } from '@/lib/ai-providers/config';
 import { AUTO_MODEL_ID, getAutoModelLabel, normalizeModelPreference } from '@/lib/ai-providers/model-policy';
 import {
@@ -17,12 +14,13 @@ import {
 } from '@/lib/ai-providers/reasoning-policy';
 import { MarkdownPreviewDialog } from '@/components/common/MarkdownPreviewDialog';
 import { KnowledgePromotionDialog, type KnowledgePromotionCandidate } from '@/components/knowledge/KnowledgePromotionDialog';
-import { DeepSeekComparisonDialog, DeepSeekImportDialog, DeepSeekPromptDialog } from '@/components/workspace/DeepSeekWebDialogs';
+import { DeepSeekActions, DeepSeekComparisonDialog, DeepSeekImportDialog, DeepSeekPromptDialog } from '@/components/workspace/DeepSeekWebDialogs';
 import { buildSessionSummaryMarkdown, getSessionSummaryMarkdownFileName } from '@/lib/session-summary-markdown';
 import { useWorkspace } from '@/lib/workspace-store';
-import { buildDeepSeekWebPrompt, canRequestDeepSeekWebPerspective, DEEPSEEK_WEB_URL, isDeepSeekWebManualPerspective } from '@/lib/deepseek-web-bridge';
+import { canRequestDeepSeekWebPerspective } from '@/lib/deepseek-web-bridge';
+import { useDeepSeekBridge } from '@/components/workspace/useDeepSeekBridge';
 import { AI_PROVIDER_EVENT, readStoredAIProvider } from '@/lib/provider-preferences';
-import { AIProvider, ChatMessage, ChatSecondaryPerspective, ChatSourceContext, ReasoningEffort, Session, SessionKind, SessionTurnSummary } from '@/types';
+import { AIProvider, ChatMessage, ChatSourceContext, ReasoningEffort, Session, SessionKind, SessionTurnSummary } from '@/types';
 import { useFeedback } from '@/components/common/FeedbackProvider';
 import {
   CHAT_FONT_SIZE_EVENT,
@@ -98,15 +96,6 @@ interface SendPromptOptions {
   displayContent?: string;
 }
 
-interface DeepSeekPerspectiveTarget {
-  sessionId: string;
-  folderPath: string;
-  assistantMessageId: string;
-  questionMessageId: string;
-  prompt: string;
-  requestedAt: string;
-}
-
 interface SessionUiState {
   isLoading: boolean;
   sessionLoading: boolean;
@@ -122,10 +111,10 @@ interface SessionUiState {
   title?: string;
 }
 
-function normalizeMathMarkdown(content: string): string {
-  return content
-    .replace(/\\\[\s*([\s\S]*?)\s*\\\]/g, (_, expression: string) => `\n$$\n${expression.trim()}\n$$\n`)
-    .replace(/\\\(\s*([\s\S]*?)\s*\\\)/g, (_, expression: string) => `$${expression.trim()}$`);
+interface ComposerDraftState {
+  input: string;
+  sourceContext?: ChatSourceContext;
+  deepSeekDirect: boolean;
 }
 
 function createDefaultSessionUiState(): SessionUiState {
@@ -184,13 +173,9 @@ export function ChatPanel() {
   const [summaryExportOpen, setSummaryExportOpen] = useState(false);
   const [chatFontSize, setChatFontSize] = useState(DEFAULT_CHAT_FONT_SIZE);
   const [pdfScope, setPdfScope] = useState<'pdf' | 'page'>('pdf');
+  const [composerSelectionSourceContext, setComposerSelectionSourceContext] = useState<ChatSourceContext | undefined>();
+  const [deepSeekDirectComposer, setDeepSeekDirectComposer] = useState(false);
   const [knowledgePromotionCandidate, setKnowledgePromotionCandidate] = useState<KnowledgePromotionCandidate | null>(null);
-  const [deepSeekPromptTarget, setDeepSeekPromptTarget] = useState<DeepSeekPerspectiveTarget | null>(null);
-  const [deepSeekRequestedTargets, setDeepSeekRequestedTargets] = useState<Record<string, DeepSeekPerspectiveTarget>>({});
-  const [deepSeekImportTarget, setDeepSeekImportTarget] = useState<DeepSeekPerspectiveTarget | null>(null);
-  const [deepSeekOpening, setDeepSeekOpening] = useState(false);
-  const [deepSeekImporting, setDeepSeekImporting] = useState(false);
-  const [deepSeekComparison, setDeepSeekComparison] = useState<{ primaryAnswer: string; perspective: ChatSecondaryPerspective } | null>(null);
   const pickerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -200,6 +185,9 @@ export function ChatPanel() {
   const pendingRequestIdsRef = useRef<Set<string>>(new Set());
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const sendPromptRef = useRef<(options: SendPromptOptions) => Promise<void>>(async () => undefined);
+  const ensureSessionIdRef = useRef<() => Promise<string>>(async () => { throw new Error('대화를 준비하지 못했습니다.'); });
+  const composerDraftsRef = useRef<Record<string, ComposerDraftState>>({});
+  const composerKeyRef = useRef<string | null>(null);
 
   const sessionLabel = activeSessionKind === 'pdf' ? 'PDF 대화' : '폴더 대화';
   const exportSession = useMemo<Session>(() => ({
@@ -360,6 +348,27 @@ export function ChatPanel() {
     return nextState;
   }, [applyVisibleSessionState]);
 
+  const deepSeek = useDeepSeekBridge({
+    activeSessionId,
+    activeSessionFolder,
+    messages,
+    isCurrentSession: (sessionId) => activeSessionIdRef.current === sessionId,
+    commitSessionMessages: (sessionId, nextMessages) => {
+      commitSessionUiState(sessionId, (current) => {
+        const serverMessages = new Map(nextMessages.map((message) => [message.id, message]));
+        const mergedMessages = current.messages.map((message) => serverMessages.get(message.id) ?? message);
+        const visibleIds = new Set(current.messages.map((message) => message.id));
+        for (const message of nextMessages) {
+          if (!visibleIds.has(message.id)) mergedMessages.push(message);
+        }
+        return { ...current, messages: mergedMessages };
+      });
+    },
+    notify,
+    notifyChatSaved,
+    ensureSessionId: () => ensureSessionIdRef.current(),
+  });
+
   useEffect(() => {
     void fetchModels(selectedProvider);
   }, [selectedProvider]);
@@ -390,6 +399,30 @@ export function ChatPanel() {
   useEffect(() => {
     activeSessionIdRef.current = activeSessionId;
   }, [activeSessionId]);
+  useEffect(() => {
+    const baseKey = activeSessionFolder
+      ? `${activeSessionFolder}:${activeSessionPdfPath || activePdf?.path || ''}`
+      : null;
+    const nextKey = activeSessionId ? `session:${activeSessionId}` : (baseKey ? `draft:${baseKey}` : null);
+    if (composerKeyRef.current === nextKey) return;
+    const previousKey = composerKeyRef.current;
+    if (previousKey) {
+      composerDraftsRef.current[previousKey] = {
+        input,
+        sourceContext: composerSelectionSourceContext,
+        deepSeekDirect: deepSeekDirectComposer,
+      };
+    }
+    const nextDraft = nextKey ? composerDraftsRef.current[nextKey] : undefined;
+    const carryDraft = nextKey?.startsWith('session:') && previousKey?.startsWith('draft:')
+      ? composerDraftsRef.current[previousKey]
+      : undefined;
+    const draft = nextDraft ?? carryDraft;
+    composerKeyRef.current = nextKey;
+    setInput(draft?.input ?? '');
+    setComposerSelectionSourceContext(draft?.sourceContext);
+    setDeepSeekDirectComposer(draft?.deepSeekDirect ?? false);
+  }, [activePdf?.path, activeSessionFolder, activeSessionId, activeSessionPdfPath, composerSelectionSourceContext, deepSeekDirectComposer, input]);
   useEffect(() => {
     if (selectedModel) window.localStorage.setItem('annot-last-model', normalizeModelPreference(selectedModel));
   }, [selectedModel]);
@@ -457,8 +490,8 @@ export function ChatPanel() {
     }
 
     const cachedSessionUi = sessionUiMapRef.current[activeSessionId];
-    if (cachedSessionUi) {
-      if (skipSessionHydrationRef.current === activeSessionId) {
+    if (cachedSessionUi && (!cachedSessionUi.sessionLoading || cachedSessionUi.messages.length > 0)) {
+      if (skipSessionHydrationRef.current === activeSessionId && cachedSessionUi.messages.length > 0) {
         skipSessionHydrationRef.current = null;
       }
       applyVisibleSessionState(cachedSessionUi);
@@ -480,8 +513,11 @@ export function ChatPanel() {
         const res = await fetch(`/api/sessions?${params.toString()}`);
         const data = await res.json();
         if (!cancelled) {
-          if (skipSessionHydrationRef.current === activeSessionId) {
+          const canKeepOptimisticSession = skipSessionHydrationRef.current === activeSessionId
+            && (sessionUiMapRef.current[activeSessionId]?.messages.length ?? 0) > 0;
+          if (canKeepOptimisticSession) {
             skipSessionHydrationRef.current = null;
+            commitSessionUiState(activeSessionId, (current) => ({ ...current, sessionLoading: false }));
             return;
           }
           commitSessionUiState(activeSessionId, (current) => ({
@@ -624,6 +660,7 @@ export function ChatPanel() {
     openSession(data as Session);
     return data.id as string;
   };
+  ensureSessionIdRef.current = ensureSessionId;
 
   const normalizeComparableText = (value: string): string => (
     value
@@ -925,7 +962,24 @@ export function ChatPanel() {
       } satisfies ChatSourceContext
       : undefined;
     setInput('');
+    setComposerSelectionSourceContext(undefined);
+    setDeepSeekDirectComposer(false);
     void sendPrompt({ prompt, sourceContext });
+  };
+
+  const handleDirectDeepSeek = () => {
+    const sourceContext = composerSelectionSourceContext;
+    const prompt = input.trim();
+    if (!sourceContext || sourceContext.scope !== 'selection') {
+      notify('먼저 한 페이지의 PDF 선택 원문을 준비해 주세요.', 'error');
+      return;
+    }
+    void deepSeek.saveDirectQuestion(prompt, sourceContext).then((saved) => {
+      if (!saved) return;
+      setInput('');
+      setComposerSelectionSourceContext(undefined);
+      setDeepSeekDirectComposer(false);
+    });
   };
 
   useEffect(() => {
@@ -941,6 +995,8 @@ export function ChatPanel() {
       });
     } else {
       setInput(request.prompt);
+      setComposerSelectionSourceContext(request.sourceContext);
+      setDeepSeekDirectComposer(Boolean(request.deepSeekDirect));
       inputRef.current?.focus();
     }
   }, [consumeChatRequest, pendingChatRequest]);
@@ -1069,8 +1125,6 @@ export function ChatPanel() {
   const assistantFontStyle = { fontSize: `${chatFontSize}px`, lineHeight: 1.7 };
   const userFontStyle = { fontSize: `${chatFontSize}px`, lineHeight: 1.7 };
   const inputFontStyle = { fontSize: `${chatFontSize}px`, lineHeight: 1.7 };
-  const codeFontSize = Math.max(11, chatFontSize - 2);
-  const codeFontStyle = { fontSize: `${codeFontSize}px` };
   const quickPrompts = [
     '이 논문의 핵심 주장을 쉽게 설명해줘.',
     '연구 방법과 결과를 짧게 정리해줘.',
@@ -1084,7 +1138,7 @@ export function ChatPanel() {
     }
     return undefined;
   }, [isLoading, messages]);
-  const composerSourceContext = activeTurnSourceContext ?? (activeSessionKind === 'pdf'
+  const composerSourceContext = activeTurnSourceContext ?? composerSelectionSourceContext ?? (activeSessionKind === 'pdf'
     ? {
       id: 'composer-scope-preview',
       scope: pdfScope,
@@ -1178,153 +1232,6 @@ export function ChatPanel() {
       },
       originDate: message.timestamp.slice(0, 10),
     });
-  };
-
-  const requestDeepSeekPerspective = (message: ChatMessage) => {
-    if (!activeSessionId || !activeSessionFolder || !canRequestDeepSeekWebPerspective(message)) return;
-    const question = messages.find((candidate) => candidate.id === message.replyToMessageId);
-    if (!question || question.role !== 'user') {
-      notify('연결된 원래 질문을 찾지 못했습니다.', 'error');
-      return;
-    }
-
-    setDeepSeekPromptTarget({
-      sessionId: activeSessionId,
-      folderPath: activeSessionFolder,
-      assistantMessageId: message.id,
-      questionMessageId: question.id,
-      prompt: buildDeepSeekWebPrompt({
-        sourceText: message.sourceContext.text ?? '',
-        question: question.content,
-      }),
-      requestedAt: new Date().toISOString(),
-    });
-  };
-
-  const copyPromptAndOpenDeepSeek = async () => {
-    const target = deepSeekPromptTarget;
-    if (!target) return;
-    setDeepSeekOpening(true);
-    try {
-      if (window.pageDockDesktop?.deepseekWeb) {
-        await window.pageDockDesktop.deepseekWeb.copyPrompt(target.prompt);
-        const result = await window.pageDockDesktop.deepseekWeb.open();
-        notify(
-          result.mode === 'external-fallback'
-            ? '질문을 복사했고 기본 브라우저에서 DeepSeek를 열었습니다. 붙여넣은 뒤 직접 전송하세요.'
-            : '질문을 복사했고 DeepSeek 웹 창을 열었습니다. 붙여넣은 뒤 직접 전송하세요.',
-          'info',
-        );
-      } else {
-        const externalWindow = window.open(DEEPSEEK_WEB_URL, '_blank', 'noopener,noreferrer');
-        if (!externalWindow) {
-          throw new Error('DeepSeek 웹 창을 열지 못했습니다. 브라우저의 팝업 차단을 확인해 주세요.');
-        }
-        if (!navigator.clipboard?.writeText) {
-          throw new Error('질문을 복사하지 못했습니다. 아래 내용을 직접 선택해 복사해 주세요.');
-        }
-        await navigator.clipboard.writeText(target.prompt);
-        notify('질문을 복사했고 기본 브라우저에서 DeepSeek를 열었습니다. 붙여넣은 뒤 직접 전송하세요.', 'info');
-      }
-
-      setDeepSeekRequestedTargets((current) => ({ ...current, [target.assistantMessageId]: target }));
-      setDeepSeekPromptTarget(null);
-    } finally {
-      setDeepSeekOpening(false);
-    }
-  };
-
-  const readClipboardForDeepSeekImport = async (): Promise<string> => {
-    if (window.pageDockDesktop?.deepseekWeb) {
-      return await window.pageDockDesktop.deepseekWeb.readClipboardOnUserAction();
-    }
-    if (!navigator.clipboard?.readText) {
-      throw new Error('Clipboard API unavailable');
-    }
-    return await navigator.clipboard.readText();
-  };
-
-  const importDeepSeekPerspective = async (responseText: string) => {
-    const target = deepSeekImportTarget;
-    if (!target) return;
-    setDeepSeekImporting(true);
-    try {
-      const response = await fetch('/api/sessions/deepseek-perspectives', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          folderPath: target.folderPath,
-          sessionId: target.sessionId,
-          assistantMessageId: target.assistantMessageId,
-          promptSnapshot: target.prompt,
-          requestedAt: target.requestedAt,
-          responseText,
-        }),
-      });
-      const data = await response.json().catch(() => null);
-      if (!response.ok || !data?.session) {
-        throw new Error(typeof data?.error === 'string' ? data.error : 'DeepSeek 답변을 저장하지 못했습니다.');
-      }
-
-      commitSessionUiState(target.sessionId, (current) => ({
-        ...current,
-        messages: Array.isArray(data.session.messages) ? data.session.messages : current.messages,
-      }));
-      setDeepSeekRequestedTargets((current) => {
-        const next = { ...current };
-        delete next[target.assistantMessageId];
-        return next;
-      });
-      setDeepSeekImportTarget(null);
-      notifyChatSaved();
-      notify('DeepSeek 답변을 원문과 질문에 연결해 저장했습니다.', 'success');
-    } catch (error) {
-      notify(error instanceof Error ? error.message : 'DeepSeek 답변을 저장하지 못했습니다.', 'error');
-    } finally {
-      setDeepSeekImporting(false);
-    }
-  };
-
-  const renderDeepSeekActions = (message: ChatMessage) => {
-    if (!canRequestDeepSeekWebPerspective(message)) return null;
-    const perspective = [...(message.secondaryPerspectives ?? [])]
-      .reverse()
-      .find((candidate) => isDeepSeekWebManualPerspective(candidate));
-    const pendingImport = deepSeekRequestedTargets[message.id];
-
-    return (
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        {perspective ? (
-          <button
-            type="button"
-            onClick={() => setDeepSeekComparison({ primaryAnswer: message.content, perspective })}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2 py-1 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"
-          >
-            <ArrowLeftRight size={11} aria-hidden="true" />
-            DeepSeek와 비교
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={() => requestDeepSeekPerspective(message)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2 py-1 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"
-          >
-            <ExternalLink size={11} aria-hidden="true" />
-            다른 관점 보기
-          </button>
-        )}
-        {!perspective && pendingImport && (
-          <button
-            type="button"
-            onClick={() => setDeepSeekImportTarget(pendingImport)}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2 py-1 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"
-          >
-            <ClipboardPaste size={11} aria-hidden="true" />
-            DeepSeek 답변 가져오기
-          </button>
-        )}
-      </div>
-    );
   };
 
   return (
@@ -1531,6 +1438,15 @@ export function ChatPanel() {
                 <div className="max-w-[90%] bg-primary text-on-primary px-3.5 py-2.5 rounded-2xl rounded-tr-sm">
                   <p className="selectable-text whitespace-pre-wrap break-words" style={userFontStyle}>{msg.content}</p>
                   {renderSourceChip(msg.sourceContext)}
+                  {deepSeek.buildTarget(msg) && (
+                    <DeepSeekActions
+                      message={msg}
+                      target={deepSeek.buildTarget(msg)}
+                      onRequest={deepSeek.requestPerspective}
+                      onImport={deepSeek.openImport}
+                      onCompare={deepSeek.compare}
+                    />
+                  )}
                 </div>
               </div>
             ) : (
@@ -1543,50 +1459,18 @@ export function ChatPanel() {
                     className="chat-markdown selectable-text font-editorial text-on-surface"
                     style={assistantFontStyle}
                   >
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm, remarkMath]}
-                      rehypePlugins={[rehypeKatex]}
-                      components={{
-                        p: ({ children }) => <p className="mb-3 last:mb-0">{children}</p>,
-                        ul: ({ children }) => <ul className="mb-3 list-disc space-y-1 pl-5 last:mb-0">{children}</ul>,
-                        ol: ({ children }) => <ol className="mb-3 list-decimal space-y-1 pl-5 last:mb-0">{children}</ol>,
-                        li: ({ children }) => <li>{children}</li>,
-                        strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                        code: ({ children, className }) => {
-                          const isBlock = Boolean(className);
-                          if (isBlock) {
-                            return (
-                              <code
-                                className="block overflow-x-auto rounded-lg bg-surface-container px-3 py-2 font-functional"
-                                style={codeFontStyle}
-                              >
-                                {children}
-                              </code>
-                            );
-                          }
-
-                          return (
-                            <code
-                              className="rounded bg-surface-container px-1.5 py-0.5 font-functional"
-                              style={codeFontStyle}
-                            >
-                              {children}
-                            </code>
-                          );
-                        },
-                        pre: ({ children }) => <pre className="mb-3 last:mb-0">{children}</pre>,
-                        blockquote: ({ children }) => (
-                          <blockquote className="mb-3 border-l-2 border-outline-variant pl-3 text-on-surface-variant last:mb-0">
-                            {children}
-                          </blockquote>
-                        ),
-                      }}
-                    >
-                      {normalizeMathMarkdown(msg.content)}
-                    </ReactMarkdown>
+                    <ChatMarkdown content={msg.content} fontSize={chatFontSize} />
                   </div>
                   {renderSourceChip(msg.sourceContext)}
-                  {renderDeepSeekActions(msg)}
+                  {canRequestDeepSeekWebPerspective(msg) && (
+                    <DeepSeekActions
+                      message={msg}
+                      target={deepSeek.buildTarget(msg)}
+                      onRequest={deepSeek.requestPerspective}
+                      onImport={deepSeek.openImport}
+                      onCompare={deepSeek.compare}
+                    />
+                  )}
                   {canCreateStudyCard(msg) && (
                     <button
                       type="button"
@@ -1721,6 +1605,17 @@ export function ChatPanel() {
           >
             <Send size={13} strokeWidth={2} />
           </button>
+          {deepSeekDirectComposer && composerSourceContext?.scope === 'selection' && (
+            <button
+              type="button"
+              onClick={handleDirectDeepSeek}
+              disabled={isLoading || !input.trim() || !activeSessionFolder || !activeSessionKind}
+              className="shrink-0 rounded-lg border border-primary/25 px-2 py-1.5 text-[10px] font-semibold text-primary hover:bg-primary-container/50 disabled:opacity-50"
+              title="질문을 먼저 로컬 세션에 저장한 뒤 DeepSeek 웹에서 직접 묻습니다."
+            >
+              DeepSeek 웹에 물어보기
+            </button>
+          )}
         </div>
       </div>
 
@@ -1735,27 +1630,47 @@ export function ChatPanel() {
         onCancel={() => setSummaryExportOpen(false)}
         onConfirm={handleSummaryExport}
       />
-      {deepSeekPromptTarget && (
+      {deepSeek.promptTarget && (
         <DeepSeekPromptDialog
-          prompt={deepSeekPromptTarget.prompt}
-          opening={deepSeekOpening}
-          onClose={() => setDeepSeekPromptTarget(null)}
-          onCopyAndOpen={copyPromptAndOpenDeepSeek}
+          prompt={deepSeek.promptTarget.prompt}
+          question={deepSeek.promptTarget.question}
+          sourceText={deepSeek.promptTarget.sourceText}
+          page={deepSeek.promptTarget.page}
+          rects={deepSeek.promptTarget.sourceContext.rects}
+          opening={deepSeek.opening}
+          onClose={deepSeek.closePrompt}
+          onCopy={deepSeek.copyPrompt}
+          onOpen={deepSeek.openWeb}
+          onImport={() => deepSeek.openImportTarget(deepSeek.promptTarget!)}
         />
       )}
-      {deepSeekImportTarget && (
+      {deepSeek.importTarget && (
         <DeepSeekImportDialog
-          saving={deepSeekImporting}
-          onClose={() => setDeepSeekImportTarget(null)}
-          onSave={importDeepSeekPerspective}
-          onReadClipboard={readClipboardForDeepSeekImport}
+          saving={deepSeek.importing}
+          responseText={deepSeek.importDrafts[`${deepSeek.importTarget.sessionId}:${deepSeek.importTarget.assistantMessageId ?? deepSeek.importTarget.questionMessageId}`] ?? ''}
+          question={deepSeek.importTarget.question}
+          sourceText={deepSeek.importTarget.sourceText}
+          page={deepSeek.importTarget.page}
+          rects={deepSeek.importTarget.sourceContext.rects}
+          onChange={deepSeek.setImportDraft}
+          onClose={deepSeek.closeImport}
+          onSave={deepSeek.saveImport}
+          onReadClipboard={deepSeek.readClipboard}
         />
       )}
       <DeepSeekComparisonDialog
-        open={Boolean(deepSeekComparison)}
-        primaryAnswer={deepSeekComparison?.primaryAnswer ?? ''}
-        perspective={deepSeekComparison?.perspective ?? null}
-        onClose={() => setDeepSeekComparison(null)}
+        open={Boolean(deepSeek.comparison)}
+        primaryAnswer={deepSeek.comparison?.primaryAnswer ?? ''}
+        perspective={deepSeek.comparison?.perspective ?? null}
+        question={deepSeek.comparison?.question ?? ''}
+        sourceContext={deepSeek.comparison?.sourceContext ?? { id: 'empty', scope: 'selection' }}
+        onClose={deepSeek.closeComparison}
+        onReturnToSource={() => {
+          if (deepSeek.comparison?.sourceContext) {
+            openSourceContext(deepSeek.comparison.sourceContext);
+            deepSeek.closeComparison();
+          }
+        }}
       />
       <KnowledgePromotionDialog
         candidate={knowledgePromotionCandidate}

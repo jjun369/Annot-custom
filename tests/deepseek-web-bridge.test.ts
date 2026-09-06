@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildDeepSeekWebPrompt,
   canRequestDeepSeekWebPerspective,
+  getManualPerspectiveResponseError,
   normalizeManualPerspectiveResponse,
 } from '@/lib/deepseek-web-bridge';
 
@@ -54,5 +55,8 @@ describe('DeepSeek web manual bridge', () => {
     expect(normalizeManualPerspectiveResponse('  DeepSeek 답변  ')).toBe('DeepSeek 답변');
     expect(normalizeManualPerspectiveResponse('   ')).toBeNull();
     expect(normalizeManualPerspectiveResponse('x'.repeat(80_001))).toBeNull();
+    expect(normalizeManualPerspectiveResponse('x'.repeat(80_000))).toHaveLength(80_000);
+    expect(getManualPerspectiveResponseError('x'.repeat(80_000))).toBeNull();
+    expect(getManualPerspectiveResponseError('x'.repeat(80_001))).toContain('80,000자 이하');
   });
 });

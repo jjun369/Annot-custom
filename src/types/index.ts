@@ -134,9 +134,12 @@ export interface ChatMessage {
   model?: string;
   sourceContext?: ChatSourceContext;
   replyToMessageId?: string;
+  /** Stable local request identity for a selection question saved before AI. */
+  deepSeekRequestId?: string;
   /**
-   * Explicitly imported alternative answers. They never replace the primary
-   * provider answer and are only populated through a user-controlled flow.
+   * Explicitly imported alternative answers. They never replace a primary
+   * provider answer and may be anchored to either an assistant reply or a
+   * pre-saved bounded user question.
    */
   secondaryPerspectives?: ChatSecondaryPerspective[];
 }
@@ -156,7 +159,8 @@ export interface ChatSecondaryPerspective {
   promptSnapshot: string;
   promptSha256: string;
   responseText: string;
-  requestedAt: string;
+  /** Omitted when an imported answer was recovered after the original request was no longer observable. */
+  requestedAt?: string;
   importedAt: string;
   /** The DeepSeek web UI model is not reliably observable by PageDock. */
   model: null;

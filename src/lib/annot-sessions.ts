@@ -8,6 +8,11 @@ import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
 import { AIProvider, ChatMessage, ReasoningEffort, Session, SessionKind, SessionTurnSummary } from '@/types';
 import { getDefaultWorkspaceRoot, readConfiguredWorkspaceRoot } from '@/lib/library-config';
 
+const SESSION_LOCK_RETRY_MS = 25;
+const SESSION_LOCK_STALE_MS = 2 * 60 * 1000;
+const SESSION_LOCK_MAX_WAIT_MS = 2 * 1000;
+const sessionMutationQueues = new Map<string, Promise<void>>();
+
 const WORKSPACE_ROOT = process.env.PAGEDOCK_ROOT
   || process.env.ANNOT_ROOT
   || readConfiguredWorkspaceRoot()
@@ -44,6 +49,12 @@ interface SessionPathRewrite {
 interface ReconciledSessionResult {
   changed: boolean;
   session: StoredSession | null;
+}
+
+interface SessionsMutationResult<T> {
+  sessions: StoredSession[];
+  result: T;
+  changed?: boolean;
 }
 
 function sanitizeRelativePath(folderPath: string): string {
@@ -102,7 +113,11 @@ async function ensureSessionsFile(folderPath: string): Promise<string> {
   try {
     await fs.access(sessionsFile);
   } catch {
-    await fs.writeFile(sessionsFile, '[]');
+    try {
+      await fs.writeFile(sessionsFile, '[]', { flag: 'wx' });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+    }
   }
 
   return sessionsFile;
@@ -266,20 +281,16 @@ function matchesSession(session: StoredSession, options: SessionListOptions): bo
 }
 
 export async function listSessions(folderPath: string, options: SessionListOptions = {}): Promise<StoredSession[]> {
-  const sessionsFile = await ensureSessionsFile(folderPath);
-  const raw = await fs.readFile(sessionsFile, 'utf8');
-  const rawSessions = JSON.parse(raw) as StoredSession[];
-  const reconciledResults = await Promise.all(rawSessions.map((session) => reconcileSession(folderPath, session)));
-  const sessions = reconciledResults
-    .flatMap((result) => result.session ? [result.session] : []);
-
-  if (reconciledResults.some((result) => result.changed)) {
-    await writeSessions(folderPath, sessions);
-  }
-
-  return sessions
-    .filter((session) => matchesSession(session, options))
-    .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  return withSessionsFileMutation(folderPath, async (currentSessions) => {
+    const reconciled = await reconcileSessionsWithStatus(folderPath, currentSessions);
+    return {
+      sessions: reconciled.sessions,
+      changed: reconciled.changed,
+      result: reconciled.sessions
+        .filter((session) => matchesSession(session, options))
+        .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
+    };
+  });
 }
 
 async function writeSessions(folderPath: string, sessions: StoredSession[]): Promise<void> {
@@ -310,6 +321,189 @@ async function writeSessions(folderPath: string, sessions: StoredSession[]): Pro
     await fs.rm(sessionsFile, { force: true });
     await fs.rename(temporaryPath, sessionsFile);
   }
+}
+
+interface SessionFileLockRecord {
+  ownerToken: string;
+  pid: number;
+  acquiredAt: string;
+}
+
+function isProcessAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+async function tryReclaimStaleLock(lockPath: string): Promise<boolean> {
+  let stat: Awaited<ReturnType<typeof fs.stat>>;
+  try {
+    stat = await fs.stat(lockPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    throw error;
+  }
+
+  if (Date.now() - stat.mtimeMs <= SESSION_LOCK_STALE_MS) return false;
+
+  let record: Partial<SessionFileLockRecord>;
+  try {
+    record = JSON.parse(await fs.readFile(lockPath, 'utf8')) as Partial<SessionFileLockRecord>;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    // A partially written lock is only reclaimable after it is old. A live
+    // process cannot be identified from it, so the bounded wait below is the
+    // safer outcome than stealing a potentially live lock.
+    return false;
+  }
+
+  if (typeof record.ownerToken === 'string' && isProcessAlive(Number(record.pid))) {
+    return false;
+  }
+
+  const reclaimPath = `${lockPath}.reclaim-${randomUUID()}`;
+  try {
+    await fs.rename(lockPath, reclaimPath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return true;
+    if ((error as NodeJS.ErrnoException).code === 'EACCES' || (error as NodeJS.ErrnoException).code === 'EPERM') throw error;
+    return false;
+  }
+  await fs.rm(reclaimPath, { force: true });
+  return true;
+}
+
+async function acquireSessionsFileLock(sessionsFile: string): Promise<() => Promise<void>> {
+  const lockPath = `${sessionsFile}.lock`;
+  const ownerToken = randomUUID();
+  const startedAt = Date.now();
+  let delay = SESSION_LOCK_RETRY_MS;
+
+  while (true) {
+    if (Date.now() - startedAt > SESSION_LOCK_MAX_WAIT_MS) {
+      throw new Error(`Timed out waiting for session lock: ${sessionsFile}`);
+    }
+    try {
+      const handle = await fs.open(lockPath, 'wx');
+      const record: SessionFileLockRecord = {
+        ownerToken,
+        pid: process.pid,
+        acquiredAt: new Date().toISOString(),
+      };
+      try {
+        await handle.writeFile(JSON.stringify(record));
+      } catch (error) {
+        await handle.close().catch(() => undefined);
+        await fs.rm(lockPath, { force: true }).catch(() => undefined);
+        throw error;
+      }
+      await handle.close();
+      let released = false;
+      return async () => {
+        if (released) return;
+        released = true;
+        let currentRecord: Partial<SessionFileLockRecord>;
+        try {
+          currentRecord = JSON.parse(await fs.readFile(lockPath, 'utf8')) as Partial<SessionFileLockRecord>;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+          throw error;
+        }
+        if (currentRecord.ownerToken !== ownerToken) return;
+        await fs.rm(lockPath, { force: false });
+      };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+
+      if (await tryReclaimStaleLock(lockPath)) {
+        continue;
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, delay));
+      delay = Math.min(250, delay + SESSION_LOCK_RETRY_MS);
+    }
+  }
+}
+
+async function withSessionsFileLocks<T>(
+  folderPaths: string[],
+  mutation: (sessionsByFolder: Map<string, StoredSession[]>) => Promise<T> | T,
+): Promise<T> {
+  const normalizedFolders = [...new Set(folderPaths.map((folderPath) => sanitizeRelativePath(folderPath)))];
+  const entries = await Promise.all(normalizedFolders.map(async (folderPath) => ({
+    folderPath,
+    sessionsFile: await ensureSessionsFile(folderPath),
+  })));
+  entries.sort((a, b) => path.resolve(a.sessionsFile).localeCompare(path.resolve(b.sessionsFile)));
+
+  const queueReleases: Array<() => void> = [];
+  const queuedKeys: string[] = [];
+  const queuedPromises: Array<Promise<void>> = [];
+  const fileReleases: Array<() => Promise<void>> = [];
+  try {
+    for (const entry of entries) {
+      const queueKey = path.resolve(entry.sessionsFile);
+      const previous = sessionMutationQueues.get(queueKey) ?? Promise.resolve();
+      let releaseQueue!: () => void;
+      const current = new Promise<void>((resolve) => { releaseQueue = resolve; });
+      const queued = previous.then(() => current);
+      sessionMutationQueues.set(queueKey, queued);
+      queuedKeys.push(queueKey);
+      queuedPromises.push(queued);
+      queueReleases.push(releaseQueue);
+      await previous;
+      fileReleases.push(await acquireSessionsFileLock(entry.sessionsFile));
+    }
+
+    const sessionsByFolder = new Map<string, StoredSession[]>();
+    for (const entry of entries) {
+      sessionsByFolder.set(entry.folderPath, await readSessionsFile(entry.folderPath));
+    }
+    return await mutation(sessionsByFolder);
+  } finally {
+    await Promise.allSettled(fileReleases.slice().reverse().map((releaseFile) => releaseFile()));
+    for (let index = queueReleases.length - 1; index >= 0; index -= 1) {
+      try {
+        queueReleases[index]();
+      } finally {
+        const queueKey = queuedKeys[index];
+        if (sessionMutationQueues.get(queueKey) === queuedPromises[index]) {
+          sessionMutationQueues.delete(queueKey);
+        }
+      }
+    }
+  }
+}
+
+async function withSessionsFileMutation<T>(
+  folderPath: string,
+  mutation: (sessions: StoredSession[]) => Promise<SessionsMutationResult<T>> | SessionsMutationResult<T>,
+): Promise<T> {
+  return withSessionsFileLocks([folderPath], async (sessionsByFolder) => {
+    const normalizedFolderPath = sanitizeRelativePath(folderPath);
+    const currentSessions = sessionsByFolder.get(normalizedFolderPath) ?? [];
+    const { sessions, result, changed } = await mutation(currentSessions);
+    if (changed ?? JSON.stringify(currentSessions) !== JSON.stringify(sessions)) {
+      await writeSessions(normalizedFolderPath, sessions);
+    }
+    return result;
+  });
+}
+
+async function reconcileSessionsWithStatus(folderPath: string, sessions: StoredSession[]): Promise<{ sessions: StoredSession[]; changed: boolean }> {
+  const reconciledResults = await Promise.all(sessions.map((session) => reconcileSession(folderPath, session)));
+  return {
+    sessions: reconciledResults.flatMap((result) => result.session ? [result.session] : []),
+    changed: reconciledResults.some((result) => result.changed),
+  };
+}
+
+async function reconcileSessions(folderPath: string, sessions: StoredSession[]): Promise<StoredSession[]> {
+  return (await reconcileSessionsWithStatus(folderPath, sessions)).sessions;
 }
 
 function rewriteRelativePathPrefix(targetPath: string | undefined, rewrite: SessionPathRewrite): string | undefined {
@@ -391,10 +585,35 @@ export async function createSession(
     reasoningEffort: normalizeReasoningEffort(options.reasoningEffort),
   };
 
-  const sessions = await listSessions(folderPath);
-  sessions.push(session);
-  await writeSessions(folderPath, sessions);
-  return session;
+  return withSessionsFileMutation(folderPath, async (sessions) => ({
+    sessions: [...sessions, session],
+    result: session,
+  }));
+}
+
+export async function mutateSession(
+  folderPath: string,
+  sessionId: string,
+  mutation: (session: StoredSession) => StoredSession | Promise<StoredSession>,
+): Promise<StoredSession> {
+  return withSessionsFileMutation(folderPath, async (currentSessions) => {
+    const sessions = await reconcileSessions(folderPath, currentSessions);
+    const index = sessions.findIndex((session) => session.id === sessionId);
+    if (index === -1) {
+      throw new Error(`Session not found: ${sessionId}`);
+    }
+
+    const mutatedSession = await mutation(sessions[index]);
+    if (mutatedSession === sessions[index]) {
+      return { sessions, result: mutatedSession };
+    }
+    const nextSession = {
+      ...mutatedSession,
+      updatedAt: new Date().toISOString(),
+    };
+    sessions[index] = nextSession;
+    return { sessions, result: nextSession };
+  });
 }
 
 export async function updateSession(
@@ -402,43 +621,33 @@ export async function updateSession(
   sessionId: string,
   updates: Partial<Pick<StoredSession, 'messages' | 'title' | 'provider' | 'providerSessionId' | 'model' | 'reasoningEffort' | 'turnSummaries'>>
 ): Promise<StoredSession> {
-  const sessions = await listSessions(folderPath);
-  const index = sessions.findIndex((session) => session.id === sessionId);
-  if (index === -1) {
-    throw new Error(`Session not found: ${sessionId}`);
-  }
-
-  const nextSession: StoredSession = {
-    ...sessions[index],
-    ...updates,
+  return mutateSession(folderPath, sessionId, (session) => ({
+    ...session,
+    ...Object.fromEntries(Object.entries(updates).filter(([, value]) => value !== undefined)),
     model: updates.model === undefined
-      ? sessions[index].model
+      ? session.model
       : normalizeModelPreference(updates.model),
     reasoningEffort: updates.reasoningEffort === undefined
-      ? sessions[index].reasoningEffort
+      ? session.reasoningEffort
       : normalizeReasoningEffort(updates.reasoningEffort),
-    updatedAt: new Date().toISOString(),
-  };
-
-  sessions[index] = nextSession;
-  await writeSessions(folderPath, sessions);
-  return nextSession;
+  }));
 }
 
 export async function restoreSessions(folderPath: string, restoredSessions: StoredSession[]): Promise<void> {
   if (restoredSessions.length === 0) return;
-  const current = await readSessionsFile(folderPath);
-  const ids = new Set(current.map((session) => session.id));
-  const next = [...current];
-  for (const session of restoredSessions) {
-    const candidate = normalizeSession(folderPath, session);
-    if (ids.has(candidate.id)) {
-      candidate.id = randomUUID();
+  await withSessionsFileMutation(folderPath, async (current) => {
+    const ids = new Set(current.map((session) => session.id));
+    const next = [...current];
+    for (const session of restoredSessions) {
+      const candidate = normalizeSession(folderPath, session);
+      if (ids.has(candidate.id)) {
+        candidate.id = randomUUID();
+      }
+      ids.add(candidate.id);
+      next.push(candidate);
     }
-    ids.add(candidate.id);
-    next.push(candidate);
-  }
-  await writeSessions(folderPath, next);
+    return { sessions: next, result: undefined };
+  });
 }
 
 export function buildDefaultSessionTitle(folderPath: string): string {
@@ -466,14 +675,12 @@ export function appendMessage(messages: ChatMessage[], message: ChatMessage): Ch
 export async function removePdfSessions(folderPath: string, pdfPath: string): Promise<void> {
   const normalizedFolderPath = sanitizeRelativePath(folderPath);
   const normalizedPdfPath = normalizePdfPath(pdfPath);
-  const sessions = await readSessionsFile(normalizedFolderPath);
-  const nextSessions = sessions.filter((session) => (
-    !(session.sessionKind === 'pdf' && session.pdfPath === normalizedPdfPath)
-  ));
-
-  if (nextSessions.length !== sessions.length) {
-    await writeSessions(normalizedFolderPath, nextSessions);
-  }
+  await withSessionsFileMutation(normalizedFolderPath, async (sessions) => ({
+    sessions: sessions.filter((session) => (
+      !(session.sessionKind === 'pdf' && session.pdfPath === normalizedPdfPath)
+    )),
+    result: undefined,
+  }));
 }
 
 export async function movePdfSessions(
@@ -487,28 +694,39 @@ export async function movePdfSessions(
   const normalizedOldPdfPath = normalizePdfPath(oldPdfPath);
   const normalizedNewPdfPath = normalizePdfPath(newPdfPath);
 
-  const sourceSessions = await readSessionsFile(normalizedFromFolderPath);
-  const movedSessions = sourceSessions
-    .filter((session) => session.sessionKind === 'pdf' && session.pdfPath === normalizedOldPdfPath)
-    .map((session) => ({
-      ...session,
-      folderPath: normalizedToFolderPath,
-      pdfPath: normalizedNewPdfPath,
-      title: buildSessionTitle(normalizedToFolderPath, 'pdf', normalizedNewPdfPath),
-      updatedAt: new Date().toISOString(),
-    }));
+  await withSessionsFileLocks([normalizedFromFolderPath, normalizedToFolderPath], async (sessionsByFolder) => {
+    const sourceSessions = sessionsByFolder.get(normalizedFromFolderPath) ?? [];
+    const movedSessions = sourceSessions
+      .filter((session) => session.sessionKind === 'pdf' && session.pdfPath === normalizedOldPdfPath)
+      .map((session) => ({
+        ...session,
+        folderPath: normalizedToFolderPath,
+        pdfPath: normalizedNewPdfPath,
+        title: buildSessionTitle(normalizedToFolderPath, 'pdf', normalizedNewPdfPath),
+        updatedAt: new Date().toISOString(),
+      }));
 
-  if (movedSessions.length === 0) {
-    return;
-  }
+    if (movedSessions.length === 0) return;
 
-  const remainingSourceSessions = sourceSessions.filter((session) => (
-    !(session.sessionKind === 'pdf' && session.pdfPath === normalizedOldPdfPath)
-  ));
-  await writeSessions(normalizedFromFolderPath, remainingSourceSessions);
-
-  const destinationSessions = await readSessionsFile(normalizedToFolderPath);
-  await writeSessions(normalizedToFolderPath, [...destinationSessions, ...movedSessions]);
+    const remainingSourceSessions = sourceSessions.filter((session) => (
+      !(session.sessionKind === 'pdf' && session.pdfPath === normalizedOldPdfPath)
+    ));
+    const destinationSessions = sessionsByFolder.get(normalizedToFolderPath) ?? [];
+    if (normalizedFromFolderPath === normalizedToFolderPath) {
+      await writeSessions(normalizedFromFolderPath, [...remainingSourceSessions, ...movedSessions]);
+    } else {
+      // Publish the destination first. If removing the source fails, restore
+      // the destination snapshot here so callers never need to guess whether
+      // the move was half-applied.
+      await writeSessions(normalizedToFolderPath, [...destinationSessions, ...movedSessions]);
+      try {
+        await writeSessions(normalizedFromFolderPath, remainingSourceSessions);
+      } catch (error) {
+        await writeSessions(normalizedToFolderPath, destinationSessions).catch(() => undefined);
+        throw error;
+      }
+    }
+  });
 }
 
 export async function rewriteSessionsForFolderMove(
@@ -519,12 +737,11 @@ export async function rewriteSessionsForFolderMove(
   const normalizedNewFolderPath = sanitizeRelativePath(newFolderPath);
   const sessionFolders = await collectAnnotSessionFolders(normalizedNewFolderPath);
 
-  await Promise.all(sessionFolders.map(async (sessionFolderPath) => {
-    const rawSessions = await readSessionsFile(sessionFolderPath);
-    const nextSessions = rawSessions.map((session) => rewriteSessionPaths(session, {
+  await Promise.all(sessionFolders.map((sessionFolderPath) => withSessionsFileMutation(sessionFolderPath, async (rawSessions) => ({
+    sessions: rawSessions.map((session) => rewriteSessionPaths(session, {
       from: normalizedOldFolderPath,
       to: normalizedNewFolderPath,
-    }));
-    await writeSessions(sessionFolderPath, nextSessions);
-  }));
+    })),
+    result: undefined,
+  }))));
 }

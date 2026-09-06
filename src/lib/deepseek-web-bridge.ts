@@ -52,3 +52,11 @@ export function normalizeManualPerspectiveResponse(value: unknown): string | nul
   if (!responseText || responseText.length > MAX_DEEPSEEK_WEB_RESPONSE_CHARS) return null;
   return responseText;
 }
+
+export function getManualPerspectiveResponseError(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim()) return 'DeepSeek 답변을 붙여넣어 주세요.';
+  if (value.trim().length > MAX_DEEPSEEK_WEB_RESPONSE_CHARS) {
+    return `DeepSeek 답변이 너무 깁니다. ${MAX_DEEPSEEK_WEB_RESPONSE_CHARS.toLocaleString('ko-KR')}자 이하로 줄여 주세요.`;
+  }
+  return null;
+}

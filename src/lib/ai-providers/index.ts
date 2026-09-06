@@ -61,34 +61,44 @@ const codexRuntime: ProviderRuntime = {
     };
   },
   async validateConnection() {
+    const accountStatus = await getCodexAuthStatus();
+    let cliAuthenticated = false;
+    let cliCatalogUnavailable = false;
+
     try {
-      const result = await runCodexTurn({
-        model: AUTO_MODEL_ID,
-        folderPath: '',
-        sessionKind: 'folder',
-        prompt: 'Reply with exactly OK.',
-        ephemeral: true,
-      });
+      cliAuthenticated = (await getCodexCliAuthStatus()).authenticated;
+    } catch {
+      // The account status remains authoritative when the standalone CLI is
+      // missing or an older installation cannot answer status queries.
+    }
 
-      return {
-        provider: 'codex' as const,
-        ok: /^ok\b/i.test(result.content.trim()),
-        model: AUTO_MODEL_ID,
-        response: result.content.trim(),
-        message: 'Codex responded successfully.',
-      };
-    } catch (error) {
-      if (!isCodexCliUnavailableError(error)) throw error;
+    if (!accountStatus.authenticated && !cliAuthenticated) {
+      throw new Error('Codex 로그인이 확인되지 않았습니다. 설정에서 로그인 상태를 확인해 주세요.');
+    }
 
-      const accountStatus = await getCodexAuthStatus();
-      if (!accountStatus.authenticated) throw error;
+    try {
+      const cliModels = await listCodexModelsFromCli();
+      if (cliModels.length > 0) {
+        return {
+          provider: 'codex' as const,
+          ok: true,
+          model: cliModels[0].id,
+          response: '인증됨',
+          message: 'Codex 로그인을 확인했고 모델 목록을 읽었습니다. 실제 turn은 실행하지 않았습니다.',
+        };
+      }
+      cliCatalogUnavailable = true;
+    } catch {
+      cliCatalogUnavailable = true;
+    }
 
-      // Account validation must not spend a Codex turn. The models endpoint
-      // verifies both the token/account pairing and that the account can use
-      // at least one Codex model, without being affected by turn quotas.
+    // Account validation must not spend a Codex turn. The models endpoint
+    // verifies the token/account pairing and available model catalog without
+    // consuming a chat quota.
+    if (accountStatus.authenticated) {
       const models = await fetchCodexModels();
       if (!models || models.length === 0) {
-        throw new Error('Codex 계정은 확인했지만 사용할 수 있는 모델을 찾지 못했습니다.');
+        throw new Error('Codex 로그인은 확인했지만 사용할 수 있는 모델을 확인하지 못했습니다.');
       }
 
       return {
@@ -96,9 +106,21 @@ const codexRuntime: ProviderRuntime = {
         ok: true,
         model: models[0].id,
         response: '인증됨',
-        message: 'OpenAI 계정과 Codex 모델을 확인했습니다. standalone CLI 없이 로그인 계정을 사용합니다.',
+        message: 'OpenAI 계정과 Codex 모델 목록을 확인했습니다. 실제 turn은 실행하지 않았습니다.',
       };
     }
+
+    if (cliAuthenticated && cliCatalogUnavailable) {
+      return {
+        provider: 'codex' as const,
+        ok: true,
+        model: AUTO_MODEL_ID,
+        response: '로그인 확인',
+        message: 'Codex 로그인은 확인했지만 이 CLI에서 모델 목록을 확인하지 못했습니다. 실제 사용 시 자동 모델 선택을 시도합니다.',
+      };
+    }
+
+    throw new Error('Codex 로그인은 확인했지만 사용할 모델을 확인하지 못했습니다.');
   },
   async runTurn(
     input: ProviderTurnInput,
