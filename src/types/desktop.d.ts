@@ -12,7 +12,7 @@ declare global {
       };
       sideChat: {
         open: (handoff?: { sourceContext?: import('@/types').ChatSourceContext; pdfPath?: string }) => Promise<{ mode: 'window' | 'focused' }>;
-        showWebProvider: (providerId: import('@/types').SideChatWebProviderId) => Promise<{ mode: 'embedded' | 'external-fallback' }>;
+        showWebProvider: (providerId: import('@/types').SideChatWebProviderId) => Promise<{ mode: 'embedded' | 'external-fallback' | 'failed' | 'cancelled' }>;
         hideWebProvider: () => Promise<void>;
         setWebViewBounds: (bounds: { x: number; y: number; width: number; height: number }) => void;
         copyText: (text: string) => Promise<boolean>;

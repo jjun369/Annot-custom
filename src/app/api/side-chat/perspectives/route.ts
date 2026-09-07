@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { NextRequest, NextResponse } from 'next/server';
 
 import { getSession, mutateSession } from '@/lib/annot-sessions';
+import { promptHash, WebRequestError } from '@/lib/side-chat-requests';
 import {
   buildSideChatOutboundPrompt,
   canUseSideChatSource,
@@ -59,7 +60,36 @@ export async function POST(req: NextRequest) {
       promptSnapshot?: unknown;
       responseText?: unknown;
       model?: unknown;
+      requestId?: unknown;
     };
+
+    if (body.requestId !== undefined) {
+      if (body.folderPath !== '.' || typeof body.sessionId !== 'string' || typeof body.requestId !== 'string') {
+        return NextResponse.json({ error: '저장된 요청 ID가 필요합니다.' }, { status: 400 });
+      }
+      const responseError = validateResponse(body.responseText);
+      if (responseError) return NextResponse.json({ error: responseError }, { status: 400 });
+      const responseText = normalizeResponse(body.responseText);
+      let perspective!: SideChatWebPerspective;
+      await mutateSession('.', body.sessionId, (session) => {
+        if (session.sessionKind !== 'sidechat') throw new WebRequestError(400, '독립 사이드채팅이 아닙니다.');
+        const question = session.messages.find((m) => m.role === 'user' && m.sideChatWebRequests?.some((r) => r.id === body.requestId));
+        const stored = question?.sideChatWebRequests?.find((r) => r.id === body.requestId);
+        if (!question || !stored || stored.sessionId !== session.id || stored.questionMessageId !== question.id) throw new WebRequestError(404, '저장된 요청을 찾을 수 없습니다.');
+        if (promptHash(stored.promptSnapshot) !== stored.promptSha256) throw new WebRequestError(409, '저장된 요청의 무결성을 확인할 수 없습니다.');
+        if ((body.provider !== undefined && body.provider !== stored.provider) || (body.promptMode !== undefined && body.promptMode !== stored.promptMode)
+          || (body.promptSnapshot !== undefined && body.promptSnapshot !== stored.promptSnapshot)) throw new WebRequestError(409, '저장된 요청과 다른 전송 정보입니다.');
+        const existing = question.sideChatPerspectives?.find((p) => p.requestId === stored.id && p.responseText === responseText);
+        if (existing) { perspective = existing; return session; }
+        perspective = { id: `sidechat-web-${randomUUID()}`, requestId: stored.id, provider: stored.provider, acquisition: 'user-paste',
+          promptMode: stored.promptMode, promptSnapshot: stored.promptSnapshot, promptSha256: stored.promptSha256,
+          responseText, importedAt: new Date().toISOString(),
+          ...(typeof body.model === 'string' && body.model.trim() ? { model: body.model.trim().slice(0, 120) } : {}),
+        };
+        return { ...session, messages: session.messages.map((m) => m.id === question.id ? { ...m, sideChatPerspectives: [...(m.sideChatPerspectives || []), perspective] } : m) };
+      });
+      return NextResponse.json({ perspective });
+    }
 
     if (
       typeof body.folderPath !== 'string'
@@ -116,6 +146,7 @@ export async function POST(req: NextRequest) {
       question: question.content,
       sourceText,
       answerText: answer?.content,
+      version: body.promptSnapshot.includes('(pagedock-sidechat-v1)') ? 'pagedock-sidechat-v1' : undefined,
     });
     if (body.promptSnapshot !== promptSnapshot) {
       return NextResponse.json({ error: '확인한 웹 전송 내용이 바뀌었습니다. 미리보기를 다시 열어 주세요.' }, { status: 400 });
@@ -150,6 +181,7 @@ export async function POST(req: NextRequest) {
         question: currentQuestion.content,
         sourceText: currentQuestion.sourceContext?.text,
         answerText: currentAnswer?.content,
+        version: typeof body.promptSnapshot === 'string' && body.promptSnapshot.includes('(pagedock-sidechat-v1)') ? 'pagedock-sidechat-v1' : undefined,
       });
       if (currentPromptSnapshot !== body.promptSnapshot) {
         throw new SideChatPerspectiveError(400, '확인한 웹 전송 내용이 바뀌었습니다. 미리보기를 다시 열어 주세요.');
@@ -191,7 +223,7 @@ export async function POST(req: NextRequest) {
     if (!perspective) throw new Error('웹 답변을 저장하지 못했습니다.');
     return NextResponse.json({ session: nextSession, perspective });
   } catch (error) {
-    if (error instanceof SideChatPerspectiveError) {
+    if (error instanceof SideChatPerspectiveError || error instanceof WebRequestError) {
       return NextResponse.json({ error: error.message }, { status: error.status });
     }
     if (error instanceof Error && error.message.startsWith('Session not found:')) {

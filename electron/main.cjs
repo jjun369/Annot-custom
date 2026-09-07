@@ -13,10 +13,8 @@ const isSmokeTest = process.argv.includes('--smoke-test');
 let mainWindow = null;
 let deepSeekWindow = null;
 let sideChatWindow = null;
-const sideChatWebViews = new Map();
-const sideChatWebViewRequests = new Map();
-let activeSideChatWebProvider = null;
-let sideChatWebRequestId = 0;
+const { createSideChatWebController } = require('./side-chat-web-controller.cjs');
+let sideChatWebController = null;
 let serverProcess = null;
 let baseUrl = null;
 let isQuitting = false;
@@ -340,16 +338,10 @@ async function openSideChatWindow(handoff) {
     },
   });
   sideChatWindow = window;
+  sideChatWebController = createSideChatWebController({ window, WebContentsView, providers: SIDE_CHAT_WEB_PROVIDERS, partitions: SIDE_CHAT_WEB_PARTITIONS, isProviderUrl: isSideChatProviderUrl, openExternal: (url) => shell.openExternal(url) });
   window.once('ready-to-show', () => window.show());
   window.on('closed', () => {
-    sideChatWebRequestId += 1;
-    for (const view of sideChatWebViews.values()) {
-      try { window.contentView.removeChildView(view); } catch { /* already detached */ }
-      try { view.webContents.close({ waitForBeforeUnload: false }); } catch { /* already closed */ }
-    }
-    sideChatWebViews.clear();
-    sideChatWebViewRequests.clear();
-    activeSideChatWebProvider = null;
+    sideChatWebController = null;
     if (sideChatWindow === window) sideChatWindow = null;
   });
   const internalOrigin = baseUrl ? new URL(baseUrl).origin : null;
@@ -381,119 +373,6 @@ async function openSideChatWindow(handoff) {
   }
 }
 
-async function showSideChatWebProvider(providerId) {
-  const provider = getSideChatProvider(providerId);
-  if (!provider) throw new Error('지원하지 않는 웹 AI입니다.');
-  if (!sideChatWindow || sideChatWindow.isDestroyed()) {
-    throw new Error('사이드채팅 창이 열려 있지 않습니다.');
-  }
-  if (!WebContentsView) {
-    await shell.openExternal(provider.url);
-    return { mode: 'external-fallback' };
-  }
-
-  const requestId = sideChatWebRequestId + 1;
-  sideChatWebRequestId = requestId;
-  for (const candidate of sideChatWebViews.values()) candidate.setVisible(false);
-  activeSideChatWebProvider = null;
-
-  let view = sideChatWebViews.get(providerId);
-  let createdView = false;
-  if (!view) {
-    const partition = SIDE_CHAT_WEB_PARTITIONS.get(providerId);
-    view = new WebContentsView({
-      webPreferences: {
-        partition,
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        webSecurity: true,
-      },
-    });
-    sideChatWebViews.set(providerId, view);
-    createdView = true;
-    sideChatWindow.contentView.addChildView(view);
-    view.setVisible(false);
-    view.webContents.setWindowOpenHandler(({ url: targetUrl }) => {
-      if (isSideChatProviderUrl(providerId, targetUrl)) {
-        return {
-          action: 'allow',
-          overrideBrowserWindowOptions: {
-            autoHideMenuBar: true,
-            webPreferences: {
-              partition,
-              contextIsolation: true,
-              nodeIntegration: false,
-              sandbox: true,
-              webSecurity: true,
-            },
-          },
-        };
-      }
-      void shell.openExternal(targetUrl);
-      return { action: 'deny' };
-    });
-    view.webContents.on('will-navigate', (event, targetUrl) => {
-      if (isSideChatProviderUrl(providerId, targetUrl)) return;
-      event.preventDefault();
-      void shell.openExternal(targetUrl);
-    });
-    view.webContents.on('did-fail-load', (_event, errorCode, errorDescription, _validatedURL, isMainFrame) => {
-      if (isMainFrame && sideChatWebViewRequests.get(providerId) === sideChatWebRequestId && activeSideChatWebProvider === providerId && sideChatWindow && !sideChatWindow.isDestroyed()) {
-        sideChatWindow.webContents.send('pagedock:sidechat-web-failed', { providerId, errorCode, errorDescription });
-      }
-    });
-    sideChatWebViewRequests.set(providerId, requestId);
-    try {
-      await view.webContents.loadURL(provider.url);
-    } catch {
-      const windowStillOpen = sideChatWindow && !sideChatWindow.isDestroyed();
-      if (sideChatWebViewRequests.get(providerId) === requestId && windowStillOpen) {
-        sideChatWindow.contentView.removeChildView(view);
-        sideChatWebViews.delete(providerId);
-        sideChatWebViewRequests.delete(providerId);
-      }
-      if (sideChatWebRequestId !== requestId || !windowStillOpen) return { mode: 'cancelled' };
-      await shell.openExternal(provider.url);
-      return { mode: 'external-fallback' };
-    }
-  } else {
-    sideChatWebViewRequests.set(providerId, requestId);
-  }
-
-  if (sideChatWebRequestId !== requestId || !sideChatWindow || sideChatWindow.isDestroyed()) {
-    if (createdView && sideChatWebViews.get(providerId) === view && sideChatWindow && !sideChatWindow.isDestroyed()) {
-      sideChatWindow.contentView.removeChildView(view);
-      sideChatWebViews.delete(providerId);
-      sideChatWebViewRequests.delete(providerId);
-    }
-    return { mode: 'cancelled' };
-  }
-
-  for (const [id, candidate] of sideChatWebViews) {
-    candidate.setVisible(id === providerId);
-  }
-  activeSideChatWebProvider = providerId;
-  view.setBounds({ x: 0, y: 118, width: sideChatWindow.getContentBounds().width, height: Math.max(160, sideChatWindow.getContentBounds().height - 118) });
-  view.webContents.focus();
-  return { mode: 'embedded' };
-}
-
-function hideSideChatWebProvider() {
-  sideChatWebRequestId += 1;
-  for (const view of sideChatWebViews.values()) view.setVisible(false);
-  activeSideChatWebProvider = null;
-}
-
-function setSideChatWebBounds(bounds) {
-  if (!sideChatWindow || sideChatWindow.isDestroyed() || !activeSideChatWebProvider) return;
-  const view = sideChatWebViews.get(activeSideChatWebProvider);
-  if (!view || !bounds || typeof bounds !== 'object') return;
-  const values = ['x', 'y', 'width', 'height'].map((key) => Number(bounds[key]));
-  if (values.some((value) => !Number.isFinite(value)) || values[2] < 120 || values[3] < 100) return;
-  view.setBounds({ x: Math.floor(values[0]), y: Math.floor(values[1]), width: Math.floor(values[2]), height: Math.floor(values[3]) });
-}
-
 function validateSideChatSourceJump(request) {
   if (!request || typeof request !== 'object' || typeof request.pdfPath !== 'string' || !request.pdfPath.trim()) return null;
   const page = Number(request.page);
@@ -504,7 +383,7 @@ function validateSideChatSourceJump(request) {
   )).map((rect) => ({
     x: Number(rect.x), y: Number(rect.y), width: Number(rect.width), height: Number(rect.height),
   })) : undefined;
-  return { id: typeof request.id === 'string' && request.id ? request.id : `sidechat-source-${Date.now()}`, pdfPath: request.pdfPath.trim().replace(/\\/g, '/'), page: Math.floor(page), ...(rects?.length ? { rects } : {}) };
+  return { id: typeof request.id === 'string' && request.id ? request.id : `sidechat-source-${Date.now()}`, pdfPath: request.pdfPath.trim().replace(/\\/g, '/'), page: Math.floor(page), ...(typeof request.documentId === 'string' ? { documentId: request.documentId } : {}), ...(rects?.length ? { rects } : {}) };
 }
 
 function configureDesktopIpc() {
@@ -533,9 +412,9 @@ function configureDesktopIpc() {
   });
   ipcMain.handle('pagedock:deepseek-web-read-clipboard', () => clipboard.readText());
   ipcMain.handle('pagedock:sidechat-open', async (_event, handoff) => openSideChatWindow(handoff));
-  ipcMain.handle('pagedock:sidechat-web-show', async (_event, providerId) => showSideChatWebProvider(providerId));
-  ipcMain.handle('pagedock:sidechat-web-hide', () => hideSideChatWebProvider());
-  ipcMain.on('pagedock:sidechat-web-bounds', (_event, bounds) => setSideChatWebBounds(bounds));
+  ipcMain.handle('pagedock:sidechat-web-show', async (_event, providerId) => sideChatWebController?.show(providerId));
+  ipcMain.handle('pagedock:sidechat-web-hide', () => sideChatWebController?.hide());
+  ipcMain.on('pagedock:sidechat-web-bounds', (_event, bounds) => sideChatWebController?.setBounds(bounds));
   ipcMain.handle('pagedock:sidechat-copy-text', (_event, text) => {
     if (typeof text !== 'string' || !text.trim() || text.length > MAX_SIDE_CHAT_COPY_CHARS) {
       throw new Error('복사할 사이드채팅 내용이 올바르지 않습니다.');

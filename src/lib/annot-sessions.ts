@@ -647,6 +647,14 @@ export async function restoreSessions(folderPath: string, restoredSessions: Stor
       if (ids.has(candidate.id)) {
         candidate.id = randomUUID();
       }
+      // The archive may be restored beside its original. Rebind only the
+      // containing session identity, never the reviewed payload or locator.
+      if (candidate.sessionKind === 'sidechat') {
+        candidate.messages = candidate.messages.map((message) => ({
+          ...message,
+          ...(message.sideChatWebRequests ? { sideChatWebRequests: message.sideChatWebRequests.map((request) => ({ ...request, sessionId: candidate.id })) } : {}),
+        }));
+      }
       ids.add(candidate.id);
       next.push(candidate);
     }

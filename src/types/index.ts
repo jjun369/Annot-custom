@@ -148,6 +148,7 @@ export interface ChatMessage {
   secondaryPerspectives?: ChatSecondaryPerspective[];
   /** Explicitly pasted answers from the isolated web-AI tabs in a sidechat. */
   sideChatPerspectives?: SideChatWebPerspective[];
+  sideChatWebRequests?: SideChatWebRequest[];
 }
 
 /**
@@ -173,7 +174,26 @@ export interface ChatSecondaryPerspective {
 }
 
 export type SideChatWebProviderId = 'deepseek' | 'chatgpt' | 'claude' | 'gemini';
-export type SideChatOutboundMode = 'question' | 'source-question' | 'source-question-answer';
+export type SideChatOutboundMode = 'question' | 'source-question' | 'source-question-answer' | 'question-answer';
+
+export interface SideChatWebRequest {
+  id: string;
+  sessionId: string;
+  questionMessageId: string;
+  provider: SideChatWebProviderId;
+  intent: 'independent' | 'review';
+  promptMode: SideChatOutboundMode;
+  promptVersion: string;
+  promptSnapshot: string;
+  promptSha256: string;
+  questionText: string;
+  answerMessageId?: string;
+  answerText?: string;
+  sourceContext?: ChatSourceContext;
+  sourcePdfPath?: string;
+  preparedAt: string;
+  copiedAt?: string;
+}
 
 /**
  * A web-AI answer explicitly pasted back into an independent sidechat. The
@@ -181,6 +201,7 @@ export type SideChatOutboundMode = 'question' | 'source-question' | 'source-ques
  */
 export interface SideChatWebPerspective {
   id: string;
+  requestId?: string;
   provider: SideChatWebProviderId;
   acquisition: 'user-paste';
   promptMode: SideChatOutboundMode;

@@ -1,25 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ArrowLeftRight,
-  Check,
-  ChevronDown,
-  Clipboard,
   ExternalLink,
-  FileText,
   Link2,
   Loader2,
   MapPin,
   MessageSquarePlus,
   PanelRightClose,
-  Plus,
   RefreshCw,
   Send,
   Sparkles,
   X,
 } from 'lucide-react';
 
+import { WebAiHandoffPanel } from './WebAiHandoffPanel';
+import { SideChatComparisonDialog } from './SideChatComparisonDialog';
 import { ChatMarkdown } from '@/components/workspace/ChatMarkdown';
 import { readStoredAIProvider } from '@/lib/provider-preferences';
 import {
@@ -35,12 +32,9 @@ import {
 } from '@/lib/ai-providers/reasoning-policy';
 import { normalizeChatSourceContext } from '@/lib/ai-providers/source-context';
 import {
-  buildSideChatOutboundPrompt,
-  buildSideChatWebDraftKey,
+  resolveSideChatTarget,
   canUseSideChatSource,
   getSideChatModeLabel,
-  SIDE_CHAT_MAX_RESPONSE_CHARS,
-  SIDE_CHAT_OUTBOUND_MODES,
   SIDE_CHAT_WEB_PROVIDERS,
 } from '@/lib/side-chat';
 import { AIProvider, ChatMessage, ChatSourceContext, ReasoningEffort, Session, SideChatOutboundMode, SideChatWebPerspective, SideChatWebProviderId } from '@/types';
@@ -70,13 +64,6 @@ interface WebComparisonState {
   perspective: SideChatWebPerspective;
 }
 
-interface SideChatWebDraftState {
-  response: string;
-  model: string;
-}
-
-const DRAFT_STORAGE_KEY = 'pagedock:sidechat:draft:v1';
-const WEB_DRAFT_STORAGE_KEY = 'pagedock:sidechat:web-drafts:v1';
 const SIDE_CHAT_REASONING_LEVELS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 
 function makeId(prefix: string): string {
@@ -97,9 +84,21 @@ function sourceLabel(sourceContext: ChatSourceContext | undefined): string {
 }
 
 export function SideChatWindow() {
+  const [namespace, setNamespace] = useState('');
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { void fetch('/api/side-chat/requests').then(async (r) => { if (!r.ok) throw new Error(); const data = await r.json(); setNamespace(data.namespace); }).catch(() => setFailed(true)); }, []);
+  if (!namespace) return <p className="p-4">{failed ? 'Library를 확인하지 못했습니다. 창을 다시 열어 주세요.' : 'Library 확인 중…'}</p>;
+  return <SideChatContent key={namespace} namespace={namespace} />;
+}
+
+function SideChatContent({ namespace }: { namespace: string }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [sessionsLoaded, setSessionsLoaded] = useState(false);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  const DRAFT_STORAGE_KEY = `pagedock:sidechat:draft:v2:${namespace}:${activeSessionId || 'new'}`;
+  const draftCache = useRef(new Map<string, SideChatDraft>());
+  const [hydratedKey, setHydratedKey] = useState('');
+  const handoffRead = useRef(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [input, setInput] = useState('');
@@ -118,33 +117,21 @@ export function SideChatWindow() {
   const [activeWebProvider, setActiveWebProvider] = useState<SideChatWebProviderId>('deepseek');
   const [promptMode, setPromptMode] = useState<SideChatOutboundMode>('question');
   const [selectedAnswerId, setSelectedAnswerId] = useState<string | null>(null);
-  const [webResponseDraft, setWebResponseDraft] = useState('');
-  const [webModelLabel, setWebModelLabel] = useState('');
-  const [webSaving, setWebSaving] = useState(false);
-  const [webEmbedded, setWebEmbedded] = useState<boolean | null>(null);
-  const [webFailure, setWebFailure] = useState('');
   const [comparison, setComparison] = useState<WebComparisonState | null>(null);
-  const webHostRef = useRef<HTMLDivElement>(null);
-  const comparisonRef = useRef<HTMLDivElement>(null);
   const activeSessionIdRef = useRef<string | null>(null);
   const composerFingerprintRef = useRef<string>('');
   const requestFingerprintRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const forceNewSessionRef = useRef(false);
-  const webDraftStoreRef = useRef<Record<string, SideChatWebDraftState>>({});
-  const webDraftKeyRef = useRef<string | null>(null);
-  const webDraftJustLoadedKeyRef = useRef<string | null>(null);
-  const webResponseDraftRef = useRef('');
-  const webModelLabelRef = useRef('');
-  const [webDraftStoreLoaded, setWebDraftStoreLoaded] = useState(false);
-
+  const [selectedQuestionId, setSelectedQuestionId] = useState<string>();
+  const [savedTargetActive, setSavedTargetActive] = useState(false);
+  const questionFlight = useRef<Promise<{ session: Session; question: ChatMessage } | null> | null>(null);
+  const sessionFlight = useRef<Promise<Session> | null>(null);
   activeSessionIdRef.current = activeSessionId;
   composerFingerprintRef.current = JSON.stringify({
     questionText: input.trim(),
     sourceContext: sourceContext || null,
     sourcePdfPath: sourcePdfPath || null,
   });
-  webResponseDraftRef.current = webResponseDraft;
-  webModelLabelRef.current = webModelLabel;
 
   const activeSession = sessions.find((session) => session.id === activeSessionId);
   const selectedAnswer = selectedAnswerId
@@ -154,55 +141,7 @@ export function SideChatWindow() {
     ? messages.find((message) => message.id === selectedAnswer.replyToMessageId && message.role === 'user')
     : undefined;
   const persistedWebQuestion = selectedQuestion || latestUserMessage(messages);
-  const activeWebQuestion = input.trim() ? undefined : persistedWebQuestion;
-  const webQuestionText = input.trim() || activeWebQuestion?.content || '';
-  const webAnswer = activeWebQuestion && selectedAnswer?.replyToMessageId === activeWebQuestion.id
-    ? selectedAnswer
-    : undefined;
-  const webSource = activeWebQuestion?.sourceContext || sourceContext;
-  const webSourcePdfPath = activeWebQuestion?.sourcePdfPath || sourcePdfPath;
-  const webDraftKey = useMemo(() => buildSideChatWebDraftKey({
-    sessionId: activeSessionId,
-    questionMessageId: activeWebQuestion?.id,
-    question: webQuestionText,
-    sourceContext: webSource,
-    sourcePdfPath: webSourcePdfPath,
-    provider: activeWebProvider,
-  }), [activeSessionId, activeWebProvider, activeWebQuestion?.id, webQuestionText, webSource, webSourcePdfPath]);
-  const webPrompt = useMemo(() => (
-    webQuestionText
-      ? buildSideChatOutboundPrompt({
-        mode: promptMode,
-        question: webQuestionText,
-        sourceText: webSource?.text,
-        answerText: webAnswer?.content,
-      })
-      : ''
-  ), [promptMode, webAnswer?.content, webQuestionText, webSource?.text]);
-  const activeWebDefinition = SIDE_CHAT_WEB_PROVIDERS.find((provider) => provider.id === activeWebProvider) || SIDE_CHAT_WEB_PROVIDERS[0];
-
-  const persistWebDraftStore = useCallback(() => {
-    const entries = Object.entries(webDraftStoreRef.current).filter(([, draft]) => draft.response || draft.model);
-    try {
-      if (entries.length === 0) {
-        window.localStorage.removeItem(WEB_DRAFT_STORAGE_KEY);
-      } else {
-        window.localStorage.setItem(WEB_DRAFT_STORAGE_KEY, JSON.stringify(Object.fromEntries(entries)));
-      }
-    } catch {
-      // Web-answer drafts are a convenience. The persisted sidechat remains authoritative.
-    }
-  }, []);
-
-  const updateWebDraftStore = useCallback((response: string, model: string) => {
-    if (!webDraftStoreLoaded) return;
-    if (response || model) {
-      webDraftStoreRef.current[webDraftKey] = { response, model };
-    } else {
-      delete webDraftStoreRef.current[webDraftKey];
-    }
-    persistWebDraftStore();
-  }, [persistWebDraftStore, webDraftKey, webDraftStoreLoaded]);
+  const resolvedTarget = resolveSideChatTarget(savedTargetActive ? '' : input, sourceContext, sourcePdfPath, messages, selectedQuestionId || persistedWebQuestion?.id, selectedAnswerId || undefined);
 
   const refreshSessions = useCallback(async (): Promise<Session[]> => {
     try {
@@ -228,6 +167,8 @@ export function SideChatWindow() {
 
   useEffect(() => {
     let cancelled = false;
+    setSavedTargetActive(false);
+    setSelectedQuestionId(undefined);
     if (!activeSessionId) {
       setMessages([]);
       setStreamingText('');
@@ -259,8 +200,8 @@ export function SideChatWindow() {
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
-      if (raw) {
-        const saved = JSON.parse(raw) as Partial<SideChatDraft>;
+      {
+        const saved = draftCache.current.get(DRAFT_STORAGE_KEY) || (raw ? JSON.parse(raw) : {}) as Partial<SideChatDraft>;
         setInput(typeof saved.input === 'string' ? saved.input : '');
         setSourceContext(normalizeChatSourceContext(saved.sourceContext));
         setSourcePdfPath(typeof saved.sourcePdfPath === 'string' ? saved.sourcePdfPath : undefined);
@@ -268,7 +209,8 @@ export function SideChatWindow() {
         if (saved.webProvider && SIDE_CHAT_WEB_PROVIDERS.some((provider) => provider.id === saved.webProvider)) setActiveWebProvider(saved.webProvider);
       }
       const handoffValue = new URLSearchParams(window.location.search).get('handoff');
-      if (handoffValue) {
+      if (handoffValue && !handoffRead.current) {
+        handoffRead.current = true;
         const handoff = JSON.parse(handoffValue) as { sourceContext?: unknown; pdfPath?: unknown };
         const handoffSource = normalizeChatSourceContext(handoff.sourceContext);
         if (handoffSource && canUseSideChatSource(handoffSource)) {
@@ -279,68 +221,12 @@ export function SideChatWindow() {
         }
       }
     } catch {
-      // A draft is a convenience. The persisted sidechat remains authoritative.
+      setStatusMessage('기기 초안을 읽지 못했습니다. 저장된 대화는 그대로 유지됩니다.');
     } finally {
       setDraftHydrated(true);
+      setHydratedKey(DRAFT_STORAGE_KEY);
     }
-  }, []);
-
-  useEffect(() => {
-    try {
-      const raw = window.localStorage.getItem(WEB_DRAFT_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as unknown;
-        if (parsed && typeof parsed === 'object') {
-          for (const [key, value] of Object.entries(parsed)) {
-            if (!value || typeof value !== 'object') continue;
-            const draft = value as Partial<SideChatWebDraftState>;
-            if (typeof draft.response === 'string' && typeof draft.model === 'string') {
-              webDraftStoreRef.current[key] = { response: draft.response, model: draft.model };
-            }
-          }
-        }
-      }
-    } catch {
-      // A draft is a convenience. The persisted sidechat remains authoritative.
-    } finally {
-      setWebDraftStoreLoaded(true);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!webDraftStoreLoaded) return;
-    const previousKey = webDraftKeyRef.current;
-    if (previousKey && previousKey !== webDraftKey) {
-      if (webResponseDraftRef.current || webModelLabelRef.current) {
-        webDraftStoreRef.current[previousKey] = { response: webResponseDraftRef.current, model: webModelLabelRef.current };
-      } else {
-        delete webDraftStoreRef.current[previousKey];
-      }
-      persistWebDraftStore();
-    }
-
-    const saved = webDraftStoreRef.current[webDraftKey];
-    webDraftKeyRef.current = webDraftKey;
-    webDraftJustLoadedKeyRef.current = webDraftKey;
-    setWebResponseDraft(saved?.response || '');
-    setWebModelLabel(saved?.model || '');
-  }, [persistWebDraftStore, webDraftKey, webDraftStoreLoaded]);
-
-  useEffect(() => {
-    if (!webDraftStoreLoaded || webDraftKeyRef.current !== webDraftKey) return;
-    // Load the new task before persisting its controlled input. This prevents
-    // one render of the previous task from overwriting the new task's draft.
-    if (webDraftJustLoadedKeyRef.current === webDraftKey) {
-      webDraftJustLoadedKeyRef.current = null;
-      return;
-    }
-    if (webResponseDraft || webModelLabel) {
-      webDraftStoreRef.current[webDraftKey] = { response: webResponseDraft, model: webModelLabel };
-    } else {
-      delete webDraftStoreRef.current[webDraftKey];
-    }
-    persistWebDraftStore();
-  }, [persistWebDraftStore, webDraftKey, webDraftStoreLoaded, webModelLabel, webResponseDraft]);
+  }, [DRAFT_STORAGE_KEY]);
 
   useEffect(() => {
     const desktop = window.pageDockDesktop?.sideChat;
@@ -354,21 +240,15 @@ export function SideChatWindow() {
       setActiveTab('pagedock');
       setStatusMessage('선택 원문을 초안으로 받았습니다. 질문을 입력한 뒤 직접 전송하세요.');
     });
-    const unsubscribeFailure = desktop.onWebFailed((failure) => {
-      if (failure.providerId === activeWebProvider) setWebFailure('웹 AI 페이지를 불러오지 못했습니다. 기본 브라우저로 열 수 있습니다.');
-    });
-    return () => { unsubscribeHandoff(); unsubscribeFailure(); };
-  }, [activeWebProvider]);
+    return () => { unsubscribeHandoff(); };
+  }, []);
 
   useEffect(() => {
-    if (!draftHydrated) return;
-    if (!input.trim() && !sourceContext) {
-      window.localStorage.removeItem(DRAFT_STORAGE_KEY);
-      return;
-    }
+    if (!draftHydrated || hydratedKey !== DRAFT_STORAGE_KEY) return;
     const draft: SideChatDraft = { input, sourceContext, sourcePdfPath, promptMode, webProvider: activeWebProvider };
-    try { window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft)); } catch { /* local draft is best effort */ }
-  }, [activeWebProvider, draftHydrated, input, promptMode, sourceContext, sourcePdfPath]);
+    draftCache.current.set(DRAFT_STORAGE_KEY, draft);
+    try { window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(draft)); } catch { setStatusMessage('기기 초안 저장 실패 · 입력은 이 창에 유지됩니다. 닫기 전 복사하거나 질문을 저장해 주세요.'); }
+  }, [DRAFT_STORAGE_KEY, hydratedKey, activeWebProvider, draftHydrated, input, promptMode, sourceContext, sourcePdfPath]);
 
   useEffect(() => {
     let cancelled = false;
@@ -386,85 +266,7 @@ export function SideChatWindow() {
     return () => { cancelled = true; };
   }, [selectedProvider]);
 
-  useEffect(() => {
-    const desktop = window.pageDockDesktop?.sideChat;
-    if (!desktop) {
-      setWebEmbedded(false);
-      return;
-    }
-    if (activeTab !== 'web') {
-      setWebEmbedded(false);
-      void desktop.hideWebProvider();
-      return;
-    }
-    let cancelled = false;
-    setWebEmbedded(null);
-    setWebFailure('');
-    void desktop.showWebProvider(activeWebProvider).then((result) => {
-      if (!cancelled) {
-        setWebEmbedded(result.mode === 'embedded');
-        if (result.mode === 'external-fallback') setWebFailure('이 웹 AI는 기본 브라우저로 열었습니다. PageDock는 로그인 상태를 추정하지 않습니다.');
-      }
-    }).catch((error) => {
-      if (!cancelled) setWebFailure(error instanceof Error ? error.message : '웹 AI 탭을 열지 못했습니다.');
-    });
-    return () => { cancelled = true; };
-  }, [activeTab, activeWebProvider]);
-
-  useEffect(() => {
-    if (activeTab !== 'web' || webEmbedded !== true) return;
-    const desktop = window.pageDockDesktop?.sideChat;
-    if (!desktop || !webHostRef.current) return;
-    const updateBounds = () => {
-      const rect = webHostRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      desktop.setWebViewBounds({ x: rect.left, y: rect.top, width: rect.width, height: rect.height });
-    };
-    updateBounds();
-    const observer = new ResizeObserver(updateBounds);
-    observer.observe(webHostRef.current);
-    window.addEventListener('resize', updateBounds);
-    return () => { observer.disconnect(); window.removeEventListener('resize', updateBounds); };
-  }, [activeTab, webEmbedded]);
-
-  useEffect(() => {
-    if (!comparison) return;
-    const previous = document.activeElement as HTMLElement | null;
-    const focusable = () => Array.from(comparisonRef.current?.querySelectorAll<HTMLElement>('button:not([disabled]), textarea, input, select, [tabindex]:not([tabindex="-1"])') || []);
-    const frame = window.requestAnimationFrame(() => focusable()[0]?.focus());
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        setComparison(null);
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const items = focusable();
-      if (!items.length) return;
-      const index = items.indexOf(document.activeElement as HTMLElement);
-      const next = event.shiftKey ? (index <= 0 ? items.length - 1 : index - 1) : (index === items.length - 1 ? 0 : index + 1);
-      event.preventDefault();
-      items[next]?.focus();
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => {
-      window.cancelAnimationFrame(frame);
-      window.removeEventListener('keydown', onKeyDown);
-      previous?.focus?.();
-    };
-  }, [comparison]);
-
-  useEffect(() => {
-    const desktop = window.pageDockDesktop?.sideChat;
-    if (!desktop || activeTab !== 'web' || webEmbedded !== true) return;
-    if (comparison) {
-      void desktop.hideWebProvider();
-    } else {
-      void desktop.showWebProvider(activeWebProvider).catch(() => undefined);
-    }
-  }, [activeTab, activeWebProvider, comparison, webEmbedded]);
-
-  const ensureSideSession = useCallback(async (): Promise<Session> => {
+  const createOrFindSideSession = useCallback(async (): Promise<Session> => {
     if (activeSession) return activeSession;
     const availableSessions = sessionsLoaded ? sessions : await refreshSessions();
     const existing = forceNewSessionRef.current ? undefined : availableSessions[0];
@@ -495,6 +297,11 @@ export function SideChatWindow() {
     setMessages([]);
     return created;
   }, [activeSession, refreshSessions, selectedModel, selectedProvider, selectedReasoningEffort, sessions, sessionsLoaded]);
+  const ensureSideSession = useCallback(() => {
+    if (!sessionFlight.current) sessionFlight.current = createOrFindSideSession().finally(() => { sessionFlight.current = null; });
+    return sessionFlight.current;
+  }, [createOrFindSideSession]);
+
 
   const refreshActiveSession = useCallback(async (sessionId: string) => {
     const response = await fetch(`/api/sessions?folderPath=.&sessionId=${encodeURIComponent(sessionId)}`, { cache: 'no-store' });
@@ -515,10 +322,6 @@ export function SideChatWindow() {
       ? requestFingerprintRef.current.requestId
       : crypto.randomUUID();
     requestFingerprintRef.current = { fingerprint, requestId };
-    const draftBeforeSave = webResponseDraft || webModelLabel
-      ? { response: webResponseDraft, model: webModelLabel }
-      : webDraftStoreRef.current[webDraftKey];
-    const draftKeyBeforeSave = webDraftKey;
     const session = await ensureSideSession();
     const response = await fetch('/api/side-chat/questions', {
       method: 'POST',
@@ -537,161 +340,33 @@ export function SideChatWindow() {
     const savedQuestion = data.questionMessage as ChatMessage;
     const savedSession = data.session as Session;
     const isCurrentSession = activeSessionIdRef.current === session.id;
-    if (isCurrentSession) setMessages(Array.isArray(savedSession.messages) ? savedSession.messages : []);
-    setSessions((current) => current.map((item) => item.id === session.id ? data.session as Session : item));
-    const savedDraftKey = buildSideChatWebDraftKey({
-      sessionId: session.id,
-      questionMessageId: savedQuestion.id,
-      question: questionText,
-      sourceContext,
-      sourcePdfPath,
-      provider: activeWebProvider,
-    });
-    if (draftBeforeSave) {
-      webDraftStoreRef.current[savedDraftKey] = draftBeforeSave;
-    }
-    if (draftKeyBeforeSave !== savedDraftKey) delete webDraftStoreRef.current[draftKeyBeforeSave];
-    webDraftKeyRef.current = savedDraftKey;
-    persistWebDraftStore();
+    const appendQuestion = (items: ChatMessage[]) => items.some((m) => m.id === savedQuestion.id) ? items : [...items, savedQuestion];
+    if (isCurrentSession) setMessages(appendQuestion);
+    setSessions((current) => current.map((item) => item.id === session.id ? { ...item, messages: appendQuestion(item.messages) } : item));
     requestFingerprintRef.current = null;
-    if (isCurrentSession && composerFingerprintRef.current === fingerprint) {
+    if (isCurrentSession && composerFingerprintRef.current === JSON.stringify({ questionText, sourceContext: sourceContext || null, sourcePdfPath: sourcePdfPath || null })) {
       setInput('');
       setSourceContext(undefined);
       setSourcePdfPath(undefined);
+      setSelectedQuestionId(savedQuestion.id);
     }
     return { session: savedSession, question: savedQuestion };
-  }, [activeWebProvider, ensureSideSession, input, persistWebDraftStore, sourceContext, sourcePdfPath, webDraftKey, webModelLabel, webResponseDraft]);
+  }, [ensureSideSession, input, sourceContext, sourcePdfPath]);
 
-  const getWebTarget = useCallback((questionOverride?: ChatMessage) => {
-    const question = questionOverride || (input.trim() ? undefined : selectedQuestion || persistedWebQuestion);
-    const answer = question && selectedAnswer?.replyToMessageId === question.id ? selectedAnswer : undefined;
-    return {
-      question,
-      answer,
-      source: question?.sourceContext || sourceContext,
-      sourcePath: question?.sourcePdfPath || sourcePdfPath,
-    };
-  }, [input, persistedWebQuestion, selectedAnswer, selectedQuestion, sourceContext, sourcePdfPath]);
-
-  const ensureWebTarget = useCallback(async () => {
-    const current = getWebTarget();
-    if (current.question) return current;
-    if (!input.trim()) throw new Error('웹 AI에 보낼 질문을 먼저 입력해 주세요.');
-    const saved = await saveLocalQuestionForWeb();
-    if (!saved) throw new Error('질문을 로컬에 저장하지 못했습니다.');
-    return getWebTarget(saved.question);
-  }, [getWebTarget, input, saveLocalQuestionForWeb]);
-
-  const copyText = async (text: string) => {
-    if (!text.trim()) throw new Error('복사할 내용이 없습니다.');
-    if (window.pageDockDesktop?.sideChat) {
-      await window.pageDockDesktop.sideChat.copyText(text);
-    } else if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-    } else {
-      throw new Error('클립보드를 사용할 수 없습니다. 화면의 미리보기에서 직접 선택해 복사해 주세요.');
-    }
+  const ensureWebQuestion = async () => {
+    if (resolvedTarget.question) return { sessionId: activeSessionId!, question: resolvedTarget.question };
+    if (!questionFlight.current) questionFlight.current = saveLocalQuestionForWeb().finally(() => { questionFlight.current = null; });
+    const saved = await questionFlight.current;
+    if (!saved) throw new Error('질문을 입력해 주세요.');
+    return { sessionId: saved.session.id, question: saved.question };
   };
-
-  const handleCopyPrompt = async () => {
-    try {
-      const target = await ensureWebTarget();
-      const prompt = buildSideChatOutboundPrompt({ mode: promptMode, question: target.question?.content || '', sourceText: target.source?.text, answerText: target.answer?.content });
-      if (promptMode !== 'question' && !canUseSideChatSource(target.source)) throw new Error('이 모드는 한 페이지의 선택 원문이 필요합니다.');
-      if (promptMode === 'source-question-answer' && !target.answer) throw new Error('원문·질문·답변 모드는 PageDock 답변을 먼저 선택해 주세요.');
-      await copyText(prompt);
-      setStatusMessage('전송 내용을 복사했습니다. 웹 AI에서 직접 붙여넣고 전송하세요.');
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : '전송 내용을 복사하지 못했습니다.');
-    }
-  };
-
   const handleOpenWeb = async () => {
-    try {
-      await ensureWebTarget();
-      setActiveTab('web');
-      const desktop = window.pageDockDesktop?.sideChat;
-      if (desktop) {
-        const result = await desktop.showWebProvider(activeWebProvider);
-        setWebEmbedded(result.mode === 'embedded');
-        if (result.mode === 'external-fallback') setWebFailure('기본 브라우저로 열었습니다. 질문은 복사 버튼으로 직접 전달하세요.');
-      } else {
-        void window.open(activeWebDefinition.url, '_blank');
-      }
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : '웹 AI를 열지 못했습니다.');
-    }
-  };
-
-  const handleSaveWebAnswer = async () => {
-    const responseText = webResponseDraft.replace(/\r\n?/g, '\n').trim();
-    if (!responseText) {
-      setStatusMessage('웹 AI 답변을 붙여넣어 주세요.');
-      return;
-    }
-    if (responseText.length > SIDE_CHAT_MAX_RESPONSE_CHARS) {
-      setStatusMessage(`웹 AI 답변이 너무 깁니다. ${SIDE_CHAT_MAX_RESPONSE_CHARS.toLocaleString('ko-KR')}자 이하로 줄여 주세요.`);
-      return;
-    }
-    const initialSessionId = activeSessionIdRef.current;
-    try {
-      const target = await ensureWebTarget();
-      if (!target.question) throw new Error('연결할 질문이 없습니다.');
-      if (promptMode !== 'question' && !canUseSideChatSource(target.source)) throw new Error('이 모드는 한 페이지의 선택 원문이 필요합니다.');
-      if (promptMode === 'source-question-answer' && !target.answer) throw new Error('원문·질문·답변 모드는 PageDock 답변을 먼저 선택해 주세요.');
-      const promptSnapshot = buildSideChatOutboundPrompt({ mode: promptMode, question: target.question.content, sourceText: target.source?.text, answerText: target.answer?.content });
-      const operationSessionId = initialSessionId || activeSessionIdRef.current;
-      if (!operationSessionId) throw new Error('연결할 사이드채팅이 없습니다. 질문을 먼저 로컬에 저장해 주세요.');
-      setWebSaving(true);
-      const response = await fetch('/api/side-chat/perspectives', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          folderPath: '.',
-          sessionId: operationSessionId,
-          questionMessageId: target.question.id,
-          ...(target.answer ? { answerMessageId: target.answer.id } : {}),
-          provider: activeWebProvider,
-          promptMode,
-          promptSnapshot,
-          responseText,
-          model: webModelLabel.trim() || undefined,
-        }),
-      });
-      const data = await response.json();
-      if (!response.ok || !data?.perspective || !data?.session) throw new Error(data?.error || '웹 답변을 저장하지 못했습니다.');
-      const savedSession = data.session as Session;
-      setSessions((current) => current.map((item) => item.id === savedSession.id ? savedSession : item));
-      const savedDraftKey = buildSideChatWebDraftKey({
-        sessionId: savedSession.id,
-        questionMessageId: target.question.id,
-        question: target.question.content,
-        sourceContext: target.source,
-        sourcePdfPath: target.sourcePath,
-        provider: activeWebProvider,
-      });
-      delete webDraftStoreRef.current[savedDraftKey];
-      persistWebDraftStore();
-      if (activeSessionIdRef.current === operationSessionId) {
-        setMessages(savedSession.messages);
-        setWebResponseDraft('');
-        setWebModelLabel('');
-        setStatusMessage('웹 답변을 사이드채팅 질문에 저장했습니다.');
-        // WebContentsView is a native child view and can paint above HTML
-        // regardless of z-index. Hide it before mounting the comparison modal.
-        if (activeTab === 'web') await window.pageDockDesktop?.sideChat?.hideWebProvider();
-        setComparison({ question: target.question, answer: target.answer, perspective: data.perspective as SideChatWebPerspective });
-      }
-    } catch (error) {
-      setStatusMessage(error instanceof Error ? error.message : '웹 답변을 저장하지 못했습니다.');
-    } finally {
-      setWebSaving(false);
-    }
+    try { const saved = await ensureWebQuestion(); if (activeSessionIdRef.current === saved.sessionId) setActiveTab('web'); } catch (error) { setStatusMessage(error instanceof Error ? error.message : '질문 저장 실패'); }
   };
 
   const jumpToSource = async (question: ChatMessage) => {
     const source = question.sourceContext;
-    const pdfPath = question.sourcePdfPath || sourcePdfPath;
+    const pdfPath = question.sourcePdfPath;
     if (!source?.page || !pdfPath) {
       setStatusMessage('원문 경로가 보존되지 않은 기록입니다. 현재 웹 상태는 유지됩니다.');
       return;
@@ -722,7 +397,9 @@ export function SideChatWindow() {
     let session: Session | null = null;
     try {
       session = await ensureSideSession();
-      const userMessageId = makeId('side-user');
+      const fingerprint = JSON.stringify({ sessionId: session.id, prompt, originalSource, originalSourcePdfPath });
+      const userMessageId = requestFingerprintRef.current?.fingerprint === fingerprint ? requestFingerprintRef.current.requestId : makeId('side-user');
+      requestFingerprintRef.current = { fingerprint, requestId: userMessageId };
       const optimisticUser: ChatMessage = {
         id: userMessageId,
         role: 'user',
@@ -732,7 +409,7 @@ export function SideChatWindow() {
         ...(originalSourcePdfPath ? { sourcePdfPath: originalSourcePdfPath } : {}),
       };
       if (activeSessionIdRef.current === session.id) {
-        setMessages((current) => [...current, optimisticUser]);
+        setMessages((current) => current.some((m) => m.id === userMessageId) ? current : [...current, optimisticUser]);
       }
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -780,16 +457,17 @@ export function SideChatWindow() {
               ...(event.model ? { model: event.model } : {}),
               replyToMessageId: userMessageId,
             };
-            const nextMessages: ChatMessage[] = Array.isArray(event.session?.messages)
-              ? event.session!.messages
-              : [...messages, optimisticUser, fallbackAssistant];
-            if (activeSessionIdRef.current === session!.id) setMessages(nextMessages);
-            if (event.session) setSessions((current) => current.map((item) => item.id === event.session!.id ? event.session! : item));
+            const assistant = event.session?.messages.find((m) => m.role === 'assistant' && m.replyToMessageId === userMessageId) || fallbackAssistant;
+            const appendAnswer = (items: ChatMessage[]) => items.some((m) => m.id === assistant.id) ? items : [...items, assistant];
+            if (activeSessionIdRef.current === session!.id) setMessages(appendAnswer);
+            if (event.session) setSessions((current) => current.map((item) => item.id === event.session!.id ? { ...item, providerSessionId: event.session!.providerSessionId, messages: appendAnswer(item.messages) } : item));
             completed = true;
           }
         }
       }
       if (!completed) throw new Error('AI 응답이 끝나기 전에 연결이 종료되었습니다. 질문은 로컬에 남아 있습니다.');
+      if (activeSessionIdRef.current === session.id) setStreamingText('');
+      requestFingerprintRef.current = null;
       if (activeSessionIdRef.current === session.id && composerFingerprintRef.current === draftFingerprint) {
         setInput('');
         setSourceContext(undefined);
@@ -811,7 +489,9 @@ export function SideChatWindow() {
   const chooseAnswerForWeb = (message: ChatMessage) => {
     if (message.role !== 'assistant') return;
     setSelectedAnswerId(message.id);
-    setPromptMode(message.sourceContext?.scope === 'selection' ? 'source-question-answer' : 'question');
+    setSelectedQuestionId(message.replyToMessageId);
+    setSavedTargetActive(true);
+    setPromptMode(message.sourceContext?.scope === 'selection' ? 'source-question-answer' : 'question-answer');
     setActiveWebProvider('deepseek');
     setActiveTab('web');
   };
@@ -821,6 +501,7 @@ export function SideChatWindow() {
     activeSessionIdRef.current = null;
     setActiveSessionId(null);
     setMessages([]);
+    setSelectedQuestionId(undefined);
     setSelectedAnswerId(null);
     setComparison(null);
     setStatusMessage('새 사이드 대화를 준비했습니다. 기존 기록은 보존됩니다.');
@@ -845,6 +526,7 @@ export function SideChatWindow() {
       <article key={message.id} className={`flex gap-2.5 ${isUser ? 'justify-end' : ''}`}>
         {!isUser && <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary-container text-primary"><Sparkles size={13} /></div>}
         <div className={`max-w-[88%] rounded-2xl px-3.5 py-2.5 text-sm leading-6 ${isUser ? 'bg-primary text-on-primary' : 'bg-surface-container text-on-surface'}`}>
+          {isUser && <button className="mb-2 block text-[11px] underline" onClick={() => { setSelectedQuestionId(message.id); setSelectedAnswerId(null); setSavedTargetActive(true); setActiveTab('web'); }}>이 질문 웹 요청 보기</button>}
           {isUser ? <p className="whitespace-pre-wrap break-words">{message.content}</p> : <ChatMarkdown content={message.content} fontSize={14} className="chat-markdown break-words" />}
           {message.sourceContext && (
             <button type="button" onClick={() => void jumpToSource(message)} className={`mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-semibold ${isUser ? 'bg-white/15 text-white' : 'bg-surface-container-lowest text-on-surface-variant hover:bg-primary-container hover:text-primary'}`} title="Reader 원문으로 돌아가기">
@@ -873,20 +555,10 @@ export function SideChatWindow() {
       </header>
       <nav className="flex shrink-0 items-center gap-1 border-b border-outline-variant/15 bg-surface-container-low px-3 py-2" aria-label="사이드채팅 탭" role="tablist">
         <button type="button" role="tab" onClick={() => setActiveTab('pagedock')} className={`rounded-lg px-3 py-2 text-xs font-semibold ${activeTab === 'pagedock' ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:bg-surface-container'}`} aria-selected={activeTab === 'pagedock'}>PageDock AI</button>
-        {[...new Set<SideChatWebProviderId>(['deepseek', activeWebProvider])].map((providerId) => (
-          <button key={providerId} type="button" role="tab" onClick={() => { setActiveWebProvider(providerId); setActiveTab('web'); }} className={`rounded-lg px-3 py-2 text-xs font-semibold ${activeTab === 'web' && activeWebProvider === providerId ? 'bg-surface-container-lowest text-primary shadow-sm' : 'text-on-surface-variant hover:bg-surface-container'}`} aria-selected={activeTab === 'web' && activeWebProvider === providerId}>{providerLabel(providerId)}</button>
-        ))}
-        <div className="relative ml-auto">
-          <details>
-            <summary className="flex cursor-pointer list-none items-center gap-1 rounded-lg px-2.5 py-2 text-xs font-semibold text-on-surface-variant hover:bg-surface-container"><Plus size={13} /> 웹 AI 추가/열기 <ChevronDown size={12} /></summary>
-            <div className="absolute right-0 top-full z-30 mt-1 w-44 rounded-xl border border-outline-variant/25 bg-surface-container-lowest p-1 shadow-ambient">
-              {SIDE_CHAT_WEB_PROVIDERS.map((provider) => <button key={provider.id} type="button" onClick={() => { setActiveWebProvider(provider.id); setActiveTab('web'); }} className="flex w-full items-center justify-between rounded-lg px-2.5 py-2 text-left text-xs text-on-surface hover:bg-surface-container"><span>{provider.label}</span><ExternalLink size={11} /></button>)}
-            </div>
-          </details>
-        </div>
+        <button type="button" role="tab" aria-selected={activeTab === 'web'} onClick={() => setActiveTab('web')} className="rounded-lg px-3 py-2 text-xs font-semibold">웹 AI · 요청과 답변</button>
       </nav>
 
-      {activeTab === 'pagedock' ? (
+      {activeTab === 'pagedock' && (
         <div className="flex min-h-0 flex-1 flex-col">
           <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-outline-variant/15 bg-surface-container-lowest px-3 py-2">
             <select aria-label="사이드채팅 기록 선택" value={activeSessionId || ''} onChange={(event) => { forceNewSessionRef.current = false; activeSessionIdRef.current = event.target.value || null; setActiveSessionId(event.target.value || null); }} className="min-w-0 flex-1 rounded-lg border border-outline-variant/25 bg-surface px-2.5 py-2 text-xs text-on-surface outline-none focus:border-primary">
@@ -912,32 +584,22 @@ export function SideChatWindow() {
             <div className="mt-2 flex flex-wrap items-center justify-between gap-2"><p className="text-[10px] text-on-surface-variant">일반 질문은 원문 없이도 가능합니다. 웹 AI로 보낼 때는 아래에서 범위를 확인하세요.</p><button type="button" onClick={() => void handleOpenWeb()} disabled={!input.trim() && !persistedWebQuestion} className="inline-flex items-center gap-1 rounded-lg border border-ai-reference/25 px-2.5 py-1.5 text-[11px] font-semibold text-ai-reference hover:bg-ai-reference-container/50 disabled:opacity-40"><ExternalLink size={12} /> 웹 AI로 검토</button></div>
           </div>
         </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 flex-col">
-          <div className="shrink-0 space-y-2 border-b border-outline-variant/15 bg-surface-container-lowest px-3 py-3">
-            <div className="flex items-center justify-between gap-2"><div className="min-w-0"><div className="text-xs font-bold text-on-surface">{activeWebDefinition.label}</div><p className="mt-0.5 text-[10px] text-on-surface-variant">PageDock는 이 웹페이지를 읽거나 자동 전송하지 않습니다. 로그인·붙여넣기·전송은 직접 수행하세요.</p></div><button type="button" onClick={() => void handleCopyPrompt()} disabled={!webQuestionText || (promptMode !== 'question' && !canUseSideChatSource(webSource))} className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-primary px-2.5 py-2 text-[11px] font-semibold text-on-primary disabled:opacity-40"><Clipboard size={12} /> 내용 복사</button></div>
-            <div className="flex flex-wrap items-center gap-2"><label className="flex min-w-0 flex-1 items-center gap-2 text-[11px] text-on-surface-variant"><span className="shrink-0">전송 범위</span><select value={promptMode} onChange={(event) => setPromptMode(event.target.value as SideChatOutboundMode)} className="min-w-0 flex-1 rounded-lg border border-outline-variant/25 bg-surface px-2 py-1.5 text-[11px] text-on-surface" aria-label="웹 AI 전송 범위">{SIDE_CHAT_OUTBOUND_MODES.map((mode) => <option key={mode.id} value={mode.id} disabled={mode.id !== 'question' && !canUseSideChatSource(webSource)}>{mode.label}</option>)}</select></label><button type="button" onClick={() => void handleOpenWeb()} className="inline-flex items-center gap-1 rounded-lg border border-outline-variant/25 px-2.5 py-1.5 text-[11px] font-semibold text-on-surface-variant hover:bg-surface-container"><ExternalLink size={12} /> 웹 AI 열기</button></div>
-            <details className="rounded-xl border border-outline-variant/20 bg-surface-container px-3 py-2"><summary className="cursor-pointer text-[11px] font-semibold text-on-surface-variant">실제 전송 내용 미리보기 {webQuestionText ? `· ${getSideChatModeLabel(promptMode)}` : ''}</summary><pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap break-words text-[10px] leading-5 text-on-surface-variant">{webPrompt || '질문을 입력하거나 저장된 사이드채팅 질문을 선택하면 미리보기가 표시됩니다.'}</pre></details>
-            {promptMode === 'source-question-answer' && !selectedAnswer && <p className="text-[10px] text-study-unclear">비교할 PageDock AI 답변을 먼저 선택하세요. 자동으로 대화 전체를 보내지 않습니다.</p>}
-            <div className="flex flex-wrap items-end gap-2"><label className="min-w-0 flex-1 text-[10px] text-on-surface-variant">웹 답변 붙여넣기<textarea value={webResponseDraft} onChange={(event) => { const response = event.target.value; setWebResponseDraft(response); updateWebDraftStore(response, webModelLabelRef.current); }} placeholder="웹 AI에서 직접 복사한 답변을 붙여넣으세요" className="mt-1 h-16 w-full resize-y rounded-lg border border-outline-variant/25 bg-surface px-2.5 py-2 text-xs leading-5 text-on-surface outline-none focus:border-primary" aria-label="웹 AI 답변 붙여넣기" /></label><div className="flex w-40 flex-col gap-2"><label className="text-[10px] text-on-surface-variant">모델 표기 (확인 안 됨)<input value={webModelLabel} onChange={(event) => { const model = event.target.value; setWebModelLabel(model); updateWebDraftStore(webResponseDraftRef.current, model); }} placeholder="선택 사항" className="mt-1 w-full rounded-lg border border-outline-variant/25 bg-surface px-2 py-1.5 text-[11px] text-on-surface outline-none focus:border-primary" /></label><button type="button" onClick={() => void handleSaveWebAnswer()} disabled={webSaving || !webResponseDraft.trim() || webResponseDraft.trim().length > SIDE_CHAT_MAX_RESPONSE_CHARS || !activeSessionId} className="inline-flex items-center justify-center gap-1 rounded-lg bg-ai-reference px-2.5 py-2 text-[11px] font-semibold text-white disabled:opacity-40">{webSaving ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />} 질문에 답변 저장</button></div></div><p className={`text-right text-[10px] ${webResponseDraft.length > SIDE_CHAT_MAX_RESPONSE_CHARS ? 'text-error' : 'text-outline'}`}>{webResponseDraft.length.toLocaleString('ko-KR')} / {SIDE_CHAT_MAX_RESPONSE_CHARS.toLocaleString('ko-KR')}자</p>
-          </div>
-          <div ref={webHostRef} className="relative min-h-0 flex-1 overflow-hidden bg-white">
-            {webEmbedded !== true && <div className="absolute inset-0 z-10 flex items-center justify-center bg-surface px-8 text-center"><div className="max-w-md space-y-3"><FileText size={28} className="mx-auto text-outline" /><p className="text-sm font-semibold text-on-surface">{webEmbedded === null ? '웹 AI 탭을 준비하는 중...' : '기본 브라우저에서 열어 사용할 수 있습니다.'}</p><p className="text-xs leading-5 text-on-surface-variant">{webFailure || 'PageDock는 외부 사이트를 iframe으로 끼워 넣지 않습니다. 복사한 내용을 직접 붙여넣고 전송하세요.'}</p><button type="button" onClick={() => void window.open(activeWebDefinition.url, '_blank')} className="inline-flex items-center gap-1 rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary"><ExternalLink size={13} /> 기본 브라우저로 열기</button></div></div>}
-          </div>
-        </div>
       )}
+      <WebAiHandoffPanel namespace={namespace} sessionId={activeSessionId} messages={messages} target={resolvedTarget} ensureQuestion={ensureWebQuestion} initialMode={promptMode} initialProvider={activeWebProvider} visible={activeTab === 'web' && !comparison} onSource={(question) => void jumpToSource(question)}
+        onRequest={(request) => {
+          const patch = (items: ChatMessage[]) => items.map((m) => m.id === request.questionMessageId ? { ...m, sideChatWebRequests: [...(m.sideChatWebRequests || []).filter((r) => r.id !== request.id), request] } : m);
+          if (activeSessionIdRef.current === request.sessionId) setMessages(patch);
+          setSessions((items) => items.map((v) => v.id === request.sessionId ? { ...v, messages: patch(v.messages) } : v));
+        }}
+        onPerspective={(sessionId, questionId, perspective) => {
+          const patch = (items: ChatMessage[]) => items.map((m) => m.id === questionId ? { ...m, sideChatPerspectives: [...(m.sideChatPerspectives || []).filter((p) => p.id !== perspective.id), perspective] } : m);
+          if (activeSessionIdRef.current === sessionId) setMessages(patch);
+          setSessions((items) => items.map((v) => v.id === sessionId ? { ...v, messages: patch(v.messages) } : v));
+        }} />
 
       {statusMessage && <div role="status" className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-outline-variant/25 bg-surface-container-lowest px-4 py-2.5 text-xs text-on-surface shadow-ambient">{statusMessage}</div>}
 
-      {comparison && (
-        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35 px-4 py-6" onMouseDown={(event) => { if (event.target === event.currentTarget) setComparison(null); }}>
-          <section ref={comparisonRef} role="dialog" aria-modal="true" aria-labelledby="sidechat-comparison-title" className="flex max-h-full w-full max-w-5xl flex-col overflow-hidden rounded-2xl border border-outline-variant/25 bg-surface-container-lowest shadow-ambient">
-            <header className="flex shrink-0 items-start justify-between gap-3 border-b border-outline-variant/20 px-5 py-4"><div><h2 id="sidechat-comparison-title" className="text-sm font-bold text-on-surface">별도 설명 비교</h2><p className="mt-1 text-[11px] text-on-surface-variant">우열·정답·합의를 자동 판정하지 않습니다. 두 설명은 서로 다른 맥락의 참고 자료입니다.</p></div><button type="button" onClick={() => setComparison(null)} className="rounded-lg p-1.5 text-on-surface-variant hover:bg-surface-container" aria-label="비교 닫기"><X size={15} /></button></header>
-            <div className="min-h-0 overflow-y-auto px-5 py-4"><p className="text-xs font-semibold text-on-surface">원래 질문</p><p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-on-surface-variant">{comparison.question.content}</p>{comparison.question.sourceContext && <details className="mt-3 rounded-xl bg-surface-container px-3 py-2"><summary className="cursor-pointer text-xs font-semibold text-on-surface-variant">선택 원문 · p.{comparison.question.sourceContext.page}</summary><p className="mt-2 max-h-28 overflow-y-auto whitespace-pre-wrap border-l-2 border-outline-variant pl-3 text-xs leading-5 text-on-surface-variant">{comparison.question.sourceContext.text}</p></details>}<div className="mt-4 grid gap-4 md:grid-cols-2"><section className="rounded-xl border border-outline-variant/20 bg-surface p-4"><h3 className="text-[11px] font-bold text-on-surface-variant">{comparison.answer ? '첫 PageDock 설명' : 'PageDock 설명 없음'}</h3>{comparison.answer ? <div className="mt-3 text-sm leading-6 text-on-surface"><ChatMarkdown content={comparison.answer.content} fontSize={14} className="chat-markdown" /></div> : <p className="mt-3 text-xs leading-5 text-on-surface-variant">이 질문에는 아직 PageDock AI 답변이 없습니다. 웹 설명만 저장된 상태입니다.</p>}</section><section className="rounded-xl border border-ai-reference/25 bg-ai-reference-container/30 p-4"><h3 className="text-[11px] font-bold text-ai-reference">{providerLabel(comparison.perspective.provider)} · 직접 붙여넣은 설명</h3><p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-on-surface">{comparison.perspective.responseText}</p><p className="mt-3 text-[10px] text-on-surface-variant">전송 범위: {getSideChatModeLabel(comparison.perspective.promptMode)}{comparison.perspective.model ? ` · 모델 표기 ${comparison.perspective.model} (확인 안 됨)` : ''}</p></section></div></div>
-            <footer className="flex shrink-0 flex-wrap justify-end gap-2 border-t border-outline-variant/20 px-5 py-3"><button type="button" onClick={() => void jumpToSource(comparison.question)} disabled={!comparison.question.sourceContext} className="inline-flex items-center gap-1 rounded-lg border border-outline-variant/25 px-3 py-2 text-xs font-semibold text-on-surface-variant hover:bg-surface-container disabled:opacity-40"><MapPin size={13} /> 원문으로 돌아가기</button><button type="button" onClick={() => setComparison(null)} className="rounded-lg bg-primary px-3 py-2 text-xs font-semibold text-on-primary">닫기</button></footer>
-          </section>
-        </div>
-      )}
+      {comparison && <SideChatComparisonDialog question={comparison.question} messages={messages} initial={comparison.perspective} onClose={() => setComparison(null)} onSource={(question) => void jumpToSource(question)} />}
     </main>
   );
 }

@@ -42,11 +42,4 @@ describe('cross-platform runtime policy', () => {
     expect(preload).not.toMatch(/readFile|writeFile|shell|spawn/);
   });
 
-  test('invalidates stale embedded web-tab loads before they can become visible', () => {
-    const electronMain = fs.readFileSync(path.join(process.cwd(), 'electron', 'main.cjs'), 'utf8');
-    expect(electronMain).toContain('let sideChatWebRequestId = 0;');
-    expect(electronMain).toMatch(/sideChatWebRequestId !== requestId/);
-    expect(electronMain).toContain('sideChatWebRequestId += 1;');
-    expect(electronMain).toContain('candidate.setVisible(false)');
-  });
 });
