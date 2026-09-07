@@ -858,7 +858,20 @@ export function PdfViewer() {
       ?? (Number.isFinite(storedPage) && storedPage > 0
       ? Math.min(nextNumPages, Math.floor(storedPage))
       : 1);
+    setVisiblePages((current) => new Set([
+      ...current,
+      Math.max(1, initialPage - 1),
+      initialPage,
+      Math.min(nextNumPages, initialPage + 1),
+    ]));
     rememberPage(initialPage);
+    if (viewMode === 'scroll') {
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          pageShellRefs.current[initialPage]?.scrollIntoView({ block: 'start', behavior: 'auto' });
+        });
+      });
+    }
   };
 
   const handlePageRenderError = useCallback(() => {

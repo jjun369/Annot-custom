@@ -2,6 +2,8 @@
 
 ## Unreleased — Provenance-gated Knowledge promotion
 
+- Verified the packaged Windows Reader directly with a synthetic two-page PDF: both pages render readable text, page navigation and zoom work, text selection can be highlighted and memoed, the independent side-chat returns to the exact source page, and a restart retains the PDF/reading position/annotation. No user data or real web-AI send was used.
+- Fixed a scroll-mode PDF re-entry race: document load now prepares the saved page and adjacent shells and restores the saved page after the shells mount, so a persisted page opens readable in the first Reader view instead of requiring a manual page change.
 - Completed the second-AI follow-up review: side-chat web requests now persist immutable prompt/answer/source snapshots with stable ids, explicit independent-vs-review intent, copy acknowledgement, and request-bound imports. Saved requests and pasted explanations survive reload and remain portable through the existing session backup v1/v2 paths without changing SQLite or the manifest.
 - Hardened side-chat re-entry and native web tabs: local question saves are single-flight/idempotent, draft keys include the Library/session/request or bounded unsaved target, edited drafts are revision-safe, stale session/request operations cannot select or clear a newer task, and the Electron `WebContentsView` controller single-flights loads, clamps bounds, hides on overlays/minimize, and cleans up each provider independently.
 - Hardened side-chat re-entry: a newly typed question cannot inherit an older web target, web answer/model drafts stay scoped to their session/question/provider across popup reopen, and stale embedded-tab loads or native views cannot overwrite the current tab/overlay.
