@@ -18,6 +18,7 @@ let sideChatWebController = null;
 let serverProcess = null;
 let baseUrl = null;
 let isQuitting = false;
+let desktopToken = null;
 
 app.setName('PageDock');
 app.setAppUserModelId('app.pagedock.desktop');
@@ -124,6 +125,7 @@ function waitForServer(url, token, timeoutMs = 30000) {
 async function startProductionServer() {
   const port = await getFreePort();
   const token = randomBytes(32).toString('hex');
+  desktopToken = token;
   const serverDirectory = path.join(process.resourcesPath, 'app');
   const serverEntry = path.join(serverDirectory, 'server.js');
   baseUrl = `http://127.0.0.1:${port}`;
@@ -164,7 +166,9 @@ async function startProductionServer() {
   session.defaultSession.webRequest.onBeforeSendHeaders(
     { urls: [`${baseUrl}/*`] },
     (details, callback) => {
-      details.requestHeaders['x-pagedock-desktop-token'] = token;
+      if (details.url === baseUrl || details.url.startsWith(`${baseUrl}/`)) {
+        details.requestHeaders['x-pagedock-desktop-token'] = token;
+      }
       callback({ requestHeaders: details.requestHeaders });
     },
   );
@@ -223,7 +227,8 @@ function createWindow(url) {
     }
   });
   mainWindow.on('closed', () => { mainWindow = null; });
-  void mainWindow.loadURL(url);
+  void mainWindow.loadURL(`${url}/`, desktopToken ? { extraHeaders: `x-pagedock-desktop-token: ${desktopToken}\r\n` } : undefined)
+    .catch((error) => console.error(`[PageDock] main load failed: ${error instanceof Error ? error.message : String(error)}`));
 }
 
 async function openDeepSeekWebWindow() {

@@ -2,6 +2,8 @@
 
 ## Unreleased — Provenance-gated Knowledge promotion
 
+- Simplified the sidechat web handoff surface around independent `질문 복사` and `답변 가져오기` actions. Request details and the exact outbound preview remain recoverable, while draft answers are kept intact and visibly rejected at the 80,000-character boundary instead of being silently truncated.
+- Added an optional sidechat-only `내 이해 / 아직 확인할 점` reflection on the canonical user question. It is explicitly saved with the existing locked session mutation, survives existing backup round trips, remains separate from PDF/Knowledge/highlight state, and is excluded from PageDock/web outbound prompts.
 - Verified the packaged Windows Reader directly with a synthetic two-page PDF: both pages render readable text, page navigation and zoom work, text selection can be highlighted and memoed, the independent side-chat returns to the exact source page, and a restart retains the PDF/reading position/annotation. No user data or real web-AI send was used.
 - Fixed a scroll-mode PDF re-entry race: document load now prepares the saved page and adjacent shells and restores the saved page after the shells mount, so a persisted page opens readable in the first Reader view instead of requiring a manual page change.
 - Completed the second-AI follow-up review: side-chat web requests now persist immutable prompt/answer/source snapshots with stable ids, explicit independent-vs-review intent, copy acknowledgement, and request-bound imports. Saved requests and pasted explanations survive reload and remain portable through the existing session backup v1/v2 paths without changing SQLite or the manifest.

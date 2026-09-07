@@ -3,18 +3,20 @@ import { useEffect, useRef, useState } from 'react';
 import { ChatMarkdown } from '@/components/workspace/ChatMarkdown';
 import { SIDE_CHAT_WEB_PROVIDERS, getSideChatModeLabel } from '@/lib/side-chat';
 import type { ChatMessage, SideChatWebPerspective } from '@/types';
+import { SideChatReflectionEditor } from './SideChatReflectionEditor';
 
-export function SideChatComparisonDialog({ question, messages, initial, onClose, onSource }: {
+export function SideChatComparisonDialog({ question, messages, initial, onClose, onSource, onReflectionSave }: {
   question: ChatMessage; messages: ChatMessage[]; initial?: SideChatWebPerspective;
   onClose: () => void; onSource: (question: ChatMessage) => void;
+  onReflectionSave: (questionId: string, text: string) => Promise<void>;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const answers = messages.filter((m) => m.role === 'assistant' && m.replyToMessageId === question.id)
     .map((m) => ({ id: m.id, label: `PageDock · ${m.model || '모델 확인 안 됨'} · ${m.timestamp}`, text: m.content, source: question }));
   const options = [...answers, ...(question.sideChatPerspectives || []).map((p) => {
     const request = question.sideChatWebRequests?.find((r) => r.id === p.requestId);
-    return { id: p.id, label: `${SIDE_CHAT_WEB_PROVIDERS.find((v) => v.id === p.provider)?.label} · 직접 붙여넴 · ${getSideChatModeLabel(p.promptMode)}${p.model ? ` · ${p.model} (미확인)` : ''} · ${p.importedAt}`, text: p.responseText,
-      source: request ? { ...question, content: request.questionText, sourceContext: request.sourceContext, sourcePdfPath: request.sourcePdfPath } : question };
+    return { id: p.id, label: `${SIDE_CHAT_WEB_PROVIDERS.find((v) => v.id === p.provider)?.label} · 직접 붙여넣은 설명 · ${getSideChatModeLabel(p.promptMode)}${p.model ? ` · ${p.model} (미확인)` : ''} · ${p.importedAt}`, text: p.responseText,
+      source: request ? { ...question, content: request.questionText, sourceContext: request.sourceContext || question.sourceContext, sourcePdfPath: request.sourcePdfPath || question.sourcePdfPath } : question };
   })];
   const [left, setLeft] = useState(answers[0]?.id || initial?.id || options[0]?.id || '');
   const [right, setRight] = useState(answers.length ? initial?.id || '' : '');
@@ -23,7 +25,7 @@ export function SideChatComparisonDialog({ question, messages, initial, onClose,
   useEffect(() => { closeRef.current = onClose; }, [onClose]);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    const items = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('button:not([disabled]), select, summary, [tabindex="0"]') || []).filter((el) => el.getClientRects().length > 0);
+    const items = () => Array.from(ref.current?.querySelectorAll<HTMLElement>('button:not([disabled]), select, textarea, input, summary, [tabindex="0"]') || []).filter((el) => el.getClientRects().length > 0);
     const frame = requestAnimationFrame(() => items()[0]?.focus());
     const key = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { e.preventDefault(); closeRef.current(); }
@@ -48,9 +50,10 @@ export function SideChatComparisonDialog({ question, messages, initial, onClose,
       <div className="flex justify-between gap-3"><h2 className="font-semibold">{single ? '저장된 설명' : '설명 비교'}</h2><button onClick={onClose}>닫기</button></div>
       <p className="mt-1 text-xs text-on-surface-variant">설명은 서로 다른 맥락의 참고 자료입니다. 우열·정답·합의를 자동 판단하지 않습니다.</p>
       <div className="min-h-0 overflow-y-auto py-3"><p className="whitespace-pre-wrap text-sm">{question.content}</p>
-        {question.sourceContext && <details className="my-3 text-xs"><summary>선택 원문 · p.{question.sourceContext.page}</summary><p className="whitespace-pre-wrap py-2">{question.sourceContext.text}</p></details>}
+        {question.sourceContext && <details className="my-3 text-xs"><summary>선택 원문 · p.{question.sourceContext.page}</summary><p className="whitespace-pre-wrap py-2">{question.sourceContext.text}</p><button className="text-primary" onClick={() => onSource(question)}>이 선택 영역의 원문으로 돌아가기</button></details>}
         <button className="my-3 text-xs text-primary" onClick={() => setSingle(!single)}>{single ? '두 설명 직접 선택하여 비교' : '한 설명만 읽기'}</button>
         <div className={`grid gap-3 ${single ? '' : 'lg:grid-cols-2'}`}>{show(left, setLeft, '왼쪽')}{!single && show(right, setRight, '오른쪽')}</div>
+        <SideChatReflectionEditor questionId={question.id} initialText={question.sideChatReflection?.text || ''} onSave={(text) => onReflectionSave(question.id, text)} />
       </div>
     </div>
   </div>;

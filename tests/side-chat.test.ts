@@ -271,6 +271,12 @@ describe('independent side chat storage and outbound contract', () => {
     }));
     expect(mutatedPreview.status).toBe(400);
 
+    const atLimit = await savePerspective(request('http://localhost/api/side-chat/perspectives', {
+      ...perspectiveBody,
+      responseText: 'x'.repeat(SIDE_CHAT_MAX_RESPONSE_CHARS),
+    }));
+    expect(atLimit.status).toBe(200);
+
     const overLimit = await savePerspective(request('http://localhost/api/side-chat/perspectives', {
       ...perspectiveBody,
       responseText: 'x'.repeat(SIDE_CHAT_MAX_RESPONSE_CHARS + 1),
@@ -280,6 +286,7 @@ describe('independent side chat storage and outbound contract', () => {
     expect(saved?.messages[0]?.sideChatPerspectives?.map((item) => item.responseText)).toEqual([
       'Synthetic DeepSeek explanation A.',
       'Synthetic DeepSeek explanation B.',
+      'x'.repeat(SIDE_CHAT_MAX_RESPONSE_CHARS),
     ]);
 
     const { createPortableBackup } = await import('@/lib/library-backup');
@@ -287,7 +294,7 @@ describe('independent side chat storage and outbound contract', () => {
     const backedUpSessions = JSON.parse(await backupZip.file('library/.annot/sessions.json')!.async('string')) as Array<{ id: string; sessionKind: string; messages: Array<{ sideChatPerspectives?: unknown[] }> }>;
     const backedUpSideSession = backedUpSessions.find((item) => item.id === sideSession.id);
     expect(backedUpSideSession?.sessionKind).toBe('sidechat');
-    expect(backedUpSideSession?.messages[0]?.sideChatPerspectives).toHaveLength(2);
+    expect(backedUpSideSession?.messages[0]?.sideChatPerspectives).toHaveLength(3);
   });
 
   it('keeps a side question and pasted answer while a PageDock turn is waiting', async () => {
@@ -335,5 +342,69 @@ describe('independent side chat storage and outbound contract', () => {
     expect(final?.messages.filter((message) => message.id === 'side-primary-question-1')).toHaveLength(1);
     expect(final?.messages.some((message) => message.role === 'assistant' && message.content === 'Synthetic PageDock side explanation.')).toBe(true);
     expect(final?.messages.find((message) => message.id === question!.id)?.sideChatPerspectives?.[0]?.responseText).toBe('Synthetic manual answer while primary waits.');
+  });
+
+  it('stores optional reflections on the side question without changing outbound prompts', async () => {
+    const sideSession = await makeSideSession('Synthetic reflection side chat');
+    const { POST: saveQuestion } = await import('@/app/api/side-chat/questions/route');
+    const questionResponse = await saveQuestion(request('http://localhost/api/side-chat/questions', {
+      folderPath: '.', sessionId: sideSession.id, requestId: 'reflection-question-1',
+      prompt: 'Why does this bounded result matter?', sourceContext,
+    }));
+    const question = (await questionResponse.json()).questionMessage as import('@/types').ChatMessage;
+    const { POST: saveReflection } = await import('@/app/api/side-chat/reflections/route');
+    const reflectionResponse = await saveReflection(request('http://localhost/api/side-chat/reflections', {
+      folderPath: '.', sessionId: sideSession.id, questionMessageId: question.id,
+      text: 'My understanding: the bounded result is useful because it isolates the measured effect.',
+    }));
+    expect(reflectionResponse.status).toBe(200);
+    const reflectionPayload = await reflectionResponse.json();
+    expect(reflectionPayload.reflection.text).toContain('isolates the measured effect');
+
+    const { buildSideChatOutboundPrompt, SIDE_CHAT_MAX_REFLECTION_CHARS } = await import('@/lib/side-chat');
+    const prompt = buildSideChatOutboundPrompt({ mode: 'source-question', question: question.content, sourceText: sourceContext.text });
+    expect(prompt).not.toContain('isolates the measured effect');
+    expect((await saveReflection(request('http://localhost/api/side-chat/reflections', {
+      folderPath: '.', sessionId: sideSession.id, questionMessageId: question.id,
+      text: 'x'.repeat(SIDE_CHAT_MAX_REFLECTION_CHARS + 1),
+    }))).status).toBe(400);
+
+    const saved = await sessions.getSession('.', sideSession.id);
+    expect(saved?.messages.find((message) => message.id === question.id)?.sideChatReflection?.text).toContain('isolates the measured effect');
+
+    const backup = await JSZip.loadAsync(await (await import('@/lib/library-backup')).createPortableBackup(false));
+    const backupSessions = JSON.parse(await backup.file('library/.annot/sessions.json')!.async('string')) as Array<{ id: string; messages: Array<{ sideChatReflection?: unknown }> }>;
+    expect(backupSessions.find((item) => item.id === sideSession.id)?.messages[0]?.sideChatReflection).toMatchObject({ text: expect.any(String), updatedAt: expect.any(String) });
+  });
+
+  it('keeps a reflection and a pasted answer when their latest-state mutations race', async () => {
+    const sideSession = await makeSideSession('Synthetic reflection race');
+    const { POST: saveQuestion } = await import('@/app/api/side-chat/questions/route');
+    const questionResponse = await saveQuestion(request('http://localhost/api/side-chat/questions', {
+      folderPath: '.', sessionId: sideSession.id, requestId: 'reflection-race-question',
+      prompt: 'Explain the synthetic selection.', sourceContext,
+    }));
+    const question = (await questionResponse.json()).questionMessage as import('@/types').ChatMessage;
+    const { POST: saveReflection } = await import('@/app/api/side-chat/reflections/route');
+    const { POST: savePerspective } = await import('@/app/api/side-chat/perspectives/route');
+    const { buildSideChatOutboundPrompt } = await import('@/lib/side-chat');
+    const [reflectionResult, perspectiveResult] = await Promise.all([
+      saveReflection(request('http://localhost/api/side-chat/reflections', {
+        folderPath: '.', sessionId: sideSession.id, questionMessageId: question.id,
+        text: 'Keep this note in the independent side conversation.',
+      })),
+      savePerspective(request('http://localhost/api/side-chat/perspectives', {
+        folderPath: '.', sessionId: sideSession.id, questionMessageId: question.id,
+        provider: 'deepseek', promptMode: 'source-question',
+        promptSnapshot: buildSideChatOutboundPrompt({ mode: 'source-question', question: question.content, sourceText: sourceContext.text }),
+        responseText: 'Synthetic independent pasted answer.',
+      })),
+    ]);
+    expect(reflectionResult.status).toBe(200);
+    expect(perspectiveResult.status).toBe(200);
+    const final = await sessions.getSession('.', sideSession.id);
+    const finalQuestion = final?.messages.find((message) => message.id === question.id);
+    expect(finalQuestion?.sideChatReflection?.text).toBe('Keep this note in the independent side conversation.');
+    expect(finalQuestion?.sideChatPerspectives?.map((item) => item.responseText)).toEqual(['Synthetic independent pasted answer.']);
   });
 });

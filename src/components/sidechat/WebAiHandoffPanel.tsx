@@ -6,12 +6,13 @@ import { useSideChatRequestDrafts } from './useSideChatRequestDrafts';
 import { SideChatComparisonDialog } from './SideChatComparisonDialog';
 import { buildSideChatWebDraftKey } from '@/lib/side-chat';
 
-export function WebAiHandoffPanel({ namespace, sessionId, messages, target, ensureQuestion, onRequest, onPerspective, onSource, visible, initialProvider, initialMode }: {
+export function WebAiHandoffPanel({ namespace, sessionId, messages, target, ensureQuestion, onRequest, onPerspective, onReflectionSave, onSource, visible, initialProvider, initialMode }: {
   namespace: string; sessionId: string | null; messages: ChatMessage[];
   target: ReturnType<typeof import('@/lib/side-chat').resolveSideChatTarget>;
   ensureQuestion: () => Promise<{ sessionId: string; question: ChatMessage }>;
   onRequest: (request: SideChatWebRequest) => void;
   onPerspective: (sessionId: string, questionId: string, perspective: SideChatWebPerspective) => void;
+  onReflectionSave: (sessionId: string, questionId: string, text: string) => Promise<void>;
   onSource: (question: ChatMessage) => void; visible: boolean;
   initialProvider: SideChatWebProviderId; initialMode: SideChatOutboundMode;
 }) {
@@ -22,6 +23,7 @@ export function WebAiHandoffPanel({ namespace, sessionId, messages, target, ensu
   const [status, setStatus] = useState('');
   const [busy, setBusy] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [comparison, setComparison] = useState<{ question: ChatMessage; perspective: SideChatWebPerspective } | null>(null);
   const [viewState, setViewState] = useState('idle');
   const [retry, setRetry] = useState(0);
@@ -45,6 +47,7 @@ export function WebAiHandoffPanel({ namespace, sessionId, messages, target, ensu
   useEffect(() => { setSelected(''); }, [target.text, target.answer?.id]);
   useEffect(() => { setMode(initialMode); setProvider(initialProvider); }, [initialMode, initialProvider, target.answer?.id]);
   useEffect(() => { setOpened((v) => v.includes(provider) ? v : [...v, provider]); }, [provider]);
+  useEffect(() => { if (draft.response || draft.model) setImportOpen(true); }, [draftId, draft.response, draft.model]);
   useEffect(() => {
     const desktop = window.pageDockDesktop?.sideChat;
     if (!desktop) { setViewState('external'); return; }
@@ -103,8 +106,8 @@ export function WebAiHandoffPanel({ namespace, sessionId, messages, target, ensu
       drafts.clearSaved(capturedId, captured);
       if (current.current.sessionId === request.sessionId && current.current.selected === request.id) {
         const original = messages.find((m) => m.id === request.questionMessageId)!;
-        const question = { ...original, content: request.questionText, sourceContext: request.sourceContext, sourcePdfPath: request.sourcePdfPath,
-          sideChatPerspectives: [...(original.sideChatPerspectives || []).filter((p) => p.id !== data.perspective.id), data.perspective] };
+        const question = { ...original, content: request.questionText, sourceContext: request.sourceContext || original.sourceContext, sourcePdfPath: request.sourcePdfPath || original.sourcePdfPath,
+          sideChatPerspectives: [...(original.sideChatPerspectives || []).filter((p) => p.id !== data.perspective.id), data.perspective], sideChatReflection: original.sideChatReflection };
         setComparison({ question, perspective: data.perspective });
         setStatus('선택한 요청에 답변을 저장했습니다.');
       }
@@ -112,22 +115,50 @@ export function WebAiHandoffPanel({ namespace, sessionId, messages, target, ensu
     finally { saveOperation.current = false; setSaving(false); }
   };
   const control = 'rounded-lg border border-outline-variant/30 bg-surface px-3 py-2 text-xs';
+  const requestLabel = request
+    ? `${label(request.provider)} · ${getSideChatModeLabel(request.promptMode)} · ${request.copiedAt ? '복사됨' : '준비됨'}`
+    : `${label(provider)} · ${getSideChatModeLabel(mode)} · 새 요청`;
+  const questionLabel = request?.questionText || target.text || 'PageDock 탭에서 질문을 입력하거나 저장된 질문을 선택하세요.';
   return <div className={`min-h-0 flex-1 flex-col ${visible ? 'flex' : 'hidden'}`}>
     <div className="flex shrink-0 flex-wrap gap-2 px-3 py-2">{opened.map((id) => <span key={id} className={control}><button aria-pressed={id === provider} onClick={() => { setWebEnabled(true); setProvider(id); }}>{label(id)}</button><button aria-label={`${label(id)} 탭 닫기`} className="ml-2" onClick={() => { setOpened((v) => v.filter((p) => p !== id)); if (provider === id) { const next = opened.find((p) => p !== id); if (next) setProvider(next); else setWebEnabled(false); } }}>×</button></span>)}
       <select className={control} aria-label="웹 AI 추가" value="" onChange={(e) => { const id = e.target.value as SideChatWebProviderId; setOpened((v) => v.includes(id) ? v : [...v, id]); setProvider(id); setWebEnabled(true); }}><option value="">웹 AI 추가</option>{SIDE_CHAT_WEB_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
     </div>
-    <div className="max-h-[60%] shrink-0 space-y-2 overflow-y-auto border-y p-3">
-      <label className="block text-xs">답변을 붙일 요청<select aria-label="저장된 웹 요청" className={`${control} ml-2 max-w-full`} value={request?.id || ''} onChange={(e) => { setSelected(e.target.value); const r = requests.find((v) => v.id === e.target.value); if (r) setProvider(r.provider); }}><option value="">새 요청 준비</option>{[...requests].reverse().map((r) => <option key={r.id} value={r.id}>{label(r.provider)} · {r.questionText.slice(0, 55)} · {getSideChatModeLabel(r.promptMode)} · {r.copiedAt ? '복사됨' : '준비됨'} · {r.preparedAt}</option>)}</select></label>
-      {!request && <select aria-label="전송 범위" className={control} value={mode} onChange={(e) => setMode(e.target.value as SideChatOutboundMode)}>{SIDE_CHAT_OUTBOUND_MODES.map((m) => <option key={m.id} value={m.id} disabled={(sideChatModeUsesSource(m.id) && !canUseSideChatSource(target.source)) || (sideChatModeUsesAnswer(m.id) && !target.answer)}>{m.label}</option>)}</select>}
-      <p className="text-xs">{request ? request.questionText : target.text || 'PageDock 탭에서 질문을 입력하거나 저장된 질문을 선택하세요.'} {(request?.sourceContext || target.source)?.page ? `· p.${(request?.sourceContext || target.source)?.page}` : ''}</p>
-      <div className="flex gap-2"><button className={control} onClick={() => void copy()} disabled={busy || (!request && !valid)}>{busy ? '준비 중…' : request ? '이 요청 다시 복사' : '요청 저장하고 복사'}</button><button className={control} onClick={() => { setWebEnabled(true); setOpened((v) => v.includes(provider) ? v : [...v, provider]); setRetry((v) => v + 1); }}>웹 탭 열기 / 재시도</button><button className={control} onClick={() => window.open(destination.url, '_blank', 'noopener,noreferrer')}>기본 브라우저로 열기</button></div>
-      <details><summary className="cursor-pointer text-xs">실제 전송 내용 미리보기 · {getSideChatModeLabel(request?.promptMode || mode)}</summary><pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-xs">{prompt}</pre></details>
-      <textarea aria-label="요청 답변 붙여넣기" className={`${control} h-20 w-full`} value={draft.response} onChange={(e) => drafts.write(draftId, { ...draft, response: e.target.value })} placeholder="웹에서 직접 복사한 답변" />
-      <div className="flex flex-wrap gap-2"><input className={control} aria-label="모델 표기 미확인" value={draft.model} onChange={(e) => drafts.write(draftId, { ...draft, model: e.target.value })} placeholder="모델 표기 (미확인·선택)" /><button className={control} onClick={() => void save()} disabled={!request || saving || !draft.response.trim() || draft.response.length > SIDE_CHAT_MAX_RESPONSE_CHARS}>{saving ? '저장 중…' : `${request ? label(request.provider) : '요청 선택 후'} 답변 저장`}</button><span className="text-xs">{draft.response.length.toLocaleString()} / 80,000자</span></div>
-      <p className="text-[11px]">입력 초안은 이 기기에만 보관됩니다. 저장된 요청·답변은 Library 백업에 포함됩니다. 복사는 웹 전송·로그인을 증명하지 않습니다.</p>
+    <div className="shrink-0 space-y-2 border-y p-3">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="line-clamp-2 text-xs font-semibold text-on-surface" title={questionLabel}>{questionLabel}</p>
+          <p className="mt-1 text-[10px] text-on-surface-variant">답변 귀속: {requestLabel}{(request?.sourceContext || target.source)?.page ? ` · 원문 p.${(request?.sourceContext || target.source)?.page}` : ''}</p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-1.5">
+          <button className="rounded-lg bg-primary px-2.5 py-2 text-[11px] font-semibold text-on-primary disabled:opacity-40" onClick={() => void copy()} disabled={busy || (!request && !valid)}>{busy ? '준비 중…' : request ? '질문 다시 복사' : '질문 복사'}</button>
+          <button className="rounded-lg border border-ai-reference/35 px-2.5 py-2 text-[11px] font-semibold text-ai-reference" onClick={() => setImportOpen((value) => !value)} aria-expanded={importOpen}>{draft.response ? `작성 중 답변 · ${draft.response.length.toLocaleString()}자` : '답변 가져오기'}</button>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        <button className={control} onClick={() => { setWebEnabled(true); setOpened((v) => v.includes(provider) ? v : [...v, provider]); setRetry((v) => v + 1); }}>웹 탭 열기 / 재시도</button>
+        <button className={control} onClick={() => window.open(destination.url, '_blank', 'noopener,noreferrer')}>기본 브라우저로 열기</button>
+      </div>
+      <details>
+        <summary className="cursor-pointer text-xs">요청 선택·전송 범위·상세 정보</summary>
+        <div className="mt-2 space-y-2">
+          <label className="block text-xs">답변을 붙일 요청<select aria-label="저장된 웹 요청" className={`${control} ml-2 max-w-full`} value={request?.id || ''} onChange={(e) => { setSelected(e.target.value); const r = requests.find((v) => v.id === e.target.value); if (r) setProvider(r.provider); }}><option value="">새 요청 준비</option>{[...requests].reverse().map((r) => <option key={r.id} value={r.id}>{label(r.provider)} · {r.questionText.slice(0, 55)} · {getSideChatModeLabel(r.promptMode)} · {r.copiedAt ? '복사됨' : '준비됨'}</option>)}</select></label>
+          {!request && <select aria-label="전송 범위" className={control} value={mode} onChange={(e) => setMode(e.target.value as SideChatOutboundMode)}>{SIDE_CHAT_OUTBOUND_MODES.map((m) => <option key={m.id} value={m.id} disabled={(sideChatModeUsesSource(m.id) && !canUseSideChatSource(target.source)) || (sideChatModeUsesAnswer(m.id) && !target.answer)}>{m.label}</option>)}</select>}
+          <p className="text-[11px] text-on-surface-variant">외부에 복사되는 내용은 아래 미리보기의 질문·선택 범위뿐입니다. 웹 탭의 전송과 로그인은 직접 진행하세요.</p>
+          <details><summary className="cursor-pointer text-xs">실제 전송 내용 미리보기 · {getSideChatModeLabel(request?.promptMode || mode)}</summary><pre className="mt-2 max-h-32 overflow-auto whitespace-pre-wrap text-xs">{prompt}</pre></details>
+          {request && <p className="text-[10px] text-on-surface-variant">준비 시각: {new Date(request.preparedAt).toLocaleString()} · 요청 귀속: {label(request.provider)} · 모델: 웹에서 확인하지 않음</p>}
+        </div>
+      </details>
+      {importOpen && <div className="rounded-lg border border-ai-reference/20 bg-ai-reference-container/20 p-2.5">
+        <p className="text-xs font-semibold">웹 답변을 직접 붙여넣기</p>
+        <p className="mt-1 text-[10px] text-on-surface-variant">현재 요청: {request ? `${label(request.provider)} · ${request.questionText.slice(0, 90)}` : '먼저 질문을 복사해 요청을 준비하세요.'}</p>
+        <textarea aria-label="요청 답변 붙여넣기" className={`${control} mt-2 h-24 w-full resize-y`} value={draft.response} disabled={saving} onChange={(e) => drafts.write(draftId, { ...draft, response: e.target.value })} placeholder="웹에서 직접 복사한 답변" />
+        <div className="mt-2 flex flex-wrap items-center gap-2"><input className={control} aria-label="모델 표기 미확인" value={draft.model} disabled={saving} onChange={(e) => drafts.write(draftId, { ...draft, model: e.target.value })} placeholder="모델 표기 (미확인·선택)" /><button className={control} onClick={() => void save()} disabled={!request || saving || !draft.response.trim() || draft.response.length > SIDE_CHAT_MAX_RESPONSE_CHARS}>{saving ? '저장 중…' : `${request ? label(request.provider) : '요청 선택 후'} 답변 저장`}</button><span className={`text-[10px] ${draft.response.length > SIDE_CHAT_MAX_RESPONSE_CHARS ? 'font-semibold text-error' : 'text-on-surface-variant'}`}>{draft.response.length.toLocaleString()} / {SIDE_CHAT_MAX_RESPONSE_CHARS.toLocaleString()}자</span></div>
+      </div>}
+      {!importOpen && draft.response && <button className="text-left text-[10px] font-semibold text-ai-reference" onClick={() => setImportOpen(true)}>작성 중인 답변 열기 · {draft.response.length.toLocaleString()}자</button>}
+      <p className="text-[10px] text-on-surface-variant">입력 초안은 이 기기에만 보관됩니다. 저장된 요청·답변은 Library 백업에 포함됩니다. 저장된 답변은 사이드채팅 안에서만 비교됩니다.</p>
       {status && <p role="status" className="text-xs text-primary">{status}</p>}
     </div>
     <div ref={host} className="relative min-h-0 flex-1 bg-surface-container">{viewState !== 'embedded' && <p className="p-4 text-xs">{viewState === 'loading' ? '웹 페이지를 여는 중…' : '웹 탭을 다시 열거나 기본 브라우저를 사용하세요. 로그인과 전송은 직접 진행하세요.'}</p>}</div>
-    {comparison && <SideChatComparisonDialog question={comparison.question} messages={messages} initial={comparison.perspective} onClose={() => setComparison(null)} onSource={onSource} />}
+    {comparison && <SideChatComparisonDialog question={comparison.question} messages={messages} initial={comparison.perspective} onClose={() => setComparison(null)} onSource={onSource} onReflectionSave={(questionId, text) => onReflectionSave(request?.sessionId || sessionId || '', questionId, text)} />}
   </div>;
 }

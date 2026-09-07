@@ -59,6 +59,7 @@ interface SideChatDraft {
 }
 
 interface WebComparisonState {
+  sessionId: string;
   question: ChatMessage;
   answer?: ChatMessage;
   perspective: SideChatWebPerspective;
@@ -314,6 +315,25 @@ function SideChatContent({ namespace }: { namespace: string }) {
     return data as Session;
   }, []);
 
+  const saveReflection = useCallback(async (sessionId: string, questionId: string, text: string) => {
+    const response = await fetch('/api/side-chat/reflections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folderPath: '.', sessionId, questionMessageId: questionId, text }),
+    });
+    const data = await response.json().catch(() => null) as { error?: string; reflection?: ChatMessage['sideChatReflection'] } | null;
+    if (!response.ok) throw new Error(data?.error || '사이드채팅 메모를 저장하지 못했습니다.');
+    const patch = (items: ChatMessage[]) => items.map((message) => {
+      if (message.id !== questionId) return message;
+      const next = { ...message };
+      if (data?.reflection) next.sideChatReflection = data.reflection;
+      else delete next.sideChatReflection;
+      return next;
+    });
+    if (activeSessionIdRef.current === sessionId) setMessages(patch);
+    setSessions((current) => current.map((session) => session.id === sessionId ? { ...session, messages: patch(session.messages) } : session));
+  }, []);
+
   const saveLocalQuestionForWeb = useCallback(async (): Promise<{ session: Session; question: ChatMessage } | null> => {
     const questionText = input.trim();
     if (!questionText) return null;
@@ -511,7 +531,7 @@ function SideChatContent({ namespace }: { namespace: string }) {
     <div key={perspective.id} className="mt-2 rounded-xl border border-ai-reference/20 bg-ai-reference-container/35 p-2.5">
       <div className="flex items-center justify-between gap-2">
         <span className="text-[10px] font-bold text-ai-reference">{providerLabel(perspective.provider)} · 직접 붙여넣은 설명</span>
-        <button type="button" onClick={() => setComparison({ question, answer: messages.find((message) => message.replyToMessageId === question.id && message.role === 'assistant'), perspective })} className="rounded-md px-1.5 py-1 text-[10px] font-semibold text-ai-reference hover:bg-ai-reference-container" aria-label="웹 답변 비교 보기">
+        <button type="button" onClick={() => activeSessionIdRef.current && setComparison({ sessionId: activeSessionIdRef.current, question, answer: messages.find((message) => message.replyToMessageId === question.id && message.role === 'assistant'), perspective })} className="rounded-md px-1.5 py-1 text-[10px] font-semibold text-ai-reference hover:bg-ai-reference-container" aria-label="웹 답변 비교 보기">
           <ArrowLeftRight size={11} className="mr-1 inline" /> 비교
         </button>
       </div>
@@ -586,6 +606,7 @@ function SideChatContent({ namespace }: { namespace: string }) {
         </div>
       )}
       <WebAiHandoffPanel namespace={namespace} sessionId={activeSessionId} messages={messages} target={resolvedTarget} ensureQuestion={ensureWebQuestion} initialMode={promptMode} initialProvider={activeWebProvider} visible={activeTab === 'web' && !comparison} onSource={(question) => void jumpToSource(question)}
+        onReflectionSave={saveReflection}
         onRequest={(request) => {
           const patch = (items: ChatMessage[]) => items.map((m) => m.id === request.questionMessageId ? { ...m, sideChatWebRequests: [...(m.sideChatWebRequests || []).filter((r) => r.id !== request.id), request] } : m);
           if (activeSessionIdRef.current === request.sessionId) setMessages(patch);
@@ -599,7 +620,7 @@ function SideChatContent({ namespace }: { namespace: string }) {
 
       {statusMessage && <div role="status" className="fixed bottom-4 left-1/2 z-50 -translate-x-1/2 rounded-xl border border-outline-variant/25 bg-surface-container-lowest px-4 py-2.5 text-xs text-on-surface shadow-ambient">{statusMessage}</div>}
 
-      {comparison && <SideChatComparisonDialog question={comparison.question} messages={messages} initial={comparison.perspective} onClose={() => setComparison(null)} onSource={(question) => void jumpToSource(question)} />}
+      {comparison && <SideChatComparisonDialog question={comparison.question} messages={messages} initial={comparison.perspective} onClose={() => setComparison(null)} onSource={(question) => void jumpToSource(question)} onReflectionSave={(questionId, text) => saveReflection(comparison.sessionId, questionId, text)} />}
     </main>
   );
 }

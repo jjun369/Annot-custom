@@ -4,6 +4,7 @@ export const SIDE_CHAT_FOLDER_PATH = '.';
 export const SIDE_CHAT_PROMPT_VERSION = 'pagedock-sidechat-v2';
 export const SIDE_CHAT_MAX_RESPONSE_CHARS = 80_000;
 export const SIDE_CHAT_MAX_PROMPT_CHARS = 100_000;
+export const SIDE_CHAT_MAX_REFLECTION_CHARS = 4_000;
 
 function hashDraftIdentity(value: string): string {
   // This is only a compact localStorage key, not a security hash.

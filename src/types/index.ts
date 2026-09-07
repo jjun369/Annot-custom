@@ -149,6 +149,13 @@ export interface ChatMessage {
   /** Explicitly pasted answers from the isolated web-AI tabs in a sidechat. */
   sideChatPerspectives?: SideChatWebPerspective[];
   sideChatWebRequests?: SideChatWebRequest[];
+  /** Optional user reflection kept only on this sidechat question. */
+  sideChatReflection?: SideChatReflection;
+}
+
+export interface SideChatReflection {
+  text: string;
+  updatedAt: string;
 }
 
 /**

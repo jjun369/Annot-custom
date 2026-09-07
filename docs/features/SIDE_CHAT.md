@@ -24,6 +24,10 @@ The user chooses one outbound mode:
 
 PageDock shows the exact prompt and has separate `내용 복사` and `웹 AI 열기` actions. It never automatically sends, reads the web page, polls for a reply, or reads cookies. The user pastes a response into the popup, optionally types a model label marked `확인 안 됨`, and explicitly saves it. Each saved response remains additive and can be compared with the first PageDock explanation when one exists; no winner, consensus, answer grading, Knowledge promotion, or highlight resolution is created.
 
+The handoff panel keeps the current question, provider, bounded page cue, and exact request state visible, while request selection, prompt preview, model metadata, and answer import details can be opened when needed. `질문 복사` and `답변 가져오기` remain independent recovery actions. A pasted draft is never silently truncated; an over-limit response is retained locally with an explicit save error until it is shortened.
+
+Both the single-answer and comparison views offer an optional `내 이해 / 아직 확인할 점` field. An explicit save stores one `sideChatReflection` on the canonical sidechat user question, with a timestamp. It is kept only in this independent side conversation, is excluded from all outbound PageDock/web prompts, and is never propagated to PDF highlights, Knowledge, cards, or resolution state. The existing session lock applies the patch against the latest session, and the optional field travels through the existing portable session backup without a SQLite or manifest change.
+
 If a saved question is visible and the user starts typing a new question, the new composer text becomes the web target and is saved locally before copy/open. A prior question, answer, provider, or prompt mode is not silently reused for that new draft; selecting a saved question again remains an explicit recovery action.
 
 ## Source and backup contract
