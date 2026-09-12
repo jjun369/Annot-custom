@@ -1,5 +1,12 @@
 # Roadmap
 
+## Implemented — 0.9.1 study usability
+
+- Current-PDF record search and semantic filters with direct source navigation; no cross-document database or automatic AI.
+- Finite recall practice with optional temporary recall input, keyboard controls, source return, and stale-request protection; fixed review dates and existing card storage remain unchanged.
+- Korean IME-safe chat submission and guarded comparison-note closure. Origin-independent unsaved side-chat draft recovery remains deferred and is explicitly disclosed.
+- Mobile Knowledge selection and portable-backup regression coverage; refreshed Windows packaging and actual smoke verification are recorded in CURRENT_STATE.
+
 ## Implemented — provenance-gated Knowledge promotion (working tree)
 
 - Reader highlights and anchored AI answers can enter the existing Knowledge inbox with explicit source classes, original anchors, and optional origin dates. Nothing is auto-promoted to a wiki.
@@ -10,6 +17,8 @@
 - Mobile Bridge: an explicit stable-document Mobile Shelf exports one phone-width, selectable-text PDF with study records, source-labelled AI answers, recall cards, anchored Knowledge, and disposable visual renders into a provider-neutral separate folder. Its convenience auto-publish is opt-in, coalesced, and rate-limited; it includes receipt/hash conflict protection and local-first verified automatic/manual backup copies, not cloud synchronization or two-way mobile editing.
 
 ## Implemented — 0.9
+
+- Mobile Knowledge reading: explicitly selected standalone topics and captured memos can join the existing phone-width PDF without a PDF shelf. Settings provides a bounded summary picker and keeps read-only publication separate from recoverable ZIP backups; no automatic whole-library selection, side-chat inclusion, AI call, or mobile editing is added.
 
 - Durable Visual Region Anchors: a compact Reader-only `영역 기록` mode for one user-drawn figure/table/equation/process-condition rectangle plus memo, an overlay, and a source-return list. It persists only document identity, page, normalized geometry, kind, memo, and timestamps in the existing sidecar; there are no persistent crops/thumbnails, OCR, multimodal AI, new SQLite schema, or backup format.
 - Reader Follow-through / Evidence → Work Item: optional current-PDF `Finding` / `Verify` / `Discuss` / `Try` labels on source highlights, independent open/done state for follow-ups, separate learning/work record views that return to exact source text, an existing-highlight secondary AI Ask, compact Library resume/count summaries, and a structured source-linked Evidence Brief Markdown export. This is deliberately not a global task, project, meeting, or dashboard system.

@@ -1,9 +1,18 @@
 'use client';
 
 import { useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Image as ImageIcon, Pencil, Trash2, X } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Image as ImageIcon, Pencil, Trash2, X } from 'lucide-react';
 import { Highlight, HighlightWorkKind, VisualRegion } from '@/types';
 import { getStudyKindLabel, inferStudyKind, isUnresolvedHighlight } from '@/lib/highlight-study';
+import {
+  boundReaderRecordResults,
+  countReaderStudyKinds,
+  filterReaderHighlights,
+  filterReaderVisualRegions,
+  MAX_READER_RECORD_RESULTS,
+  normalizeReaderSearchText,
+  type ReaderStudyKindFilter,
+} from '@/lib/reader-record-search';
 import { compareVisualRegionsBySource, getVisualRegionKindLabel } from '@/lib/visual-regions';
 import {
   getWorkKindLabel,
@@ -13,6 +22,7 @@ import {
 import { selectWorkEvidenceGroups } from '@/lib/work-evidence';
 
 export type ReaderLearningFilter = 'all' | 'needs-understanding' | 'understood';
+export type ReaderLearningKindFilter = ReaderStudyKindFilter;
 type WorkFilter = 'open' | 'completed';
 type WorkKindFilter = 'all' | HighlightWorkKind;
 export type ReaderRecordTab = 'learning' | 'work' | 'visual';
@@ -191,13 +201,17 @@ export function ReaderRecordPanel({
     requestedTab ?? (selectedVisualRegionId ? 'visual' : 'learning'),
   );
   const [learningFilter, setLearningFilter] = useState<ReaderLearningFilter>(requestedLearningFilter ?? 'all');
+  const [learningKindFilter, setLearningKindFilter] = useState<ReaderLearningKindFilter>('all');
   const [workFilter, setWorkFilter] = useState<WorkFilter>('open');
   const [workKindFilter, setWorkKindFilter] = useState<WorkKindFilter>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [resultLimit, setResultLimit] = useState(MAX_READER_RECORD_RESULTS);
   const tabRefs = useRef<Record<ReaderRecordTab, HTMLButtonElement | null>>({
     learning: null,
     work: null,
     visual: null,
   });
+  const resetResultLimit = () => setResultLimit(MAX_READER_RECORD_RESULTS);
 
   const orderedHighlights = useMemo(() => [...highlights].sort(compareBySource), [highlights]);
   const unresolvedCount = useMemo(
@@ -211,6 +225,10 @@ export function ReaderRecordPanel({
     }).length,
     [highlights],
   );
+  const studyKindCounts = useMemo(
+    () => countReaderStudyKinds(orderedHighlights),
+    [orderedHighlights],
+  );
   const workEvidence = useMemo(
     () => selectWorkEvidenceGroups(orderedHighlights),
     [orderedHighlights],
@@ -223,45 +241,97 @@ export function ReaderRecordPanel({
     () => workEvidence.completedFollowUps.length,
     [workEvidence.completedFollowUps],
   );
-  const learningItems = useMemo(() => orderedHighlights.filter((highlight) => {
+  const learningItems = useMemo(() => filterReaderHighlights(
+    orderedHighlights,
+    searchQuery,
+    learningKindFilter,
+  ).filter((highlight) => {
     if (learningFilter === 'needs-understanding') return isUnresolvedHighlight(highlight);
     if (learningFilter === 'understood') {
       const kind = inferStudyKind(highlight);
       return (kind === 'unclear' || kind === 'question') && Boolean(highlight.resolvedAt);
     }
     return true;
-  }), [learningFilter, orderedHighlights]);
-  const findingItems = useMemo(() => workEvidence.findings.filter((highlight) => (
+  }), [learningFilter, learningKindFilter, orderedHighlights, searchQuery]);
+  const searchedHighlights = useMemo(
+    () => filterReaderHighlights(orderedHighlights, searchQuery),
+    [orderedHighlights, searchQuery],
+  );
+  const searchedWorkEvidence = useMemo(
+    () => selectWorkEvidenceGroups(searchedHighlights),
+    [searchedHighlights],
+  );
+  const findingItems = useMemo(() => searchedWorkEvidence.findings.filter((highlight) => (
     highlight.workKind === 'finding'
     && workFilter === 'open'
     && (workKindFilter === 'all' || workKindFilter === 'finding')
-  )), [workEvidence.findings, workFilter, workKindFilter]);
+  )), [searchedWorkEvidence.findings, workFilter, workKindFilter]);
   const workItems = useMemo(() => {
     const candidates = workFilter === 'completed'
-      ? workEvidence.completedFollowUps
-      : workEvidence.openFollowUps;
+      ? searchedWorkEvidence.completedFollowUps
+      : searchedWorkEvidence.openFollowUps;
     return candidates.filter((highlight) => (
       workKindFilter === 'all' || highlight.workKind === workKindFilter
     ));
-  }, [workEvidence.completedFollowUps, workEvidence.openFollowUps, workFilter, workKindFilter]);
+  }, [searchedWorkEvidence.completedFollowUps, searchedWorkEvidence.openFollowUps, workFilter, workKindFilter]);
   const visibleWorkItems = workKindFilter === 'finding' ? findingItems : workItems;
   const showFindingSection = activeTab === 'work' && workFilter === 'open' && workKindFilter === 'all' && findingItems.length > 0;
   const orderedVisualRegions = useMemo(
     () => [...visualRegions].sort(compareVisualRegionsBySource),
     [visualRegions],
   );
-  const items = activeTab === 'learning' ? learningItems : visibleWorkItems;
+  const visualItems = useMemo(
+    () => filterReaderVisualRegions(orderedVisualRegions, searchQuery),
+    [orderedVisualRegions, searchQuery],
+  );
+  const workNavigationItems = useMemo(
+    () => [...(showFindingSection ? findingItems : []), ...visibleWorkItems].sort(compareBySource),
+    [findingItems, showFindingSection, visibleWorkItems],
+  );
+  const navigationItems = activeTab === 'learning' ? learningItems : workNavigationItems;
+  const boundedHighlightResults = useMemo(
+    () => boundReaderRecordResults(navigationItems, resultLimit),
+    [navigationItems, resultLimit],
+  );
+  const boundedVisualResults = useMemo(
+    () => boundReaderRecordResults(visualItems, resultLimit),
+    [resultLimit, visualItems],
+  );
+  const visibleItemKeys = new Set(
+    activeTab === 'visual'
+      ? boundedVisualResults.items.map((region) => region.id)
+      : boundedHighlightResults.items.map((highlight) => highlightKey(highlight)),
+  );
+  const visibleFindingItems = findingItems.filter((highlight) => visibleItemKeys.has(highlightKey(highlight)));
+  const visibleFollowUpItems = visibleWorkItems.filter((highlight) => visibleItemKeys.has(highlightKey(highlight)));
+  const searchActive = Boolean(normalizeReaderSearchText(searchQuery));
+  const activeResultCount = activeTab === 'visual' ? visualItems.length : navigationItems.length;
+  const activeResultWindow = activeTab === 'visual' ? boundedVisualResults : boundedHighlightResults;
+  const currentResultIndex = activeTab === 'visual'
+    ? boundedVisualResults.items.findIndex((region) => region.id === selectedVisualRegionId)
+    : boundedHighlightResults.items.findIndex((highlight) => highlightKey(highlight) === selectedHighlightKey);
+  const currentResultTotal = activeTab === 'visual' ? boundedVisualResults.items.length : boundedHighlightResults.items.length;
   const emptyMessage = activeTab === 'learning'
-    ? learningFilter === 'needs-understanding'
-      ? '현재 다시 볼 기록이 없습니다.'
-      : learningFilter === 'understood'
-        ? '아직 이해 완료로 표시한 기록이 없습니다.'
-        : 'PDF에서 문장을 선택해 학습 기록을 남겨 보세요.'
+    ? searchActive
+      ? '검색 결과가 없습니다. 원문이나 메모의 다른 단어를 입력해 보세요.'
+      : learningKindFilter !== 'all'
+        ? `${getStudyKindLabel(learningKindFilter)} 기록이 없습니다.`
+        : learningFilter === 'needs-understanding'
+          ? '현재 다시 볼 기록이 없습니다.'
+          : learningFilter === 'understood'
+            ? '아직 이해 완료로 표시한 기록이 없습니다.'
+            : 'PDF에서 문장을 선택해 학습 기록을 남겨 보세요.'
     : activeTab === 'visual'
-      ? '아직 기록한 그림·표·수식 영역이 없습니다.'
+      ? searchActive
+        ? '검색 결과가 없습니다. 영역 메모의 다른 단어를 입력해 보세요.'
+        : '아직 기록한 그림·표·수식 영역이 없습니다.'
     : workFilter === 'completed'
-      ? '완료된 업무 후속이 없습니다.'
-      : '원문을 선택한 뒤 업무 후속으로 남겨 보세요.';
+      ? searchActive
+        ? '검색 결과가 없습니다. 원문이나 메모의 다른 단어를 입력해 보세요.'
+        : '완료된 업무 후속이 없습니다.'
+      : searchActive
+        ? '검색 결과가 없습니다. 원문이나 메모의 다른 단어를 입력해 보세요.'
+        : '원문을 선택한 뒤 업무 후속으로 남겨 보세요.';
   const handleTabKeyDown = (event: ReactKeyboardEvent<HTMLButtonElement>) => {
     if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
     event.preventDefault();
@@ -269,6 +339,7 @@ export function ReaderRecordPanel({
     const currentIndex = tabOrder.indexOf(activeTab);
     const offset = event.key === 'ArrowRight' ? 1 : -1;
     const next = tabOrder[(currentIndex + offset + tabOrder.length) % tabOrder.length];
+    resetResultLimit();
     setActiveTab(next);
     window.requestAnimationFrame(() => tabRefs.current[next]?.focus());
   };
@@ -299,7 +370,7 @@ export function ReaderRecordPanel({
           aria-selected={activeTab === 'learning'}
           tabIndex={activeTab === 'learning' ? 0 : -1}
           ref={(element) => { tabRefs.current.learning = element; }}
-          onClick={() => setActiveTab('learning')}
+          onClick={() => { resetResultLimit(); setActiveTab('learning'); }}
           onKeyDown={handleTabKeyDown}
           className={`rounded-md px-2 py-1.5 text-[11px] font-semibold ${activeTab === 'learning' ? 'bg-surface-container-high text-on-surface' : 'text-on-surface-variant hover:bg-surface-container'}`}
         >
@@ -313,7 +384,7 @@ export function ReaderRecordPanel({
           aria-selected={activeTab === 'work'}
           tabIndex={activeTab === 'work' ? 0 : -1}
           ref={(element) => { tabRefs.current.work = element; }}
-          onClick={() => setActiveTab('work')}
+          onClick={() => { resetResultLimit(); setActiveTab('work'); }}
           onKeyDown={handleTabKeyDown}
           className={`rounded-md px-2 py-1.5 text-[11px] font-semibold ${activeTab === 'work' ? 'bg-primary-container text-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container'}`}
         >
@@ -327,7 +398,7 @@ export function ReaderRecordPanel({
           aria-selected={activeTab === 'visual'}
           tabIndex={activeTab === 'visual' ? 0 : -1}
           ref={(element) => { tabRefs.current.visual = element; }}
-          onClick={() => setActiveTab('visual')}
+          onClick={() => { resetResultLimit(); setActiveTab('visual'); }}
           onKeyDown={handleTabKeyDown}
           className={`rounded-md px-2 py-1.5 text-[11px] font-semibold ${activeTab === 'visual' ? 'bg-primary-container text-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container'}`}
         >
@@ -335,36 +406,80 @@ export function ReaderRecordPanel({
         </button>
       </div>
 
-      {activeTab === 'learning' ? (
-        <div className="flex gap-1 border-b border-outline-variant/15 px-2 py-2" role="group" aria-label="학습 기록 필터">
-          {([
-            ['all', `전체 ${orderedHighlights.length}`],
-            ['needs-understanding', `다시 볼 것 ${unresolvedCount}`],
-            ['understood', `이해 완료 ${understoodCount}`],
-          ] as const).map(([filter, label]) => (
+      <div className="border-b border-outline-variant/15 px-2 py-2">
+        <label className="sr-only" htmlFor="reader-record-search">읽기 기록 검색</label>
+        <div className="relative">
+          <input
+            id="reader-record-search"
+            type="search"
+            value={searchQuery}
+            onChange={(event) => { resetResultLimit(); setSearchQuery(event.target.value); }}
+            placeholder="원문·메모 검색"
+            className="h-8 w-full rounded-md border border-outline-variant/30 bg-surface px-2.5 pr-8 text-[11px] text-on-surface outline-none placeholder:text-outline focus:border-outline"
+          />
+          {searchQuery && (
             <button
               type="button"
-              key={filter}
-              onClick={() => setLearningFilter(filter)}
-              className={`rounded-md px-2 py-1 text-[10px] font-medium ${learningFilter === filter ? 'bg-surface-container-high text-on-surface' : 'text-on-surface-variant hover:bg-surface-container'}`}
+              onClick={() => { resetResultLimit(); setSearchQuery(''); }}
+              className="absolute right-1 top-1 flex h-6 w-6 items-center justify-center rounded-md text-on-surface-variant hover:bg-surface-container"
+              aria-label="기록 검색어 지우기"
             >
-              {label}
+              <X size={12} />
             </button>
-          ))}
+          )}
+        </div>
+        <div className="mt-1 flex items-center justify-between gap-2 text-[10px] text-on-surface-variant" role="status" aria-live="polite">
+          <span>{searchActive ? `검색 결과 ${activeResultCount}건` : `현재 목록 ${activeResultCount}건`}</span>
+          {activeResultWindow.hasMore && <span>{activeResultWindow.items.length}건까지 표시</span>}
+        </div>
+      </div>
+
+      {activeTab === 'learning' ? (
+        <div className="space-y-1.5 border-b border-outline-variant/15 px-2 py-2">
+          <div className="flex gap-1" role="group" aria-label="학습 기록 상태 필터">
+            {([
+              ['all', `전체 ${orderedHighlights.length}`],
+              ['needs-understanding', `다시 볼 것 ${unresolvedCount}`],
+              ['understood', `이해 완료 ${understoodCount}`],
+            ] as const).map(([filter, label]) => (
+              <button
+                type="button"
+                key={filter}
+                onClick={() => { resetResultLimit(); setLearningFilter(filter); }}
+                className={`rounded-md px-2 py-1 text-[10px] font-medium ${learningFilter === filter ? 'bg-surface-container-high text-on-surface' : 'text-on-surface-variant hover:bg-surface-container'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <label className="sr-only" htmlFor="reader-learning-kind-filter">학습 기록 종류</label>
+          <select
+            id="reader-learning-kind-filter"
+            value={learningKindFilter}
+            onChange={(event) => { resetResultLimit(); setLearningKindFilter(event.target.value as ReaderLearningKindFilter); }}
+            className="h-7 w-full rounded-md border border-outline-variant/30 bg-surface px-2 text-[10px] text-on-surface outline-none focus:border-outline"
+          >
+            <option value="all">전체 종류 · {orderedHighlights.length}</option>
+            <option value="important">{getStudyKindLabel('important')} · {studyKindCounts.important}</option>
+            <option value="concept">{getStudyKindLabel('concept')} · {studyKindCounts.concept}</option>
+            <option value="memorize">{getStudyKindLabel('memorize')} · {studyKindCounts.memorize}</option>
+            <option value="question">{getStudyKindLabel('question')} · {studyKindCounts.question}</option>
+            <option value="unclear">{getStudyKindLabel('unclear')} · {studyKindCounts.unclear}</option>
+          </select>
         </div>
       ) : activeTab === 'work' ? (
         <div className="space-y-1.5 border-b border-outline-variant/15 px-2 py-2">
           <div className="flex gap-1" role="group" aria-label="업무 후속 상태 필터">
             <button
               type="button"
-              onClick={() => setWorkFilter('open')}
+              onClick={() => { resetResultLimit(); setWorkFilter('open'); }}
               className={`rounded-md px-2 py-1 text-[10px] font-medium ${workFilter === 'open' ? 'bg-primary-container text-on-primary-container' : 'text-on-surface-variant hover:bg-surface-container'}`}
             >
               열림 {openWorkCount}
             </button>
             <button
               type="button"
-              onClick={() => setWorkFilter('completed')}
+              onClick={() => { resetResultLimit(); setWorkFilter('completed'); }}
               className={`rounded-md px-2 py-1 text-[10px] font-medium ${workFilter === 'completed' ? 'bg-surface-container-high text-on-surface' : 'text-on-surface-variant hover:bg-surface-container'}`}
             >
               완료 {completedWorkCount}
@@ -374,7 +489,7 @@ export function ReaderRecordPanel({
           <select
             id="reader-work-kind-filter"
             value={workKindFilter}
-            onChange={(event) => setWorkKindFilter(event.target.value as WorkKindFilter)}
+            onChange={(event) => { resetResultLimit(); setWorkKindFilter(event.target.value as WorkKindFilter); }}
             className="h-7 w-full rounded-md border border-outline-variant/30 bg-surface px-2 text-[10px] text-on-surface outline-none focus:border-outline"
           >
             <option value="all">전체 유형</option>
@@ -392,12 +507,53 @@ export function ReaderRecordPanel({
         aria-labelledby={activeTab === 'learning' ? 'reader-record-learning-tab' : activeTab === 'work' ? 'reader-record-work-tab' : 'reader-record-visual-tab'}
         className="flex-1 overflow-y-auto p-2"
       >
+        {currentResultIndex >= 0 && (
+          <div className="mb-2 flex items-center justify-between gap-2 rounded-lg bg-surface-container px-2 py-1.5" role="group" aria-label="현재 결과 원문 이동">
+            <span className="text-[10px] font-semibold text-on-surface-variant">현재 결과 {currentResultIndex + 1} / {currentResultTotal}</span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                disabled={currentResultIndex === 0}
+                onClick={() => {
+                  if (activeTab === 'visual') {
+                    const region = boundedVisualResults.items[currentResultIndex - 1];
+                    if (region) onNavigateVisualRegion?.(region);
+                  } else {
+                    const highlight = boundedHighlightResults.items[currentResultIndex - 1];
+                    if (highlight) onNavigate(highlight);
+                  }
+                }}
+                className="flex h-6 w-6 items-center justify-center rounded-md text-on-surface-variant hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="이전 결과 원문으로 이동"
+              >
+                <ChevronLeft size={13} aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                disabled={currentResultIndex === currentResultTotal - 1}
+                onClick={() => {
+                  if (activeTab === 'visual') {
+                    const region = boundedVisualResults.items[currentResultIndex + 1];
+                    if (region) onNavigateVisualRegion?.(region);
+                  } else {
+                    const highlight = boundedHighlightResults.items[currentResultIndex + 1];
+                    if (highlight) onNavigate(highlight);
+                  }
+                }}
+                className="flex h-6 w-6 items-center justify-center rounded-md text-on-surface-variant hover:bg-surface-container-high disabled:cursor-not-allowed disabled:opacity-40"
+                aria-label="다음 결과 원문으로 이동"
+              >
+                <ChevronRight size={13} aria-hidden="true" />
+              </button>
+            </div>
+          </div>
+        )}
         {activeTab === 'visual' ? (
-          orderedVisualRegions.length === 0 ? (
+          visualItems.length === 0 ? (
             <div className="rounded-lg bg-surface-container px-3 py-4 text-[11px] leading-5 text-on-surface-variant">{emptyMessage}</div>
           ) : (
             <div className="space-y-2">
-              {orderedVisualRegions.map((region) => (
+              {boundedVisualResults.items.map((region) => (
                 <VisualRegionCard
                   key={region.id}
                   region={region}
@@ -409,16 +565,16 @@ export function ReaderRecordPanel({
               ))}
             </div>
           )
-        ) : items.length === 0 && !showFindingSection ? (
+        ) : navigationItems.length === 0 ? (
           <div className="rounded-lg bg-surface-container px-3 py-4 text-[11px] leading-5 text-on-surface-variant">{emptyMessage}</div>
         ) : (
           <div className="space-y-1.5">
-            {showFindingSection && (
+            {showFindingSection && visibleFindingItems.length > 0 && (
               <section aria-label="기록된 Finding">
                 <div className="mb-1 px-1 text-[10px] font-semibold text-on-surface-variant">Finding · 기록</div>
                 <p className="mb-1.5 px-1 text-[10px] leading-4 text-on-surface-variant">Finding은 완료 처리하지 않는 해석 기록입니다.</p>
                 <div className="space-y-1.5">
-                  {findingItems.map((highlight) => (
+                  {visibleFindingItems.map((highlight) => (
                     <RecordCard
                       key={`finding:${highlightKey(highlight)}`}
                       highlight={highlight}
@@ -431,10 +587,10 @@ export function ReaderRecordPanel({
                 </div>
               </section>
             )}
-            {showFindingSection && items.length > 0 && (
+            {showFindingSection && visibleFindingItems.length > 0 && visibleFollowUpItems.length > 0 && (
               <div className="mt-3 px-1 text-[10px] font-semibold text-on-surface-variant">열린 후속</div>
             )}
-            {items.map((highlight) => (
+            {(activeTab === 'learning' ? boundedHighlightResults.items : visibleFollowUpItems).map((highlight) => (
               <RecordCard
                 key={`${activeTab}:${highlightKey(highlight)}`}
                 highlight={highlight}
@@ -447,6 +603,15 @@ export function ReaderRecordPanel({
               />
             ))}
           </div>
+        )}
+        {activeResultWindow.hasMore && (
+          <button
+            type="button"
+            onClick={() => setResultLimit((currentLimit) => currentLimit + MAX_READER_RECORD_RESULTS)}
+            className="mt-2 w-full rounded-md border border-outline-variant/30 px-2 py-1.5 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"
+          >
+            더 보기 · {activeResultWindow.total - activeResultWindow.items.length}개
+          </button>
         )}
       </div>
     </aside>

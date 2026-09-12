@@ -1,6 +1,16 @@
 # Changelog
 
+## 0.9.1 — Reading and recall usability
+
+- Added local source-record search, semantic-kind filtering, and result navigation without changing source anchors or study state.
+- Added a finite current-PDF recall practice flow, temporary answer scratchpad, keyboard actions, and guarded asynchronous loading/mutations.
+- Prevented Korean IME confirmation Enter from submitting PDF/side-chat questions; comparison notes now use the latest question and guard unsaved closure.
+- Bounded expanded web-AI controls and clarified the full-app-restart limitation of unsaved local drafts.
+- Included explicit mobile Knowledge selection, recovery regressions, and a Korean 20-minute study quickstart; source and recoverable backups remain separate from phone reading copies.
+
 ## Unreleased — Provenance-gated Knowledge promotion
+
+- Extended the mobile reading shelf with explicitly selected standalone Knowledge topics and captured memos, including a searchable summary picker. The existing read-only PDF/receipt and conflict safeguards remain separate from full ZIP recovery; unselected notes and side-chat history are not implicitly exported.
 
 - Simplified the sidechat web handoff surface around independent `질문 복사` and `답변 가져오기` actions. Request details and the exact outbound preview remain recoverable, while draft answers are kept intact and visibly rejected at the 80,000-character boundary instead of being silently truncated.
 - Added an optional sidechat-only `내 이해 / 아직 확인할 점` reflection on the canonical user question. It is explicitly saved with the existing locked session mutation, survives existing backup round trips, remains separate from PDF/Knowledge/highlight state, and is excluded from PageDock/web outbound prompts.

@@ -4,6 +4,7 @@ import path from 'path';
 
 import { getWorkspaceRoot } from '@/lib/annot-sessions';
 import { normalizeChatSourceContext } from '@/lib/ai-providers/source-context';
+import { notifyMobileBridgeOfKnowledgeChange } from '@/lib/mobile-knowledge';
 import type { ChatSourceContext } from '@/types';
 
 export type KnowledgeNoteStatus = 'inbox' | 'review' | 'integrated' | 'dismissed' | 'error';
@@ -536,8 +537,15 @@ async function mutateStore<T>(mutation: (store: KnowledgeSnapshot) => T | Promis
   let result!: T;
   const operation = writeQueue.then(async () => {
     const loaded = await readStore();
+    const before = structuredClone(loaded.store);
     result = await mutation(loaded.store);
     await writeStore(loaded.store, loaded.legacySource);
+    try {
+      await notifyMobileBridgeOfKnowledgeChange(before, loaded.store);
+    } catch {
+      // Knowledge persistence must succeed even when the optional derived
+      // mobile-dirty reminder cannot be updated.
+    }
   });
   writeQueue = operation.catch(() => undefined);
   await operation;

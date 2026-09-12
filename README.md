@@ -6,6 +6,8 @@ PageDock은 **Windows 10/11 x64 전용**입니다. macOS와 Linux 빌드·테스
 
 개인 메모를 위키로 정리하는 기능은 [지식 정리 한국어 사용 설명서](./docs/KNOWLEDGE_USER_GUIDE_KO.md)를 참고하세요.
 
+처음 사용한다면 [20분 읽기·복습 빠른 시작](./docs/STUDY_QUICKSTART_KO.md)과 [휴대폰에서 메모 읽기](./docs/MOBILE_READING_KO.md)를 참고하세요.
+
 상단의 `?` 버튼 또는 `F1`을 누르면 현재 화면에 맞는 사용법과 문제 해결 팁을 볼 수 있습니다.
 
 PageDock은 PDF를 한곳에 모아 읽고, 표시하고, 모르는 문장을 그 자리에서 선택적으로 AI에게 물으며, 원문 근거를 업무 판단·후속 확인으로 남긴 뒤 정확한 위치로 이어서 공부하는 Windows용 로컬 작업 공간입니다.

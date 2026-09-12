@@ -4,16 +4,24 @@ Status: Implemented in the PageDock 0.9 working tree.
 
 ## Purpose
 
+Korean step-by-step guide: [모아둔 지식·메모를 휴대폰에서 읽기](../MOBILE_READING_KO.md).
+
 The Mobile Bridge gives a commuter-friendly read-only view of deliberately selected PageDock study records. It is not cloud synchronization: the Windows Library, source PDFs, sidecars, sessions, Research DB, and Knowledge store remain local and authoritative.
 
 ## Setup and use
 
-1. In a PDF Reader's `더보기` menu, choose `모바일 보관함에 추가` for only the documents you want on another device.
+1. In a PDF Reader's `더보기` menu, choose `모바일 보관함에 추가` for only the documents you want on another device. In Settings you may also explicitly select standalone `정리 노트` and `수집 메모`; a PDF selection is not required for these records.
 2. In Settings, choose a separate synced folder such as a Google Drive desktop folder. PageDock creates `Mobile`, reserved `Inbox`, `Backups/Manual`, and `Backups/Auto`.
 3. Choose `지금 모바일 사본 발행` when you want a fresh mobile snapshot. `변경 후 자동 발행` is **off by default**. If you explicitly turn it on, shelf-related highlights, notes, cards, visual records, and source-anchored completed AI answers coalesce after 90 seconds of inactivity; successful automatic publishes are also limited to one per ten minutes.
-4. Open `Mobile/PageDock-Mobile.pdf` in the Drive app. It contains selectable text, study state, labelled user notes and AI explanations, source pages, and embedded visual-record images.
+4. Transfer/open `Mobile/PageDock-Mobile.pdf` on the phone using the chosen folder service or manual file transfer. It contains selectable text, study state, labelled user notes and AI explanations, source pages, and embedded visual-record images. For offline reading, retain a local copy in the phone's reader; PageDock does not manage that reader or confirm its offline state.
 
-The first page groups unresolved Reader records. Each following document keeps original source text, user memo, AI explanation, recall cards, visual records, and only Knowledge topics that have explicit anchors to that document. Publication year is shown when known; PageDock does not invent a date or treat age as a truth score.
+The first page groups unresolved Reader records. Each following document keeps original source text, user memo, AI explanation, recall cards, visual records, and Knowledge topics that have explicit anchors to that document. Standalone topics and captured memos are included only after explicit selection, with their source/status labels. A topic already included with a selected PDF is not repeated in the standalone section. Missing selections are visible rather than silently removed. Publication year is shown when known; PageDock does not invent a date or treat age as a truth score.
+
+## Collected knowledge without a PDF
+
+Settings offers a searchable, paginated summary picker rather than loading all note bodies into the selection UI. Selected IDs remain device-local. Selecting a captured memo does not integrate it into the wiki or mark it verified. Mobile publication does not modify Knowledge, create an AI turn, or implicitly include side-chat conversations/reflections.
+
+The reading file shows current selected content, not full revision history. Full portable backups retain the underlying Knowledge JSON, including revisions, source notes, and recoverable revision trash. On restore to a different PC, choose a new mobile folder and select what to carry again; device-specific mobile preferences are not portable Library data.
 
 ## Conflict and backup behaviour
 
@@ -25,7 +33,7 @@ PageDock only reports that it saved to the linked folder. It does not know wheth
 
 ## Save, publish, and backup are different
 
-- **Original save** writes the actual study record to the Windows PageDock Library. It never waits for the mobile bridge.
+- **Original save** writes the actual study record to the Windows PageDock Library. It does not wait for PDF rendering or external-folder publication; optional dirty-state notification cannot roll back the original save.
 - **Mobile snapshot publish** rebuilds the read-only derived PDF. It is optional, does not import phone edits, and is not a backup.
 - **Full backup** creates a recoverable ZIP of PageDock source data. Manual backups are retained; automatic backups retain the newest three files.
 
@@ -33,4 +41,4 @@ When automatic publishing is disabled, relevant shelf changes are remembered as 
 
 ## Deliberate limits
 
-There is no provider login, Drive API, Inbox import, mobile note merge, source-PDF copy, full-library auto-selection, hidden background upload outside the shelf, Markdown/assets mobile package, permanent crop/thumbnail cache, OCR, encryption layer, or remote deletion promise. If a source visual cannot be rendered for an export, the PDF identifies the failed record and asks the reader to return to Windows PageDock rather than substituting a blank or guessed image.
+There is no provider login, Drive API, Inbox import, mobile note merge, source-PDF copy, full-library auto-selection, hidden background upload outside the shelf, Markdown/assets mobile package, permanent crop/thumbnail cache, OCR, encryption layer, or remote deletion promise. If a source visual cannot be rendered for an export, the PDF identifies the failed record and asks the reader to return to Windows PageDock rather than substituting a blank or guessed image. See ADR 0025 for the explicit standalone Knowledge-selection extension to ADR 0019.

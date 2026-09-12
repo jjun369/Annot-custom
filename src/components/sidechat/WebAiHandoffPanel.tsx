@@ -123,7 +123,7 @@ export function WebAiHandoffPanel({ namespace, sessionId, messages, target, ensu
     <div className="flex shrink-0 flex-wrap gap-2 px-3 py-2">{opened.map((id) => <span key={id} className={control}><button aria-pressed={id === provider} onClick={() => { setWebEnabled(true); setProvider(id); }}>{label(id)}</button><button aria-label={`${label(id)} 탭 닫기`} className="ml-2" onClick={() => { setOpened((v) => v.filter((p) => p !== id)); if (provider === id) { const next = opened.find((p) => p !== id); if (next) setProvider(next); else setWebEnabled(false); } }}>×</button></span>)}
       <select className={control} aria-label="웹 AI 추가" value="" onChange={(e) => { const id = e.target.value as SideChatWebProviderId; setOpened((v) => v.includes(id) ? v : [...v, id]); setProvider(id); setWebEnabled(true); }}><option value="">웹 AI 추가</option>{SIDE_CHAT_WEB_PROVIDERS.map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}</select>
     </div>
-    <div className="shrink-0 space-y-2 border-y p-3">
+    <div className="max-h-[55%] shrink-0 space-y-2 overflow-y-auto border-y p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="min-w-0 flex-1">
           <p className="line-clamp-2 text-xs font-semibold text-on-surface" title={questionLabel}>{questionLabel}</p>
@@ -155,7 +155,7 @@ export function WebAiHandoffPanel({ namespace, sessionId, messages, target, ensu
         <div className="mt-2 flex flex-wrap items-center gap-2"><input className={control} aria-label="모델 표기 미확인" value={draft.model} disabled={saving} onChange={(e) => drafts.write(draftId, { ...draft, model: e.target.value })} placeholder="모델 표기 (미확인·선택)" /><button className={control} onClick={() => void save()} disabled={!request || saving || !draft.response.trim() || draft.response.length > SIDE_CHAT_MAX_RESPONSE_CHARS}>{saving ? '저장 중…' : `${request ? label(request.provider) : '요청 선택 후'} 답변 저장`}</button><span className={`text-[10px] ${draft.response.length > SIDE_CHAT_MAX_RESPONSE_CHARS ? 'font-semibold text-error' : 'text-on-surface-variant'}`}>{draft.response.length.toLocaleString()} / {SIDE_CHAT_MAX_RESPONSE_CHARS.toLocaleString()}자</span></div>
       </div>}
       {!importOpen && draft.response && <button className="text-left text-[10px] font-semibold text-ai-reference" onClick={() => setImportOpen(true)}>작성 중인 답변 열기 · {draft.response.length.toLocaleString()}자</button>}
-      <p className="text-[10px] text-on-surface-variant">입력 초안은 이 기기에만 보관됩니다. 저장된 요청·답변은 Library 백업에 포함됩니다. 저장된 답변은 사이드채팅 안에서만 비교됩니다.</p>
+      <p className="text-[10px] text-on-surface-variant">미저장 초안은 앱 전체 종료 후 복구를 보장하지 않습니다. 종료 전 답변을 저장하거나 복사하세요. 저장된 요청·답변은 Library 백업에 포함되며 사이드채팅 안에서만 비교됩니다.</p>
       {status && <p role="status" className="text-xs text-primary">{status}</p>}
     </div>
     <div ref={host} className="relative min-h-0 flex-1 bg-surface-container">{viewState !== 'embedded' && <p className="p-4 text-xs">{viewState === 'loading' ? '웹 페이지를 여는 중…' : '웹 탭을 다시 열거나 기본 브라우저를 사용하세요. 로그인과 전송은 직접 진행하세요.'}</p>}</div>

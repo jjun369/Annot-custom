@@ -17,6 +17,7 @@ import { useFeedback } from '@/components/common/FeedbackProvider';
 import { CodexSetupCard } from '@/components/common/CodexSetupCard';
 import { PdfEngineSetupCard } from '@/components/common/PdfEngineSetupCard';
 import { ResearchSourcesCard } from '@/components/common/ResearchSourcesCard';
+import { MobileKnowledgeShelf, type MobileKnowledgeShelfItem } from '@/components/settings/MobileKnowledgeShelf';
 import { APP_VERSION } from '@/lib/app-info';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { DEEPSEEK_WEB_URL } from '@/lib/deepseek-web-bridge';
@@ -56,6 +57,7 @@ interface MobileBridgeInfo {
     path?: string;
     missing: boolean;
   }>;
+  knowledgeShelf: MobileKnowledgeShelfItem[];
   artifact?: {
     generatedAt: string;
     exportId: string;
@@ -213,7 +215,13 @@ export default function SettingsPage() {
       });
       const data = await response.json();
       if (!response.ok || data?.error) throw new Error(data?.error || '모바일 사본을 만들지 못했습니다.');
-      setBridgeMessage(`모바일 사본을 만들었습니다. ${data.documentCount}개 문서의 기록을 연결 폴더에 저장했습니다.`);
+      const topicCount = typeof data.topicCount === 'number' ? data.topicCount : 0;
+      const noteCount = typeof data.noteCount === 'number' ? data.noteCount : 0;
+      const skippedKnowledgeCount = typeof data.skippedKnowledgeCount === 'number' ? data.skippedKnowledgeCount : 0;
+      const knowledgeSummary = topicCount || noteCount || skippedKnowledgeCount
+        ? ` 정리 노트 ${topicCount}개 · 수집 메모 ${noteCount}개${skippedKnowledgeCount ? ` · 찾지 못한 지식 ${skippedKnowledgeCount}개` : ''}`
+        : '';
+      setBridgeMessage(`모바일 사본을 만들었습니다. ${data.documentCount || 0}개 문서의 기록을 연결 폴더에 저장했습니다.${knowledgeSummary}`);
       await loadMobileBridge();
     } catch (error) {
       setBridgeMessage(error instanceof Error ? error.message : '모바일 사본을 만들지 못했습니다.');
@@ -267,6 +275,10 @@ export default function SettingsPage() {
       : '새 변경 있음 · 자동 발행 대기';
     if (mobileBridge.status === 'manual-required') return '새 변경 있음 · 수동 발행 필요';
     return mobileBridge.artifact ? `최신 상태 · ${new Date(mobileBridge.artifact.generatedAt).toLocaleString('ko-KR')} 발행` : '아직 모바일 사본을 만들지 않았습니다.';
+  };
+
+  const handleMobileKnowledgeSelectionChange = async () => {
+    await loadMobileBridge();
   };
 
   const checkProvider = async (provider: AIProvider) => {
@@ -678,10 +690,15 @@ export default function SettingsPage() {
               <div className="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <p className="inline-flex items-center gap-1.5 text-sm font-medium text-on-surface"><Smartphone size={15} /> 휴대폰에서 읽기</p>
-                  <p className="mt-1 max-w-2xl text-xs leading-5 text-on-surface-variant">선택한 문서의 밑줄, 메모, AI 답변, 복습 카드와 그림·표 기록을 휴대폰용 읽기 전용 PDF로 만듭니다. PageDock Library가 원본이며, 휴대폰 사본에서 한 수정은 PageDock으로 돌아오지 않습니다.</p>
+                  <p className="mt-1 max-w-2xl text-xs leading-5 text-on-surface-variant">문서와 정리 노트·수집 메모를 직접 고른 읽기 전용 PDF입니다. PageDock Library가 원본이며, 휴대폰 사본의 수정은 PageDock으로 돌아오지 않습니다.</p>
                 </div>
                 {mobileBridge?.conflict && <span className="rounded-full bg-study-unclear-container px-2 py-1 text-[10px] font-semibold text-study-unclear">외부 수정 확인 필요</span>}
               </div>
+              <ol className="mt-3 grid gap-2 text-[11px] leading-4 text-on-surface-variant sm:grid-cols-3">
+                <li className="flex min-w-0 gap-2 rounded-lg bg-surface-container px-2.5 py-2"><span className="font-bold text-primary">1</span><span>문서와 정리 노트·수집 메모를 직접 선택합니다.</span></li>
+                <li className="flex min-w-0 gap-2 rounded-lg bg-surface-container px-2.5 py-2"><span className="font-bold text-primary">2</span><span>별도 외부 폴더를 정합니다. 동기화 폴더를 고르거나 파일을 수동 복사할 수 있습니다.</span></li>
+                <li className="flex min-w-0 gap-2 rounded-lg bg-surface-container px-2.5 py-2"><span className="font-bold text-primary">3</span><span><code className="rounded bg-surface-container-high px-1">Mobile/PageDock-Mobile.pdf</code>를 만들고 휴대폰에서 엽니다. 리더 기능에 따라 복사·다운로드해 오프라인으로 읽습니다.</span></li>
+              </ol>
               <div className="mt-3 flex gap-2">
                 <input
                   value={bridgeRootDraft}
@@ -716,6 +733,11 @@ export default function SettingsPage() {
               <p className={`mt-3 text-xs font-medium ${mobileBridge?.status === 'conflict' || mobileBridge?.status === 'failed' ? 'text-study-unclear' : 'text-on-surface-variant'}`}>
                 {mobileBridgeStatusMessage()}
               </p>
+              {mobileBridge && !mobileBridge.shelf.length && !mobileBridge.knowledgeShelf?.length && (
+                <p className="mt-2 rounded-lg bg-study-unclear-container px-3 py-2 text-[11px] leading-4 text-study-unclear">
+                  선택한 문서와 지식이 없습니다. 지금 발행하면 기존 모바일 PDF를 내용 없는 읽기 사본으로 교체합니다. 이전 파일을 클라우드에서 지웠다는 뜻은 아닙니다.
+                </p>
+              )}
 
               <div className="mt-4 flex flex-wrap gap-2">
                 <button
@@ -762,6 +784,12 @@ export default function SettingsPage() {
                   </div>
                 )}
               </div>
+              <MobileKnowledgeShelf
+                selectedItems={mobileBridge?.knowledgeShelf ?? []}
+                disabled={bridgeBusy}
+                onSelectionChange={handleMobileKnowledgeSelectionChange}
+              />
+              <p className="mt-3 text-[11px] font-medium text-outline">모바일 PDF는 읽기 사본입니다. 원본 PDF와 지식·공부 기록을 복구하려면 별도의 PageDock 복구 ZIP을 사용하세요. PageDock은 연결 폴더에 쓴 것만 알 수 있으며 클라우드 동기화 완료를 확인하지 않습니다.</p>
               {bridgeMessage && <p className="mt-3 rounded-lg bg-surface-container px-3 py-2 text-xs text-on-surface">{bridgeMessage}</p>}
             </div>
             <div className="mt-5 rounded-xl border border-outline-variant/25 bg-surface-container-low p-4">

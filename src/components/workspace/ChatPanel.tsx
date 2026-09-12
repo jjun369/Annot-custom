@@ -27,6 +27,7 @@ import {
   DEFAULT_CHAT_FONT_SIZE,
   readStoredChatFontSize,
 } from '@/lib/chat-preferences';
+import { shouldSubmitChatOnEnter } from '@/lib/chat-keyboard';
 
 const MAX_INPUT_HEIGHT = 180;
 const FALLBACK_CODEX_REASONING_LEVELS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
@@ -1591,7 +1592,7 @@ export function ChatPanel() {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
+              if (shouldSubmitChatOnEnter(e)) { e.preventDefault(); handleSend(); }
             }}
             placeholder="논문에 관해 질문하세요..."
             rows={1}

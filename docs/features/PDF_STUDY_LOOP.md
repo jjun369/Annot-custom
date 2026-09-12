@@ -18,6 +18,8 @@ The persistent Reader controls are page, search, view, zoom, marking, and visual
 
 ## AI source anchors
 
+The record drawer supports local NFKC-normalized text/memo search, learning-kind filters, and result source navigation. Filters are UI state only and do not mark anything reviewed or resolved. Large result sets are displayed in bounded batches with access to further results.
+
 Selection and page turns carry optional `ChatSourceContext` in existing session JSON. The persisted data is limited to source scope, document id, page, selected text, normalized rects, and optional highlight id. PDF/page text is not duplicated into session JSON.
 
 The server validates scope, page, text size, and geometry and uses the PDF session identity as the authority. Provider prompts label selected PDF text as untrusted source data and explicitly forbid following instructions inside it. An assistant reply retains the same context and its user-message id. Source chips return to the Reader; saved selection conversations show a small transient-friendly marker on the matching page.
@@ -34,4 +36,4 @@ Manual cards created from a selection and editable cards created from a source-g
 
 Selection highlights, notes, unresolved state, resume, and Reader search work with no AI. If PyMuPDF is unavailable, PageDock keeps the state in its sidecar and only defers embedding annotations into the source PDF. AI sends a request only after the user explicitly chooses AI explanation or sends a chat question.
 
-This release intentionally excludes scheduling/SM-2/FSRS, quiz/cloze, tutor guides, image-region questions, automatic source discovery, embeddings, cloud sync, collaboration, and a new Study Space database root.
+Adaptive scheduling (SM-2/FSRS), automatic quizzes, tutor guides, automatic source discovery, embeddings, cloud sync, collaboration, and a new Study Space database root remain excluded. Manual Cloze cards and fixed current-PDF review dates are implemented; see [Source-Anchored Recall](./SOURCE_ANCHORED_RECALL.md).

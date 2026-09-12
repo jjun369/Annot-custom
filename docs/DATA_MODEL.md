@@ -67,6 +67,8 @@ Knowledge folder settings and file fingerprints are device-local operational sta
 
 ## Mobile bridge operational state
 
+ADR 0025 adds optional `shelfTopicIds` and `shelfNoteIds` to the device-local version-1 settings. Missing arrays normalize to empty without a read-time write. These are explicit export selections, not Knowledge membership or ownership. `MobileBridgeInfo.knowledgeShelf` is a transient summary of selected records and missing IDs; no topic/note body is duplicated into settings or the receipt. Library Knowledge format 2 and portable backup manifest 2 are unchanged.
+
 `%APPDATA%\\PageDock\\mobile-bridge.json` is a device-local version-1 setting. It stores `bridgeRoot`, a de-duplicated Mobile Shelf of stable `documentId` values, the opt-in automatic-publication preference, and small operational state (`mobileExportDirty`, revision/timestamps, last successful automatic export, and a bounded retry marker). It stores no mutable PDF path, copied study content, crop, image path, sync cursor, remote account, or provider token. Missing documents remain visible as missing shelf entries; a rename/move reconnects through the existing document identity.
 
 The external bridge is a derived-output boundary, not an additional PageDock database. `Mobile/PageDock-Mobile.pdf` is paired with a minimal `manifest.json` (`schemaVersion`, `exportId`, `generatedAt`, `artifact`, `sha256`). The manifest must not duplicate document, highlight, rect, session, Knowledge, or image records. Visual crop bytes exist only while generating the PDF and are embedded into that one projection. Existing annotation-sidecar, session, paper-metadata, Knowledge, SQLite schema 1, and portable-backup v2 contracts remain unchanged.

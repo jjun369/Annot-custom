@@ -20,6 +20,8 @@ Read → select / ask → save card → today queue → hide answer → recall �
 
 ## Storage and portability
 
+The 0.9.1 practice UI snapshots a finite current-PDF card set, permits deliberate navigation/skip without writing review results, and offers a temporary recall scratchpad before revealing the answer. Only explicit self-rating changes the existing review state; scratch text is not saved, exported, graded, or sent to AI. Closing or changing PDF clears practice state. Keyboard actions and guarded async requests preserve the document scope.
+
 Cards are optional additive state inside the existing per-document annotation sidecar:
 
 ```json

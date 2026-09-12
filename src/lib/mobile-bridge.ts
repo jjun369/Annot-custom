@@ -15,6 +15,18 @@ import {
 
 import { getWorkspaceRoot, listSessions, resolveFolderPath } from '@/lib/annot-sessions';
 import { getKnowledgeSnapshot, type KnowledgeNote, type KnowledgeTopic } from '@/lib/knowledge-store';
+import {
+  getKnowledgeSourceAnchors,
+  hasPendingMobileDirtyNotification,
+  clearPendingMobileDirtyNotification,
+  getMobileDirtyNotificationGeneration,
+  getMobileKnowledgeShelf,
+  knowledgeProvenanceLabel,
+  selectAnchoredKnowledgeTopics,
+  selectMobileKnowledge,
+  type MobileKnowledgeMissingSelection,
+  type MobileKnowledgeSourceRef,
+} from '@/lib/mobile-knowledge';
 import { getPaperMetadata } from '@/lib/paper-metadata';
 import {
   listSidecarHighlights,
@@ -47,6 +59,8 @@ export interface MobileBridgeSettings {
   version: 1;
   bridgeRoot?: string;
   shelfDocumentIds: string[];
+  shelfTopicIds: string[];
+  shelfNoteIds: string[];
   /** A convenience feature only; the Library save path never depends on it. */
   autoPublishEnabled: boolean;
   /** Durable reminder that the derived PDF no longer reflects the Library. */
@@ -73,6 +87,7 @@ export interface MobileBridgeShelfItem {
 export interface MobileBridgeInfo {
   bridgeRoot?: string;
   shelf: MobileBridgeShelfItem[];
+  knowledgeShelf: Array<{ id: string; kind: 'topic' | 'note'; title: string; missing: boolean }>;
   artifact?: {
     generatedAt: string;
     exportId: string;
@@ -125,6 +140,22 @@ interface ExportDocumentData {
   knowledgeTopics: KnowledgeTopic[];
 }
 
+interface ExportKnowledgeTopic {
+  topic: KnowledgeTopic;
+  sourceRefs: MobileKnowledgeSourceRef[];
+}
+
+interface ExportKnowledgeNote {
+  note: KnowledgeNote;
+  sourceRefs: MobileKnowledgeSourceRef[];
+}
+
+interface ExportKnowledgeData {
+  topics: ExportKnowledgeTopic[];
+  notes: ExportKnowledgeNote[];
+  missing: MobileKnowledgeMissingSelection[];
+}
+
 export class MobileBridgeConflictError extends Error {
   constructor(message = '모바일 사본이 외부에서 변경되어 자동 갱신을 멈췄습니다. 수정본을 보존한 뒤 새 사본을 만들거나 나중에 다시 시도해 주세요.') {
     super(message);
@@ -140,6 +171,9 @@ interface MobileBridgePublishResult {
   exportId: string;
   generatedAt: string;
   documentCount: number;
+  topicCount: number;
+  noteCount: number;
+  skippedKnowledgeCount: number;
 }
 
 function settingsFile(): string {
@@ -153,6 +187,8 @@ function normalizeDocumentIds(value: unknown): string[] {
     .map((item) => item.trim())
     .filter(Boolean))];
 }
+
+const normalizeKnowledgeIds = normalizeDocumentIds;
 
 function normalizeBridgeRoot(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value.trim()) return undefined;
@@ -175,6 +211,8 @@ function normalizeSettings(value: unknown): MobileBridgeSettings {
     version: MOBILE_BRIDGE_SCHEMA_VERSION,
     bridgeRoot: normalizeBridgeRoot(candidate.bridgeRoot),
     shelfDocumentIds: normalizeDocumentIds(candidate.shelfDocumentIds),
+    shelfTopicIds: normalizeKnowledgeIds(candidate.shelfTopicIds),
+    shelfNoteIds: normalizeKnowledgeIds(candidate.shelfNoteIds),
     autoPublishEnabled: candidate.autoPublishEnabled === true,
     mobileExportDirty: candidate.mobileExportDirty === true,
     mobileExportDirtyAt: normalizeDate(candidate.mobileExportDirtyAt),
@@ -261,7 +299,15 @@ async function ensureBridgeDirectories(paths: BridgePaths): Promise<void> {
   ]);
 }
 
-export async function readMobileBridgeSettings(): Promise<MobileBridgeSettings> {
+let mobileSettingsWriteQueue: Promise<unknown> = Promise.resolve();
+
+/**
+ * Serializes device-local settings read-modify-write operations within this
+ * PageDock process. The app has one desktop writer; this is not a multi-process
+ * file lock, and the external bridge remains protected by its PDF/manifest
+ * conflict check.
+ */
+async function readMobileBridgeSettingsFile(): Promise<MobileBridgeSettings> {
   try {
     return normalizeSettings(JSON.parse(await fs.readFile(settingsFile(), 'utf8')));
   } catch (error) {
@@ -269,6 +315,8 @@ export async function readMobileBridgeSettings(): Promise<MobileBridgeSettings> 
       return {
         version: MOBILE_BRIDGE_SCHEMA_VERSION,
         shelfDocumentIds: [],
+        shelfTopicIds: [],
+        shelfNoteIds: [],
         autoPublishEnabled: false,
         mobileExportDirty: false,
         mobileExportRevision: 0,
@@ -278,7 +326,12 @@ export async function readMobileBridgeSettings(): Promise<MobileBridgeSettings> 
   }
 }
 
-async function persistMobileBridgeSettings(settings: MobileBridgeSettings): Promise<MobileBridgeSettings> {
+export async function readMobileBridgeSettings(): Promise<MobileBridgeSettings> {
+  await mobileSettingsWriteQueue;
+  return readMobileBridgeSettingsFile();
+}
+
+async function persistMobileBridgeSettingsFile(settings: MobileBridgeSettings): Promise<MobileBridgeSettings> {
   const next = normalizeSettings({ ...settings, updatedAt: new Date().toISOString() });
   if (next.bridgeRoot) validateBridgeRoot(next.bridgeRoot);
   await writeJsonAtomic(settingsFile(), next);
@@ -286,27 +339,69 @@ async function persistMobileBridgeSettings(settings: MobileBridgeSettings): Prom
   return next;
 }
 
-export async function updateMobileBridgeSettings(
-  updates: Partial<Pick<MobileBridgeSettings, 'bridgeRoot' | 'shelfDocumentIds' | 'autoPublishEnabled'>>,
+async function mutateMobileBridgeSettings(
+  mutation: (current: MobileBridgeSettings) => MobileBridgeSettings | Promise<MobileBridgeSettings>,
 ): Promise<MobileBridgeSettings> {
-  const current = await readMobileBridgeSettings();
-  const bridgeRoot = Object.prototype.hasOwnProperty.call(updates, 'bridgeRoot')
-    ? normalizeBridgeRoot(updates.bridgeRoot)
-    : current.bridgeRoot;
-  if (bridgeRoot) validateBridgeRoot(bridgeRoot);
-  const nextAutoPublishEnabled = Object.prototype.hasOwnProperty.call(updates, 'autoPublishEnabled')
-    ? updates.autoPublishEnabled === true
-    : current.autoPublishEnabled;
-  const next = await persistMobileBridgeSettings({
+  let result!: MobileBridgeSettings;
+  const operation = mobileSettingsWriteQueue.then(async () => {
+    const current = await readMobileBridgeSettingsFile();
+    const candidate = await mutation(current);
+    const normalizedCurrent = normalizeSettings(current);
+    const normalizedCandidate = normalizeSettings(candidate);
+    if (JSON.stringify(normalizedCurrent) === JSON.stringify(normalizedCandidate)) {
+      result = normalizedCurrent;
+      return;
+    }
+    result = await persistMobileBridgeSettingsFile(normalizedCandidate);
+  });
+  mobileSettingsWriteQueue = operation.catch(() => undefined);
+  await operation;
+  return result;
+}
+
+function dirtySettings(current: MobileBridgeSettings): MobileBridgeSettings {
+  return {
     ...current,
-    version: MOBILE_BRIDGE_SCHEMA_VERSION,
-    bridgeRoot,
-    shelfDocumentIds: Object.prototype.hasOwnProperty.call(updates, 'shelfDocumentIds')
-      ? normalizeDocumentIds(updates.shelfDocumentIds)
-      : current.shelfDocumentIds,
-    autoPublishEnabled: nextAutoPublishEnabled,
-    autoPublishRetryRevision: nextAutoPublishEnabled ? current.autoPublishRetryRevision : undefined,
-    autoPublishRetryAt: nextAutoPublishEnabled ? current.autoPublishRetryAt : undefined,
+    mobileExportDirty: true,
+    mobileExportDirtyAt: new Date().toISOString(),
+    mobileExportRevision: current.mobileExportRevision + 1,
+    autoPublishRetryRevision: undefined,
+    autoPublishRetryAt: undefined,
+    lastPublishFailureAt: undefined,
+  };
+}
+
+export async function updateMobileBridgeSettings(
+  updates: Partial<Pick<MobileBridgeSettings, 'bridgeRoot' | 'shelfDocumentIds' | 'shelfTopicIds' | 'shelfNoteIds' | 'autoPublishEnabled'>>,
+): Promise<MobileBridgeSettings> {
+  const next = await mutateMobileBridgeSettings((current) => {
+    const bridgeRoot = Object.prototype.hasOwnProperty.call(updates, 'bridgeRoot')
+      ? normalizeBridgeRoot(updates.bridgeRoot)
+      : current.bridgeRoot;
+    if (bridgeRoot) validateBridgeRoot(bridgeRoot);
+    const nextAutoPublishEnabled = Object.prototype.hasOwnProperty.call(updates, 'autoPublishEnabled')
+      ? updates.autoPublishEnabled === true
+      : current.autoPublishEnabled;
+    const candidate: MobileBridgeSettings = {
+      ...current,
+      version: MOBILE_BRIDGE_SCHEMA_VERSION,
+      bridgeRoot,
+      shelfDocumentIds: Object.prototype.hasOwnProperty.call(updates, 'shelfDocumentIds')
+        ? normalizeDocumentIds(updates.shelfDocumentIds)
+        : current.shelfDocumentIds,
+      shelfTopicIds: Object.prototype.hasOwnProperty.call(updates, 'shelfTopicIds')
+        ? normalizeKnowledgeIds(updates.shelfTopicIds)
+        : current.shelfTopicIds,
+      shelfNoteIds: Object.prototype.hasOwnProperty.call(updates, 'shelfNoteIds')
+        ? normalizeKnowledgeIds(updates.shelfNoteIds)
+        : current.shelfNoteIds,
+      autoPublishEnabled: nextAutoPublishEnabled,
+      autoPublishRetryRevision: nextAutoPublishEnabled ? current.autoPublishRetryRevision : undefined,
+      autoPublishRetryAt: nextAutoPublishEnabled ? current.autoPublishRetryAt : undefined,
+    };
+    const selectionChanged = (['shelfDocumentIds', 'shelfTopicIds', 'shelfNoteIds'] as const)
+      .some((key) => JSON.stringify([...candidate[key]].sort()) !== JSON.stringify([...current[key]].sort()));
+    return selectionChanged || candidate.bridgeRoot !== current.bridgeRoot ? dirtySettings(candidate) : candidate;
   });
   if (!next.autoPublishEnabled) clearScheduledMobileBridgePublish();
   if (next.autoPublishEnabled && next.mobileExportDirty) await scheduleMobileBridgePublish();
@@ -316,21 +411,66 @@ export async function updateMobileBridgeSettings(
 export async function addMobileShelfPdf(pdfPath: string): Promise<{ documentId: string; added: boolean }> {
   const document = await getDocumentByPath(pdfPath);
   if (!document) throw new Error('모바일 보관함에 넣기 전에 PDF를 PageDock Library에서 다시 열어 주세요.');
-  const current = await readMobileBridgeSettings();
-  const added = !current.shelfDocumentIds.includes(document.id);
-  await updateMobileBridgeSettings({
-    shelfDocumentIds: added ? [...current.shelfDocumentIds, document.id] : current.shelfDocumentIds,
+  let added = false;
+  const next = await mutateMobileBridgeSettings((current) => {
+    added = !current.shelfDocumentIds.includes(document.id);
+    return added
+      ? dirtySettings({ ...current, shelfDocumentIds: [...current.shelfDocumentIds, document.id] })
+      : current;
   });
-  if (added) await markMobileBridgeExportDirty();
+  if (added && next.autoPublishEnabled && next.mobileExportDirty) await scheduleMobileBridgePublish();
   return { documentId: document.id, added };
 }
 
 export async function removeMobileShelfDocument(documentId: string): Promise<MobileBridgeSettings> {
-  const current = await readMobileBridgeSettings();
-  const next = await updateMobileBridgeSettings({
-    shelfDocumentIds: current.shelfDocumentIds.filter((candidate) => candidate !== documentId),
+  let removed = false;
+  const next = await mutateMobileBridgeSettings((current) => {
+    const shelfDocumentIds = current.shelfDocumentIds.filter((candidate) => candidate !== documentId);
+    removed = shelfDocumentIds.length !== current.shelfDocumentIds.length;
+    return removed ? dirtySettings({ ...current, shelfDocumentIds }) : current;
   });
-  if (next.shelfDocumentIds.length !== current.shelfDocumentIds.length) await markMobileBridgeExportDirty();
+  if (removed && next.autoPublishEnabled && next.mobileExportDirty) await scheduleMobileBridgePublish();
+  return next;
+}
+
+export async function addMobileKnowledgeSelection(
+  kind: 'topic' | 'note',
+  id: string,
+): Promise<{ added: boolean; settings: MobileBridgeSettings }> {
+  const trimmedId = id.trim();
+  if (!trimmedId) throw new Error('Knowledge 선택 ID가 필요합니다.');
+  const snapshot = await getKnowledgeSnapshot();
+  const record = kind === 'topic'
+    ? snapshot.topics.find((topic) => topic.id === trimmedId)
+    : snapshot.notes.find((note) => note.id === trimmedId && note.status !== 'dismissed');
+  if (!record) throw new Error('선택할 수 있는 Knowledge 기록을 찾을 수 없습니다.');
+  let added = false;
+  const next = await mutateMobileBridgeSettings((current) => {
+    const ids = kind === 'topic' ? current.shelfTopicIds : current.shelfNoteIds;
+    if (ids.includes(trimmedId)) return current;
+    added = true;
+    return dirtySettings(kind === 'topic'
+      ? { ...current, shelfTopicIds: [...ids, trimmedId] }
+      : { ...current, shelfNoteIds: [...ids, trimmedId] });
+  });
+  if (next.autoPublishEnabled && next.mobileExportDirty) await scheduleMobileBridgePublish();
+  return { added, settings: next };
+}
+
+export async function removeMobileKnowledgeSelection(
+  kind: 'topic' | 'note',
+  id: string,
+): Promise<MobileBridgeSettings> {
+  const trimmedId = id.trim();
+  if (!trimmedId) throw new Error('Knowledge 선택 ID가 필요합니다.');
+  const next = await mutateMobileBridgeSettings((current) => {
+    const ids = kind === 'topic' ? current.shelfTopicIds : current.shelfNoteIds;
+    if (!ids.includes(trimmedId)) return current;
+    return dirtySettings(kind === 'topic'
+      ? { ...current, shelfTopicIds: ids.filter((candidate) => candidate !== trimmedId) }
+      : { ...current, shelfNoteIds: ids.filter((candidate) => candidate !== trimmedId) });
+  });
+  if (next.autoPublishEnabled && next.mobileExportDirty) await scheduleMobileBridgePublish();
   return next;
 }
 
@@ -471,21 +611,41 @@ function titleForDocument(document: ResearchDocument): string {
   return document.displayTitle.trim() || document.fileName?.replace(/\.pdf$/i, '') || '제목 없는 문서';
 }
 
+async function resolveKnowledgeSourceRefs(
+  anchors: readonly { documentId?: string; page?: number; text?: string }[],
+): Promise<MobileKnowledgeSourceRef[]> {
+  const documents = new Map<string, string>();
+  await Promise.all([...new Set(anchors.map((anchor) => anchor.documentId).filter((id): id is string => Boolean(id)))].map(async (documentId) => {
+    const document = await getDocumentById(documentId);
+    if (document) documents.set(documentId, titleForDocument(document));
+  }));
+  return anchors.map((anchor) => ({
+    documentId: anchor.documentId,
+    documentTitle: anchor.documentId ? documents.get(anchor.documentId) : undefined,
+    page: anchor.page,
+  }));
+}
+
+async function prepareExportKnowledge(
+  selection: ReturnType<typeof selectMobileKnowledge>,
+  notes: readonly KnowledgeNote[],
+): Promise<ExportKnowledgeData> {
+  return {
+    topics: await Promise.all(selection.topics.map(async (topic) => ({
+      topic,
+      sourceRefs: await resolveKnowledgeSourceRefs(getKnowledgeSourceAnchors(topic, notes)),
+    }))),
+    notes: await Promise.all(selection.notes.map(async (note) => ({
+      note,
+      sourceRefs: await resolveKnowledgeSourceRefs(getKnowledgeSourceAnchors(note, notes)),
+    }))),
+    missing: selection.missing,
+  };
+}
+
 function sessionFolder(pdfPath: string): string {
   const folder = path.posix.dirname(pdfPath);
   return folder === '.' ? '' : folder;
-}
-
-function selectedKnowledgeTopics(
-  documentId: string,
-  notes: KnowledgeNote[],
-  topics: KnowledgeTopic[],
-): KnowledgeTopic[] {
-  const matchingNoteIds = new Set(notes
-    .filter((note) => note.sourceAnchors?.some((anchor) => anchor.documentId === documentId))
-    .map((note) => note.id));
-  if (matchingNoteIds.size === 0) return [];
-  return topics.filter((topic) => topic.sourceNoteIds.some((id) => matchingNoteIds.has(id)));
 }
 
 async function loadExportDocument(documentId: string, knowledge: Awaited<ReturnType<typeof getKnowledgeSnapshot>>): Promise<ExportDocumentData | null> {
@@ -522,7 +682,7 @@ async function loadExportDocument(documentId: string, knowledge: Awaited<ReturnT
     chatAnswers,
     noteMarkdown: metadata.noteMarkdown,
     publicationYear: document.publicationYear,
-    knowledgeTopics: selectedKnowledgeTopics(document.id, knowledge.notes, knowledge.topics),
+    knowledgeTopics: selectAnchoredKnowledgeTopics(document.id, knowledge.notes, knowledge.topics),
   };
 }
 
@@ -537,25 +697,29 @@ function wrapText(font: PDFFont, text: string, size: number, maxWidth: number): 
     }
     let current = '';
     for (const token of paragraph.split(/(\s+)/)) {
-      const candidate = `${current}${token}`;
-      if (current && font.widthOfTextAtSize(candidate, size) > maxWidth) {
-        lines.push(current.trimEnd());
-        current = token.trimStart();
-      } else if (!current && font.widthOfTextAtSize(token, size) > maxWidth) {
-        let characters = '';
-        for (const character of token) {
-          const next = `${characters}${character}`;
-          if (characters && font.widthOfTextAtSize(next, size) > maxWidth) {
-            lines.push(characters);
-            characters = character;
-          } else {
-            characters = next;
-          }
-        }
-        current = characters;
-      } else {
-        current = candidate;
+      if (/^\s+$/.test(token)) {
+        if (current && font.widthOfTextAtSize(`${current}${token}`, size) <= maxWidth) current += token;
+        continue;
       }
+      if (current && font.widthOfTextAtSize(`${current}${token}`, size) > maxWidth) {
+        lines.push(current.trimEnd());
+        current = '';
+      }
+      let chunk = '';
+      for (const character of token) {
+        const next = `${chunk}${character}`;
+        if (chunk && font.widthOfTextAtSize(next, size) > maxWidth) {
+          if (current) {
+            lines.push(current.trimEnd());
+            current = '';
+          }
+          lines.push(chunk);
+          chunk = character;
+        } else {
+          chunk = next;
+        }
+      }
+      current += chunk;
     }
     if (current.trim()) lines.push(current.trimEnd());
   }
@@ -582,15 +746,7 @@ function ensureHeight(composer: PdfComposer, height: number): void {
 }
 
 function addLabel(composer: PdfComposer, label: string, color = rgb(0.29, 0.32, 0.36)): void {
-  ensureHeight(composer, 18);
-  composer.page.drawText(label, {
-    x: MOBILE_MARGIN,
-    y: composer.y,
-    font: composer.boldFont,
-    size: 8,
-    color,
-  });
-  composer.y -= 13;
+  addText(composer, label, { size: 8, bold: true, color });
 }
 
 function addText(
@@ -737,6 +893,52 @@ function addStudyCard(composer: PdfComposer, card: StudyCard): void {
   addText(composer, `답 · ${truncated(card.back, 3000)}`, { size: 10, gapAfter: 7 });
 }
 
+function addKnowledgeSourceRefs(composer: PdfComposer, refs: readonly MobileKnowledgeSourceRef[]): void {
+  if (!refs.length) {
+    addText(composer, '출처 연결 · 없음', { size: 8.5, color: rgb(0.38, 0.42, 0.46), gapAfter: 8 });
+    return;
+  }
+  for (const ref of refs) {
+    const location = [ref.documentTitle || ref.documentId || '연결된 문서', ref.page ? `p.${ref.page}` : '페이지 정보 없음']
+      .filter(Boolean).join(' · ');
+    addText(composer, `원문 연결 · ${location}`, { size: 8.5, color: rgb(0.38, 0.42, 0.46), gapAfter: 2 });
+  }
+  composer.y -= 6;
+}
+
+function readableKnowledgeBody(value: string): string {
+  return value.replace(/^\s{0,3}#{1,6}\s+/gm, '').trim();
+}
+
+function addStandaloneKnowledgeTopic(composer: PdfComposer, entry: ExportKnowledgeTopic): void {
+  const topic = entry.topic;
+  addLabel(composer, `정리된 Knowledge 주제 · ${knowledgeProvenanceLabel(topic.provenance?.kind)}`, rgb(0.22, 0.38, 0.5));
+  addText(composer, topic.title || '제목 없는 Knowledge 주제', { size: 12, bold: true, gapAfter: 2 });
+  addText(composer, `현재 revision ${topic.revision} · 수정 ${topic.updatedAt.slice(0, 10)}${topic.provenance?.originDate ? ` · 원출처 날짜 ${topic.provenance.originDate}` : ''}`, {
+    size: 8.5,
+    color: rgb(0.38, 0.42, 0.46),
+    gapAfter: 4,
+  });
+  if (topic.trust?.lastReviewedAt) addText(composer, `사람 검토 기록 · ${topic.trust.lastReviewedAt.slice(0, 10)} · 사실 검증 표시는 아님`, { size: 8.5, color: rgb(0.38, 0.42, 0.46), gapAfter: 3 });
+  if (topic.summary.trim()) addText(composer, `요약 · ${topic.summary}`, { size: 10.5, gapAfter: 4 });
+  addText(composer, readableKnowledgeBody(topic.bodyMarkdown) || '[본문 없음]', { size: 12, gapAfter: 4 });
+  addKnowledgeSourceRefs(composer, entry.sourceRefs);
+}
+
+function addStandaloneKnowledgeNote(composer: PdfComposer, entry: ExportKnowledgeNote): void {
+  const note = entry.note;
+  const status = ({ inbox: '받은 메모', review: '검토 중', integrated: '주제 반영됨', error: '처리 오류' } as Record<string, string>)[note.status] || note.status;
+  addLabel(composer, `캡처한 원문 메모 · ${knowledgeProvenanceLabel(note.provenance?.kind)}`, rgb(0.42, 0.33, 0.57));
+  addText(composer, note.title || note.sourceName || '제목 없는 캡처 메모', { size: 12, bold: true, gapAfter: 2 });
+  addText(composer, `${status} · ${note.sourceName} · 캡처 ${note.createdAt.slice(0, 10)}${note.provenance?.originDate ? ` · 원출처 날짜 ${note.provenance.originDate}` : ''}`, {
+    size: 8.5,
+    color: rgb(0.38, 0.42, 0.46),
+    gapAfter: 4,
+  });
+  addText(composer, note.rawText || '[빈 메모]', { size: 12, gapAfter: 4 });
+  addKnowledgeSourceRefs(composer, entry.sourceRefs);
+}
+
 async function addVisualRegion(composer: PdfComposer, data: ExportDocumentData, region: VisualRegion): Promise<void> {
   addLabel(composer, `${getVisualRegionKindLabel(region.kind)} · p.${region.page}`);
   try {
@@ -755,7 +957,12 @@ async function addVisualRegion(composer: PdfComposer, data: ExportDocumentData, 
   }
 }
 
-async function buildMobilePdf(documents: ExportDocumentData[], exportId: string, generatedAt: string): Promise<Uint8Array> {
+async function buildMobilePdf(
+  documents: ExportDocumentData[],
+  knowledge: ExportKnowledgeData,
+  exportId: string,
+  generatedAt: string,
+): Promise<Uint8Array> {
   const document = await PDFDocument.create();
   const { font, boldFont } = await embedFonts(document);
   document.setTitle('PageDock Mobile');
@@ -777,12 +984,23 @@ async function buildMobilePdf(documents: ExportDocumentData[], exportId: string,
   addText(composer, 'PageDock Mobile', { size: 24, bold: true, gapAfter: 8 });
   addText(composer, '읽기 전용 모바일 공부 사본', { size: 12, color: rgb(0.28, 0.32, 0.36), gapAfter: 16 });
   addText(composer, `생성 · ${new Date(generatedAt).toLocaleString('ko-KR')}`, { size: 9.5 });
-  addText(composer, `모바일 보관함 · ${documents.length}개 문서`, { size: 9.5, gapAfter: 12 });
+  const projectedTopicCount = new Set([
+    ...documents.flatMap((entry) => entry.knowledgeTopics.map((topic) => topic.id)),
+    ...knowledge.topics.map((entry) => entry.topic.id),
+  ]).size;
+  addText(composer, `모바일 보관함 · ${documents.length}개 문서 · 정리된 지식 주제 ${projectedTopicCount}개 · 캡처 메모 ${knowledge.notes.length}개`, { size: 9.5, gapAfter: 12 });
   addText(composer, '이 파일은 생성 당시 Windows PageDock의 공부 기록 사본입니다. 원문 근거와 편집은 Windows PageDock에서 계속 관리합니다.', {
     size: 10.5,
     color: rgb(0.29, 0.32, 0.36),
     gapAfter: 18,
   });
+
+  if (knowledge.missing.length) {
+    addRule(composer);
+    addText(composer, `선택했지만 이번 사본에서 찾지 못한 Knowledge ${knowledge.missing.length}개`, { size: 13, bold: true, gapAfter: 5 });
+    addText(composer, '선택 자체는 유지됩니다. 원본이 복구되면 다시 발행해 주세요.', { size: 9.5, color: rgb(0.55, 0.22, 0.18), gapAfter: 4 });
+    for (const item of knowledge.missing) addText(composer, `${item.kind === 'topic' ? '주제' : '메모'} · ${item.title} · id ${item.id}`, { size: 9, color: rgb(0.55, 0.22, 0.18), gapAfter: 2 });
+  }
 
   const unresolved = documents.flatMap((entry) => entry.highlights
     .filter(isUnresolvedHighlight)
@@ -846,10 +1064,31 @@ async function buildMobilePdf(documents: ExportDocumentData[], exportId: string,
       addRule(composer);
       addText(composer, '연결된 정리 노트', { size: 13, bold: true, gapAfter: 5 });
       for (const topic of entry.knowledgeTopics) {
-        addLabel(composer, `${topic.trust?.lastReviewedAt ? `사람 검토 · ${topic.trust.lastReviewedAt.slice(0, 10)}` : '사람 검토 기록 없음'}`);
+        addLabel(composer, `정리된 지식 주제 · ${knowledgeProvenanceLabel(topic.provenance?.kind)}`);
         addText(composer, topic.title, { size: 11, bold: true, gapAfter: 2 });
-        addText(composer, truncated(topic.bodyMarkdown, MAX_EXPORTED_MEMO_CHARS), { size: 10, gapAfter: 8 });
+        if (topic.trust?.lastReviewedAt) addText(composer, `사람 검토 기록 · ${topic.trust.lastReviewedAt.slice(0, 10)} · 사실 검증 표시는 아님`, { size: 8.5, color: rgb(0.38, 0.42, 0.46), gapAfter: 3 });
+        addText(composer, readableKnowledgeBody(topic.bodyMarkdown) || '[본문 없음]', { size: 12, gapAfter: 8 });
       }
+    }
+  }
+
+  if (knowledge.topics.length || knowledge.notes.length) {
+    newMobilePage(composer);
+    addText(composer, '선택한 Knowledge와 캡처 메모', { size: 17, bold: true, gapAfter: 4 });
+    addText(composer, '선택한 현재 주제와 캡처 원문 메모를 문서 기록과 구분해 표시합니다. AI 추론은 확인 전 원본으로 남습니다.', {
+      size: 9.5,
+      color: rgb(0.36, 0.4, 0.44),
+      gapAfter: 11,
+    });
+    if (knowledge.topics.length) {
+      addRule(composer);
+      addText(composer, '정리된 Knowledge 주제', { size: 13, bold: true, gapAfter: 5 });
+      for (const topic of knowledge.topics) addStandaloneKnowledgeTopic(composer, topic);
+    }
+    if (knowledge.notes.length) {
+      addRule(composer);
+      addText(composer, '캡처한 원문 메모', { size: 13, bold: true, gapAfter: 5 });
+      for (const note of knowledge.notes) addStandaloneKnowledgeNote(composer, note);
     }
   }
 
@@ -887,6 +1126,7 @@ async function archiveConflictingPair(paths: BridgePaths): Promise<void> {
 
 async function publishMobileBridgeInternal(options: { preserveConflict?: boolean; automatic?: boolean } = {}): Promise<MobileBridgePublishResult> {
   const settings = await readMobileBridgeSettings();
+  const notificationGeneration = getMobileDirtyNotificationGeneration();
   if (!settings.bridgeRoot) throw new Error('먼저 설정에서 모바일 연결 폴더를 지정해 주세요.');
   const paths = bridgePaths(settings.bridgeRoot);
   await ensureBridgeDirectories(paths);
@@ -904,12 +1144,30 @@ async function publishMobileBridgeInternal(options: { preserveConflict?: boolean
   const knowledge = await getKnowledgeSnapshot();
   const documents = (await Promise.all(settings.shelfDocumentIds.map((id) => loadExportDocument(id, knowledge))))
     .filter((entry): entry is ExportDocumentData => entry !== null);
+  const includedTopicIds = new Set<string>();
+  for (const entry of documents) {
+    entry.knowledgeTopics = entry.knowledgeTopics.filter((topic) => {
+      if (includedTopicIds.has(topic.id)) return false;
+      includedTopicIds.add(topic.id);
+      return true;
+    });
+  }
+  const knowledgeSelection = selectMobileKnowledge(knowledge, settings.shelfTopicIds, settings.shelfNoteIds);
+  const anchoredTopicIds = new Set(documents.flatMap((entry) => entry.knowledgeTopics.map((topic) => topic.id)));
+  const exportKnowledge = await prepareExportKnowledge({
+    ...knowledgeSelection,
+    topics: knowledgeSelection.topics.filter((topic) => !anchoredTopicIds.has(topic.id)),
+  }, knowledge.notes);
+  const projectedTopicCount = new Set([
+    ...anchoredTopicIds,
+    ...exportKnowledge.topics.map((entry) => entry.topic.id),
+  ]).size;
   const exportId = randomUUID();
   const generatedAt = new Date().toISOString();
   const stageDirectory = path.join(paths.stage, exportId);
   await fs.mkdir(stageDirectory, { recursive: true });
   try {
-    const pdf = await buildMobilePdf(documents, exportId, generatedAt);
+    const pdf = await buildMobilePdf(documents, exportKnowledge, exportId, generatedAt);
     const manifest: MobileManifest = {
       schemaVersion: MOBILE_BRIDGE_SCHEMA_VERSION,
       exportId,
@@ -944,22 +1202,31 @@ async function publishMobileBridgeInternal(options: { preserveConflict?: boolean
     if (finalPair.state !== 'valid' || finalPair.exportId !== exportId) {
       throw new Error('모바일 사본의 최종 검증에 실패했습니다.');
     }
-    const latest = await readMobileBridgeSettings();
-    const hasNewerExportInput = latest.mobileExportRevision !== sourceRevision;
-    const persisted = await persistMobileBridgeSettings({
-      ...latest,
-      mobileExportDirty: hasNewerExportInput,
-      mobileExportDirtyAt: hasNewerExportInput ? latest.mobileExportDirtyAt : undefined,
-      lastSuccessfulExportId: exportId,
-      lastSuccessfulExportAt: generatedAt,
-      lastAutomaticPublishAt: options.automatic ? generatedAt : latest.lastAutomaticPublishAt,
-      autoPublishRetryRevision: undefined,
-      autoPublishRetryAt: undefined,
-      lastPublishFailureAt: undefined,
+    const persisted = await mutateMobileBridgeSettings((latest) => {
+      const hasNewerExportInput = latest.mobileExportRevision !== sourceRevision;
+      return {
+        ...latest,
+        mobileExportDirty: hasNewerExportInput,
+        mobileExportDirtyAt: hasNewerExportInput ? latest.mobileExportDirtyAt : undefined,
+        lastSuccessfulExportId: exportId,
+        lastSuccessfulExportAt: generatedAt,
+        lastAutomaticPublishAt: options.automatic ? generatedAt : latest.lastAutomaticPublishAt,
+        autoPublishRetryRevision: undefined,
+        autoPublishRetryAt: undefined,
+        lastPublishFailureAt: undefined,
+      };
     });
+    if (!persisted.mobileExportDirty) clearPendingMobileDirtyNotification(notificationGeneration);
     if (!options.automatic) clearScheduledMobileBridgePublish();
     if (persisted.autoPublishEnabled && persisted.mobileExportDirty) await scheduleMobileBridgePublish();
-    return { exportId, generatedAt, documentCount: documents.length };
+    return {
+      exportId,
+      generatedAt,
+      documentCount: documents.length,
+      topicCount: projectedTopicCount,
+      noteCount: exportKnowledge.notes.length,
+      skippedKnowledgeCount: exportKnowledge.missing.length,
+    };
   } finally {
     await fs.rm(stageDirectory, { recursive: true, force: true });
   }
@@ -1002,27 +1269,25 @@ export function getNextMobileBridgeAutomaticPublishAt(settings: Pick<MobileBridg
 }
 
 async function recordAutomaticPublishFailure(): Promise<void> {
-  const latest = await readMobileBridgeSettings();
-  if (!latest.autoPublishEnabled || !latest.mobileExportDirty) return;
-  if (latest.autoPublishRetryRevision !== latest.mobileExportRevision) {
-    const retryAt = new Date(Date.now() + configuredDuration('PAGEDOCK_MOBILE_BRIDGE_AUTO_PUBLISH_RETRY_MS', MOBILE_AUTO_PUBLISH_RETRY_DELAY_MS)).toISOString();
-    await persistMobileBridgeSettings({
+  let retryAt: string | undefined;
+  await mutateMobileBridgeSettings((latest) => {
+    if (!latest.autoPublishEnabled || !latest.mobileExportDirty) return latest;
+    if (latest.autoPublishRetryRevision !== latest.mobileExportRevision) {
+      retryAt = new Date(Date.now() + configuredDuration('PAGEDOCK_MOBILE_BRIDGE_AUTO_PUBLISH_RETRY_MS', MOBILE_AUTO_PUBLISH_RETRY_DELAY_MS)).toISOString();
+      return {
+        ...latest,
+        autoPublishRetryRevision: latest.mobileExportRevision,
+        autoPublishRetryAt: retryAt,
+        lastPublishFailureAt: new Date().toISOString(),
+      };
+    }
+    return {
       ...latest,
-      autoPublishRetryRevision: latest.mobileExportRevision,
-      autoPublishRetryAt: retryAt,
+      autoPublishRetryAt: undefined,
       lastPublishFailureAt: new Date().toISOString(),
-    });
-    scheduleMobileBridgePublishAt(
-      Date.parse(retryAt),
-      'retry',
-    );
-    return;
-  }
-  await persistMobileBridgeSettings({
-    ...latest,
-    autoPublishRetryAt: undefined,
-    lastPublishFailureAt: new Date().toISOString(),
+    };
   });
+  if (retryAt) scheduleMobileBridgePublishAt(Date.parse(retryAt), 'retry');
 }
 
 async function runAutomaticMobileBridgePublish(): Promise<void> {
@@ -1064,7 +1329,8 @@ function scheduleMobileBridgePublishAt(at: number, kind: 'debounce' | 'retry'): 
 
 export async function getMobileBridgeInfo(): Promise<MobileBridgeInfo> {
   const settings = await readMobileBridgeSettings();
-  const shelf = await Promise.all(settings.shelfDocumentIds.map(async (documentId) => {
+  const [shelf, knowledge] = await Promise.all([
+    Promise.all(settings.shelfDocumentIds.map(async (documentId) => {
     const document = await getDocumentById(documentId);
     return {
       documentId,
@@ -1072,14 +1338,20 @@ export async function getMobileBridgeInfo(): Promise<MobileBridgeInfo> {
       path: document?.currentPath,
       missing: !document || document.missing || !document.currentPath,
     };
-  }));
+    })),
+    getKnowledgeSnapshot(),
+  ]);
+  const knowledgeShelf = getMobileKnowledgeShelf(knowledge, settings.shelfTopicIds, settings.shelfNoteIds);
+  const notificationPending = hasPendingMobileDirtyNotification();
+  const effectiveDirty = settings.mobileExportDirty || notificationPending;
   if (!settings.bridgeRoot) {
     return {
       shelf,
+      knowledgeShelf,
       conflict: false,
       autoPublishEnabled: settings.autoPublishEnabled,
-      dirty: settings.mobileExportDirty,
-      status: settings.mobileExportDirty ? 'manual-required' : 'up-to-date',
+      dirty: effectiveDirty,
+      status: notificationPending ? 'failed' : effectiveDirty ? 'manual-required' : 'up-to-date',
       lastFailureAt: settings.lastPublishFailureAt,
     };
   }
@@ -1098,17 +1370,20 @@ export async function getMobileBridgeInfo(): Promise<MobileBridgeInfo> {
         ? 'retry-pending'
         : settings.lastPublishFailureAt
           ? 'failed'
-          : settings.mobileExportDirty && settings.autoPublishEnabled
+          : notificationPending
+            ? 'failed'
+            : effectiveDirty && settings.autoPublishEnabled
             ? 'automatic-pending'
-            : settings.mobileExportDirty
+            : effectiveDirty
               ? 'manual-required'
               : 'up-to-date';
   return {
     bridgeRoot: settings.bridgeRoot,
     shelf,
+    knowledgeShelf,
     conflict,
     autoPublishEnabled: settings.autoPublishEnabled,
-    dirty: settings.mobileExportDirty,
+    dirty: effectiveDirty,
     status,
     scheduledAt: scheduledAutomaticPublish
       ? new Date(scheduledAutomaticPublish.at).toISOString()
@@ -1139,24 +1414,16 @@ export async function scheduleMobileBridgePublish(): Promise<void> {
 }
 
 export async function markMobileBridgeExportDirty(): Promise<void> {
-  const current = await readMobileBridgeSettings();
-  const next = await persistMobileBridgeSettings({
-    ...current,
-    mobileExportDirty: true,
-    mobileExportDirtyAt: new Date().toISOString(),
-    mobileExportRevision: current.mobileExportRevision + 1,
-    autoPublishRetryRevision: undefined,
-    autoPublishRetryAt: undefined,
-    lastPublishFailureAt: undefined,
-  });
+  const next = await mutateMobileBridgeSettings((current) => dirtySettings(current));
   if (next.autoPublishEnabled && next.bridgeRoot) await scheduleMobileBridgePublish();
 }
 
 export async function markMobileBridgeExportDirtyForDocument(documentId: string | undefined): Promise<void> {
   if (!documentId) return;
-  const settings = await readMobileBridgeSettings();
-  if (!settings.shelfDocumentIds.includes(documentId)) return;
-  await markMobileBridgeExportDirty();
+  const next = await mutateMobileBridgeSettings((current) => (
+    current.shelfDocumentIds.includes(documentId) ? dirtySettings(current) : current
+  ));
+  if (next.autoPublishEnabled && next.bridgeRoot && next.mobileExportDirty) await scheduleMobileBridgePublish();
 }
 
 export async function markMobileBridgeExportDirtyForPdfPath(pdfPath: string): Promise<void> {
