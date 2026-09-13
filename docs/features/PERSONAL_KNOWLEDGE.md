@@ -10,9 +10,9 @@ The user is a reviewer, not a classifier. Ordinary capture must not require a ti
 
 ## Primary flow
 
-1. Paste text or drop multiple `.txt`, `.md`, or `.markdown` files into the inbox. A direct note may optionally be marked as a literature claim, work observation, or personal hypothesis.
+1. Paste text or drop multiple `.txt`, `.md`, or `.markdown` files into the inbox. A direct note may optionally be marked as a literature claim, work observation, or personal hypothesis. A deliberately selected PNG/JPEG diagram, screenshot, or photo (up to 10 MB) may accompany a short explanation as one local image memo.
 2. A Reader highlight or persisted AI answer may use `지식 후보로 보내기` to enter the same inbox with its existing source anchor and explicit provenance class. This is not a direct wiki write.
-3. Exact duplicate contents are skipped by SHA-256 regardless of filename.
+3. Exact duplicate text contents are skipped by SHA-256 regardless of filename. Image notes additionally include immutable image hashes, so the same explanation with a different diagram remains a distinct capture; identical image bytes are stored once.
 4. Run one note, the next ten, or the explicitly confirmed full queue. Processing is sequential, stops on the first error, supports both stop-after-current and immediate cancellation, and never creates uncontrolled concurrent Codex turns. Each Codex execution has a 285-second application timeout and the app does not automatically retry it.
 5. Local term matching selects at most eight candidate topics. `knowledge-ai.ts` additionally caps candidate context to about 36,000 characters total and 6,000 per topic. Long topics use explicit head/tail excerpts, and every affected review retains a visible context warning.
 6. Codex returns schema-constrained `create`, `update`, or `conflict` proposals.
@@ -44,6 +44,8 @@ Reading v1 is non-mutating. Immediately before the first v2 write, the exact v1 
 
 Historical revisions may be moved to `.annot/knowledge-revision-trash.json`. The current revision is protected. Trash is written before the active revision is removed; restore writes the active copy before deleting the trash entry. Both orders prefer a recoverable duplicate over data loss. Permanent deletion is a separate confirmed action. The trash file is included in portable backups.
 
+Deliberately selected image bytes live separately at `.annot/knowledge-assets/<hash-prefix>/<sha256>.<ext>`. A `KnowledgeNote.attachments[]` entry stores only its matching SHA-256 id, MIME (`image/png` or `image/jpeg`), and byte length. Capture checks the actual file signature, writes/syncs/verifies a partial file before publish, and rechecks the bytes when serving or exporting. This is ordinary Library data, so the existing portable backup collector includes it without changing archive manifest v2. Image bytes never enter a remote Knowledge/Codex/web prompt automatically; if the user explicitly asks for remote organization, only the existing text-note contract is sent.
+
 ## State and invariants
 
 Note states:
@@ -70,10 +72,12 @@ Critical invariants:
 - Manual review attention does not change the topic body, `updatedAt`, or revision number. A source date alone never requests a review.
 - The current topic revision can never enter the revision trash.
 - Review diffs are calculated only after the user opens the review detail.
+- A visual attachment is deliberate user input, not an automatic PDF crop, OCR result, or inferred source. Missing/corrupt bytes are reported; they are never replaced by a guessed image.
 
 ## Code map
 
 - `src/lib/knowledge-store.ts`: versioned persistence, migration, state transitions, revision/conflict rules.
+- `src/lib/knowledge-image-assets.ts`: local PNG/JPEG signature, content-addressed storage, and integrity-checked reads.
 - `src/lib/knowledge-ai.ts`: bounded context and structured Codex prompt.
 - `src/lib/knowledge-auth.ts`: shared OAuth-only predicate used by both UI and server.
 - `src/lib/knowledge-diff.ts`: dependency-free bounded line diff.
@@ -86,6 +90,7 @@ Critical invariants:
 - `src/components/knowledge/KnowledgeConflictCard.tsx`: conflict evidence and resolution notes.
 - `docs/KNOWLEDGE_USER_GUIDE_KO.md`: end-user instructions and recovery guidance.
 - `tests/knowledge-core.test.ts`: data safety invariants.
+- `tests/knowledge-image-assets.test.ts`: image deduplication, immutable references, and invalid-input rejection.
 - `tests/knowledge-diff.test.ts`: diff behavior.
 
 ## Known limitations and next revisions
@@ -98,6 +103,7 @@ Critical invariants:
 6. Line diff collapses long unchanged runs and preserves common prefixes/suffixes in the large-document fallback. It is still line-based rather than word-based.
 7. Reader/AI promotion preserves a source anchor but Knowledge does not yet navigate that anchor directly or mix multiple source scopes into an AI conversation.
 8. The memo-folder path and fingerprint ledger are device-local; they are not restored as portable library data.
+9. Image capture intentionally has no OCR, vision analysis, thumbnail cache, clipboard watcher, automatic PDF crop, or silent orphan cleanup. Use one descriptive memo per useful image and return to the PDF visual-region tool when the primary source is an existing PDF page.
 
 ## Do not do this
 
@@ -107,6 +113,7 @@ Critical invariants:
 - Do not add automatic model retries; retries must remain explicit because OAuth usage limits still matter.
 - Do not remove the v1 rollback copy or silently truncate candidate context.
 - Do not turn every apparent contradiction into a replacement fact.
+- Do not auto-send, OCR, classify, or derive a permanent crop from images. Do not delete unreferenced image blobs without an explicit future recovery/inspection workflow.
 - Do not require tags, folders, scores, or an ontology during ordinary capture. Provenance choice stays a single optional/confirmed origin label for the narrow flows that need it.
 - Do not add graphs, chat, web research, or elaborate ontologies before the capture/review loop is proven with real notes.
 

@@ -1,5 +1,15 @@
 # Roadmap
 
+## Implemented — 0.9.3 visual Knowledge notes (working tree)
+
+- A short local Knowledge memo can deliberately retain one PNG/JPEG diagram, screenshot, or photo up to 10 MB. The bytes are content-addressed and integrity-checked below `.annot/knowledge-assets`; duplicate images are stored once without making a different diagram disappear behind the same caption.
+- Visual note assets remain outside SQLite and the Knowledge JSON body, travel through the existing portable backup v2 collector, and appear only when their note is explicitly selected in the existing read-only Mobile Bridge PDF. They are never automatic PDF crops, OCR input, or remote-AI image payloads.
+
+## Implemented — 0.9.2 NAS safety snapshots
+
+- An explicit Windows-selected passive replica target can write verified PDF-excluding portable v2 ZIPs to a mapped Synology/SMB folder after local success. It is opt-in, preserves fourteen successful automatic generations, and reports copy failure without blocking local study saves.
+- Active Library data remains local; direct NAS SQLite/sidecar/PDF editing, two-way sync, NAS-hosted app services, and durable image assets remain deferred. A future image-attachment data model must preserve original source bytes and a separate mobile projection without turning the NAS target into live state.
+
 ## Implemented — 0.9.1 study usability
 
 - Current-PDF record search and semantic filters with direct source navigation; no cross-document database or automatic AI.

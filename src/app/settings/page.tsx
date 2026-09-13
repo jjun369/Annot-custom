@@ -71,6 +71,20 @@ interface MobileBridgeInfo {
   lastFailureAt?: string;
 }
 
+interface BackupReplicaInfo {
+  targetRoot?: string;
+  automaticEnabled: boolean;
+  automaticRetention: number;
+  lastAutomaticArtifact?: {
+    fileName: string;
+    size: number;
+    sha256: string;
+    copiedAt: string;
+  };
+  lastFailureAt?: string;
+  status: 'not-configured' | 'manual-only' | 'up-to-date' | 'failed';
+}
+
 function maskAccountIdentifier(value: string): string {
   const trimmed = value.trim();
   const [local, domain] = trimmed.split('@');
@@ -105,6 +119,10 @@ export default function SettingsPage() {
   const [bridgeRootDraft, setBridgeRootDraft] = useState('');
   const [bridgeBusy, setBridgeBusy] = useState(false);
   const [bridgeMessage, setBridgeMessage] = useState('');
+  const [backupReplica, setBackupReplica] = useState<BackupReplicaInfo | null>(null);
+  const [backupReplicaDraft, setBackupReplicaDraft] = useState('');
+  const [backupReplicaBusy, setBackupReplicaBusy] = useState(false);
+  const [backupReplicaMessage, setBackupReplicaMessage] = useState('');
   const importInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -119,6 +137,7 @@ export default function SettingsPage() {
     }).catch(() => undefined);
     void loadTrash();
     void loadMobileBridge();
+    void loadBackupReplica();
   }, []);
 
   useEffect(() => {
@@ -159,6 +178,72 @@ export default function SettingsPage() {
     }
     const selected = await window.pageDockDesktop.selectDirectory();
     if (selected) setBridgeRootDraft(selected);
+  };
+
+  const loadBackupReplica = async () => {
+    try {
+      const response = await fetch('/api/backup-replica', { cache: 'no-store' });
+      const data = await response.json();
+      if (!response.ok || data?.error) throw new Error(data?.error || '보호 사본 정보를 불러오지 못했습니다.');
+      setBackupReplica(data as BackupReplicaInfo);
+      setBackupReplicaDraft(typeof data?.targetRoot === 'string' ? data.targetRoot : '');
+    } catch (error) {
+      setBackupReplicaMessage(error instanceof Error ? error.message : '보호 사본 정보를 불러오지 못했습니다.');
+    }
+  };
+
+  const chooseBackupReplicaRoot = async () => {
+    if (!window.pageDockDesktop) {
+      notify('폴더 선택은 설치형 PageDock에서 사용할 수 있습니다.', 'info');
+      return;
+    }
+    const selected = await window.pageDockDesktop.selectDirectory();
+    if (selected) setBackupReplicaDraft(selected);
+  };
+
+  const saveBackupReplicaRoot = async () => {
+    setBackupReplicaBusy(true);
+    setBackupReplicaMessage('');
+    try {
+      const response = await fetch('/api/backup-replica', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ targetRoot: backupReplicaDraft.trim() || null }),
+      });
+      const data = await response.json();
+      if (!response.ok || data?.error) throw new Error(data?.error || '보호 사본 폴더를 저장하지 못했습니다.');
+      setBackupReplica(data as BackupReplicaInfo);
+      setBackupReplicaDraft(typeof data?.targetRoot === 'string' ? data.targetRoot : '');
+      setBackupReplicaMessage(data?.targetRoot
+        ? '보호 사본 폴더를 준비했습니다. PageDock은 이 폴더에만 검증된 복구 ZIP을 복사합니다.'
+        : '보호 사본 폴더 연결을 해제했습니다. 기존 NAS 파일은 삭제하지 않았습니다.');
+    } catch (error) {
+      setBackupReplicaMessage(error instanceof Error ? error.message : '보호 사본 폴더를 저장하지 못했습니다.');
+    } finally {
+      setBackupReplicaBusy(false);
+    }
+  };
+
+  const setAutomaticBackupReplicaEnabled = async (automaticEnabled: boolean) => {
+    setBackupReplicaBusy(true);
+    setBackupReplicaMessage('');
+    try {
+      const response = await fetch('/api/backup-replica', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ automaticEnabled }),
+      });
+      const data = await response.json();
+      if (!response.ok || data?.error) throw new Error(data?.error || '자동 보호 사본 설정을 저장하지 못했습니다.');
+      setBackupReplica(data as BackupReplicaInfo);
+      setBackupReplicaMessage(automaticEnabled
+        ? '자동 보호 사본을 켰습니다. 다음 로컬 자동 백업이 성공한 뒤 NAS 폴더에도 같은 ZIP을 복사합니다.'
+        : '자동 보호 사본을 껐습니다. Windows 원본은 계속 저장되며, 필요할 때 지금 보호 사본 만들기를 사용할 수 있습니다.');
+    } catch (error) {
+      setBackupReplicaMessage(error instanceof Error ? error.message : '자동 보호 사본 설정을 저장하지 못했습니다.');
+    } finally {
+      setBackupReplicaBusy(false);
+    }
   };
 
   const saveBridgeRoot = async () => {
@@ -399,13 +484,39 @@ export default function SettingsPage() {
       const res = await fetch('/api/library/backup', { method: 'POST' });
       const data = await res.json();
       if (!res.ok || data?.error) throw new Error(data?.error || '자동 백업을 만들지 못했습니다.');
-      setBackupMessage(`자동 백업을 만들었습니다: ${data.fileName}`);
+      const replicaSummary = data.replicaCopied
+        ? ' 보호 사본 폴더에도 검증해 복사했습니다.'
+        : data.replicaError
+          ? ` 보호 사본 복사는 실패했지만 Windows 원본과 로컬 ZIP은 정상입니다. ${data.replicaError}`
+          : '';
+      setBackupMessage(`자동 백업을 만들었습니다: ${data.fileName}.${replicaSummary}`);
       const infoRes = await fetch('/api/library/info', { cache: 'no-store' });
       if (infoRes.ok) setLibraryInfo(await infoRes.json());
+      await loadBackupReplica();
     } catch (error) {
       setBackupMessage(error instanceof Error ? error.message : '자동 백업을 만들지 못했습니다.');
     } finally {
       setBackupBusy(false);
+    }
+  };
+
+  const createBackupReplicaNow = async () => {
+    setBackupReplicaBusy(true);
+    setBackupReplicaMessage('');
+    try {
+      const response = await fetch('/api/library/backup?target=replica-auto', { method: 'POST' });
+      const data = await response.json();
+      if (!response.ok || data?.error) throw new Error(data?.error || '보호 사본을 만들지 못했습니다.');
+      if (!data.replicaCopied) throw new Error(data.replicaError || '보호 사본 폴더가 설정되지 않았습니다.');
+      setBackupReplicaMessage(`Windows에서 검증한 복구 ZIP을 보호 사본 폴더에 저장했습니다: ${data.fileName}`);
+      const infoRes = await fetch('/api/library/info', { cache: 'no-store' });
+      if (infoRes.ok) setLibraryInfo(await infoRes.json());
+      await loadBackupReplica();
+    } catch (error) {
+      setBackupReplicaMessage(error instanceof Error ? error.message : '보호 사본을 만들지 못했습니다.');
+      await loadBackupReplica();
+    } finally {
+      setBackupReplicaBusy(false);
     }
   };
 
@@ -682,8 +793,8 @@ export default function SettingsPage() {
               </div>
               <p className="mt-2 text-xs text-on-surface-variant">
                 {libraryInfo?.oneDriveLikely
-                  ? 'OneDrive 경로를 사용 중입니다. 이 폴더를 “이 장치에 항상 유지”로 설정해 주세요.'
-                  : '여러 컴퓨터에서 사용하려면 PageDock Library를 개인 OneDrive 또는 iCloud Drive 안의 폴더로 지정할 수 있습니다.'}
+                  ? 'OneDrive 경로를 사용 중입니다. 공부 중인 Library를 동기화하면 충돌·부분 저장 위험이 있습니다. 가능하면 로컬 폴더로 옮기고, 아래의 별도 보호 사본을 사용해 주세요.'
+                  : 'PageDock Library는 이 PC의 로컬 폴더에 두세요. NAS·클라우드에는 아래의 별도 보호 사본이나 읽기 전용 모바일 사본만 만듭니다.'}
               </p>
             </div>
             <div className="mt-5 rounded-xl border border-outline-variant/25 bg-surface-container-low p-4">
@@ -795,6 +906,67 @@ export default function SettingsPage() {
             <div className="mt-5 rounded-xl border border-outline-variant/25 bg-surface-container-low p-4">
               <p className="text-sm font-medium text-on-surface">PageDock 복구 백업</p>
               <p className="mt-1 text-xs leading-5 text-on-surface-variant">PageDock의 원본 PDF와 공부 기록을 복구하기 위한 ZIP입니다. 모바일 읽기 사본과는 별개입니다. 수동 백업은 자동 삭제하지 않고, 자동 백업은 최신 3개만 유지합니다.</p>
+              <div className="mt-4 rounded-xl border border-outline-variant/25 bg-surface-container-lowest p-3.5">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div>
+                    <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-on-surface"><Server size={14} /> NAS 보호 사본 <span className="font-normal text-on-surface-variant">(선택)</span></p>
+                    <p className="mt-1 max-w-2xl text-[11px] leading-4 text-on-surface-variant">Windows Library에서 먼저 검증한 PDF 제외 복구 ZIP을 별도 폴더에 세대별로 복사합니다. Synology SMB 공유 폴더를 Windows에서 연결한 뒤 그 안의 빈 폴더를 고르세요. NAS는 원본 저장소·보호 사본이며, PageDock Library나 SQLite를 직접 열어 쓰는 곳이 아닙니다.</p>
+                  </div>
+                  {backupReplica?.status === 'failed' && <span className="rounded-full bg-study-unclear-container px-2 py-1 text-[10px] font-semibold text-study-unclear">최근 복사 확인 필요</span>}
+                </div>
+                <div className="mt-3 flex gap-2">
+                  <input
+                    value={backupReplicaDraft}
+                    onChange={(event) => setBackupReplicaDraft(event.target.value)}
+                    aria-label="NAS 보호 사본 폴더 경로"
+                    placeholder="예: Z:\\PageDock 또는 NAS 공유 폴더 안의 별도 폴더"
+                    className="min-w-0 flex-1 rounded-lg border border-outline-variant/30 bg-surface-container px-3 py-2 font-mono text-xs text-on-surface-variant outline-none focus:border-outline"
+                  />
+                  <button type="button" onClick={() => void chooseBackupReplicaRoot()} disabled={backupReplicaBusy} className="inline-flex items-center gap-1.5 rounded-lg bg-surface-container px-3 py-2 text-xs font-semibold text-on-surface disabled:opacity-50">
+                    <FolderOpen size={14} /> 폴더 선택
+                  </button>
+                  <button type="button" onClick={() => void saveBackupReplicaRoot()} disabled={backupReplicaBusy} className="rounded-lg bg-surface-container px-3 py-2 text-xs font-semibold text-on-surface disabled:opacity-50">
+                    연결 저장
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] leading-4 text-outline">비밀번호·NAS 주소·Synology 계정은 PageDock에 저장하지 않습니다. Windows에서 이미 접근 가능한 로컬 폴더, 외장 드라이브, 또는 연결된 SMB 공유 폴더만 선택합니다.</p>
+                <label className="mt-3 flex cursor-pointer items-start gap-2.5 rounded-lg bg-surface-container px-3 py-2.5 text-xs text-on-surface-variant">
+                  <input
+                    type="checkbox"
+                    checked={backupReplica?.automaticEnabled ?? false}
+                    disabled={backupReplicaBusy || !backupReplica?.targetRoot}
+                    onChange={(event) => void setAutomaticBackupReplicaEnabled(event.target.checked)}
+                    className="mt-0.5 size-3.5 accent-primary"
+                  />
+                  <span>
+                    <span className="block font-semibold text-on-surface">자동 보호 사본</span>
+                    <span className="mt-0.5 block leading-4">기본은 꺼져 있습니다. PageDock이 만드는 일일 로컬 자동 백업이 성공한 뒤에만 같은 ZIP을 복사하며, NAS 연결 실패는 Reader 저장을 멈추지 않습니다. 자동 사본은 최근 {backupReplica?.automaticRetention ?? 14}개를 유지합니다.</span>
+                  </span>
+                </label>
+                <p className={`mt-3 text-[11px] font-medium ${backupReplica?.status === 'failed' ? 'text-study-unclear' : 'text-on-surface-variant'}`}>
+                  {!backupReplica?.targetRoot
+                    ? '아직 별도 보호 사본 폴더가 없습니다. 이 PC의 Library는 로컬에서 계속 작동합니다.'
+                    : backupReplica?.status === 'failed'
+                      ? `최근 보호 사본 복사 실패 · ${backupReplica.lastFailureAt ? new Date(backupReplica.lastFailureAt).toLocaleString('ko-KR') : '시간을 확인하지 못함'} · Windows 원본과 로컬 백업은 정상입니다.`
+                      : backupReplica?.lastAutomaticArtifact
+                        ? `마지막 검증 사본 · ${new Date(backupReplica.lastAutomaticArtifact.copiedAt).toLocaleString('ko-KR')} · ${backupReplica.lastAutomaticArtifact.fileName}`
+                        : backupReplica.automaticEnabled
+                          ? '자동 보호 사본이 준비되었습니다. 다음 로컬 자동 백업 뒤에 NAS 폴더로 복사합니다.'
+                          : '보호 사본 폴더가 준비되었습니다. 필요할 때 지금 보호 사본 만들기를 사용하세요.'}
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void createBackupReplicaNow()}
+                    disabled={backupReplicaBusy || !backupReplica?.targetRoot}
+                    className="inline-flex items-center gap-2 rounded-lg bg-surface-container px-3 py-2 text-xs font-semibold text-on-surface disabled:opacity-50"
+                  >
+                    {backupReplicaBusy ? <Loader2 size={14} className="animate-spin" /> : <Server size={14} />}
+                    지금 보호 사본 만들기
+                  </button>
+                </div>
+                {backupReplicaMessage && <p className="mt-3 rounded-lg bg-surface-container px-3 py-2 text-xs text-on-surface">{backupReplicaMessage}</p>}
+              </div>
               <div className="mt-3 flex flex-wrap gap-2">
               <a
                 href="/api/library/backup?includePdfs=true"
@@ -838,7 +1010,7 @@ export default function SettingsPage() {
               />
               </div>
             </div>
-            <p className="text-[11px] text-outline">자동 백업은 PDF를 제외한 연구 데이터 최근 {libraryInfo?.backupRetention || 3}개를 유지합니다. 연결 폴더가 있으면 검증된 같은 ZIP을 그곳에도 복사하고, 두 위치의 자동 백업은 각각 최근 3개만 남깁니다. 수동 전체 ZIP은 자동으로 지우지 않으며 PDF가 포함되고, 로그인 토큰은 포함하지 않습니다.</p>
+            <p className="text-[11px] text-outline">Windows의 자동 백업은 PDF를 제외한 연구 데이터 최근 {libraryInfo?.backupRetention || 3}개를 유지합니다. 휴대폰 연결 폴더를 쓴다면 그 폴더의 자동 ZIP도 최근 3개를 따로 유지합니다. NAS 보호 사본을 쓴다면 그 폴더는 최근 14개를 따로 유지합니다. 수동 전체 ZIP은 자동으로 지우지 않으며 PDF가 포함되고, 로그인 토큰은 포함하지 않습니다.</p>
             {libraryInfo?.latestBackup && (
               <p className="text-[11px] text-on-surface-variant">
                 마지막 자동 백업: {new Date(libraryInfo.latestBackup.modifiedAt).toLocaleString('ko-KR')} · {(libraryInfo.latestBackup.size / 1024).toFixed(1)}KB

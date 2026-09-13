@@ -33,7 +33,9 @@ export async function POST(req: NextRequest) {
     if (req.nextUrl.searchParams.get('target') === 'bridge-manual') {
       return NextResponse.json(await createManualBackupInMobileBridge());
     }
-    return NextResponse.json(await createAutomaticBackup());
+    return NextResponse.json(await createAutomaticBackup({
+      forceBackupReplica: req.nextUrl.searchParams.get('target') === 'replica-auto',
+    }));
   } catch (error) {
     const message = error instanceof Error ? error.message : '자동 백업을 만들지 못했습니다.';
     return NextResponse.json({ error: message }, { status: 500 });

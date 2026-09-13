@@ -38,6 +38,18 @@ export interface KnowledgeTrustState {
   reviewReason?: KnowledgeReviewReason;
 }
 
+/**
+ * A user-selected image kept beside the Knowledge JSON, never embedded in it.
+ * `id` deliberately equals the content hash so duplicate diagrams are stored
+ * once even when they are referenced by several captured notes.
+ */
+export interface KnowledgeImageAttachment {
+  id: string;
+  sha256: string;
+  mime: 'image/png' | 'image/jpeg';
+  byteLength: number;
+}
+
 export interface KnowledgeNote {
   id: string;
   rawText: string;
@@ -49,6 +61,8 @@ export interface KnowledgeNote {
   provenance?: KnowledgeProvenance;
   /** Existing Reader/Chat anchors are reused; this is not another PDF locator. */
   sourceAnchors?: ChatSourceContext[];
+  /** Deliberately captured diagrams, screenshots, or handwritten figures. */
+  attachments?: KnowledgeImageAttachment[];
   error?: string;
   createdAt: string;
   updatedAt: string;
@@ -151,6 +165,7 @@ export interface CaptureKnowledgeInput {
   sourceName?: string;
   provenance?: KnowledgeProvenance;
   sourceAnchors?: ChatSourceContext[];
+  attachments?: KnowledgeImageAttachment[];
 }
 
 export interface CaptureKnowledgeResult {
@@ -189,6 +204,21 @@ function timestamp(): string {
 
 export function hashKnowledgeText(value: string): string {
   return createHash('sha256').update(value.normalize('NFC'), 'utf8').digest('hex');
+}
+
+/**
+ * Preserve the v1/v2 text-only hash so existing duplicate detection remains
+ * unchanged. Image notes additionally include their immutable blob hashes.
+ */
+export function hashKnowledgeCapture(text: string, attachments?: readonly KnowledgeImageAttachment[]): string {
+  if (!attachments?.length) return hashKnowledgeText(text);
+  const hashes = attachments.map((attachment) => attachment.sha256).sort();
+  return createHash('sha256')
+    .update('pagedock-knowledge-image-note\0', 'utf8')
+    .update(text.normalize('NFC'), 'utf8')
+    .update('\0', 'utf8')
+    .update(hashes.join('\0'), 'utf8')
+    .digest('hex');
 }
 
 function asRecord(value: unknown): Record<string, unknown> {
@@ -255,6 +285,27 @@ export function normalizeKnowledgeSourceAnchors(value: unknown): ChatSourceConte
   return anchors.length ? anchors : undefined;
 }
 
+export function normalizeKnowledgeImageAttachments(value: unknown): KnowledgeImageAttachment[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const seen = new Set<string>();
+  const attachments = value.slice(0, 4).flatMap((item): KnowledgeImageAttachment[] => {
+    const record = asRecord(item);
+    const sha256 = typeof record.sha256 === 'string' ? record.sha256.toLowerCase() : '';
+    const mime = record.mime;
+    const byteLength = Number(record.byteLength);
+    if (!/^[a-f0-9]{64}$/.test(sha256)
+      || record.id !== sha256
+      || (mime !== 'image/png' && mime !== 'image/jpeg')
+      || !Number.isInteger(byteLength)
+      || byteLength < 1
+      || byteLength > 10 * 1024 * 1024
+      || seen.has(sha256)) return [];
+    seen.add(sha256);
+    return [{ id: sha256, sha256, mime, byteLength }];
+  });
+  return attachments.length ? attachments : undefined;
+}
+
 function normalizeKnowledgeTrust(value: unknown): KnowledgeTrustState | undefined {
   const record = asRecord(value);
   const lastReviewedAt = optionalIsoTimestamp(record.lastReviewedAt);
@@ -288,6 +339,7 @@ function normalizeStore(value: unknown): KnowledgeSnapshot {
         : 'inbox',
       ...(normalizeKnowledgeProvenance(note.provenance) ? { provenance: normalizeKnowledgeProvenance(note.provenance) } : {}),
       ...(normalizeKnowledgeSourceAnchors(note.sourceAnchors) ? { sourceAnchors: normalizeKnowledgeSourceAnchors(note.sourceAnchors) } : {}),
+      ...(normalizeKnowledgeImageAttachments(note.attachments) ? { attachments: normalizeKnowledgeImageAttachments(note.attachments) } : {}),
       ...(typeof note.error === 'string' ? { error: note.error } : {}),
       createdAt: String(note.createdAt ?? timestamp()),
       updatedAt: String(note.updatedAt ?? note.createdAt ?? timestamp()),
@@ -565,11 +617,18 @@ export async function getKnowledgeSnapshot(): Promise<KnowledgeSnapshot> {
 }
 
 export async function captureKnowledgeNotes(inputs: CaptureKnowledgeInput[]): Promise<CaptureKnowledgeResult> {
+  const invalidAttachments = inputs.some((input) => {
+    if (!input.attachments?.length) return false;
+    const normalized = normalizeKnowledgeImageAttachments(input.attachments);
+    return !normalized || normalized.length !== input.attachments.length;
+  });
+  if (invalidAttachments) throw new Error('이미지 메모 참조가 올바르지 않습니다. 이미지를 다시 추가해 주세요.');
   const prepared = inputs.map((input) => ({
     text: input.text.trim(),
     sourceName: input.sourceName?.trim() || '직접 입력',
     provenance: normalizeKnowledgeProvenance(input.provenance),
     sourceAnchors: normalizeKnowledgeSourceAnchors(input.sourceAnchors),
+    attachments: normalizeKnowledgeImageAttachments(input.attachments),
   })).filter((input) => input.text.length > 0);
   if (!prepared.length) throw new Error('메모 내용이 비어 있습니다.');
   if (prepared.some((input) => input.text.length > 100_000)) {
@@ -581,7 +640,7 @@ export async function captureKnowledgeNotes(inputs: CaptureKnowledgeInput[]): Pr
     const duplicates: CaptureKnowledgeResult['duplicates'] = [];
     const knownHashes = new Map(store.notes.map((note) => [note.contentHash, note.id]));
     for (const input of prepared) {
-      const contentHash = hashKnowledgeText(input.text);
+      const contentHash = hashKnowledgeCapture(input.text, input.attachments);
       const duplicateId = knownHashes.get(contentHash);
       if (duplicateId) {
         duplicates.push({ sourceName: input.sourceName, existingNoteId: duplicateId });
@@ -598,6 +657,7 @@ export async function captureKnowledgeNotes(inputs: CaptureKnowledgeInput[]): Pr
         status: 'inbox',
         ...(input.provenance ? { provenance: input.provenance } : {}),
         ...(input.sourceAnchors ? { sourceAnchors: input.sourceAnchors } : {}),
+        ...(input.attachments ? { attachments: input.attachments } : {}),
         createdAt,
         updatedAt: createdAt,
       };
@@ -612,7 +672,7 @@ export async function captureKnowledgeNotes(inputs: CaptureKnowledgeInput[]): Pr
 export async function captureKnowledgeNote(
   rawText: string,
   sourceName = '직접 입력',
-  options: Pick<CaptureKnowledgeInput, 'provenance' | 'sourceAnchors'> = {},
+  options: Pick<CaptureKnowledgeInput, 'provenance' | 'sourceAnchors' | 'attachments'> = {},
 ): Promise<KnowledgeNote> {
   const result = await captureKnowledgeNotes([{ text: rawText, sourceName, ...options }]);
   if (!result.captured[0]) throw new Error('이미 같은 내용의 메모가 수집되어 있습니다.');

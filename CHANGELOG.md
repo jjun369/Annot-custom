@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.9.3 — Visual Knowledge notes
+
+- Added deliberate local PNG/JPEG image memos for diagrams, circuit captures, and photographs: one short explanation plus a 10 MB-or-smaller image is retained in the existing Knowledge inbox without an OCR or AI vision step.
+- Kept visual bytes separate from Knowledge JSON as integrity-checked content-addressed `.annot/knowledge-assets` files, so duplicate images are stored once while the same caption with another diagram is not lost to text-only deduplication.
+- Projected explicitly selected image memos into the existing read-only mobile PDF and retained them through the existing portable backup v2 collector. Unselected images never enter the phone copy; a corrupt/missing image produces an honest return-to-Windows notice.
+- Preserved Knowledge format 2, SQLite schema 1, annotation-sidecar version 1, portable-backup manifest v2, AI text-only boundary, and passive NAS snapshot design. Image files are never automatically sent to an AI or web provider.
+
+## 0.9.2 — NAS safety snapshots
+
+- Added an opt-in, device-local NAS protection target for a Windows-accessible folder such as a mapped Synology SMB share. PageDock first completes and verifies its local PDF-excluding portable v2 backup, then copies and SHA-256-checks a partial ZIP before publishing it in `PageDock-Backups/Auto`.
+- The active Library, `.annot` sidecars, sessions, and SQLite database remain local. A NAS copy failure is visible in Settings but never delays a Reader save or invalidates a successful local backup. NAS credentials, URLs, account tokens, live sync, and direct NAS database/PDF access are not introduced.
+- Separate snapshot retention is fourteen successful automatic generations; it never overwrites a different same-name archive. Existing local/bridge retention and portable backup v1/v2 compatibility are unchanged.
+
 ## 0.9.1 — Reading and recall usability
 
 - Added local source-record search, semantic-kind filtering, and result navigation without changing source anchors or study state.

@@ -238,6 +238,7 @@ function noteFingerprint(note: KnowledgeNote | undefined): string {
     status: note.status,
     provenance: note.provenance,
     sourceAnchors: note.sourceAnchors,
+    attachments: note.attachments,
     createdAt: note.createdAt,
     updatedAt: note.updatedAt,
   });

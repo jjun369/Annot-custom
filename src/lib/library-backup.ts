@@ -21,6 +21,10 @@ import {
   pruneMobileBridgeAutomaticBackups,
   writeManualPortableBackupToMobileBridge,
 } from '@/lib/mobile-bridge';
+import {
+  copyAutomaticBackupToReplica,
+  pruneReplicaAutomaticBackups,
+} from '@/lib/backup-replica';
 
 const BACKUP_VERSION = 2;
 
@@ -205,11 +209,13 @@ function timestampForName(date = new Date()): string {
     .replace('T', '-');
 }
 
-export async function createAutomaticBackup(): Promise<{
+export async function createAutomaticBackup(options: { forceBackupReplica?: boolean } = {}): Promise<{
   fileName: string;
   size: number;
   bridgeCopied: boolean;
   bridgeError?: string;
+  replicaCopied: boolean;
+  replicaError?: string;
 }> {
   // Daily snapshots intentionally omit PDFs. Originals may already be protected by
   // the user's file-sync provider, and repeated full PDF copies grow very quickly.
@@ -243,6 +249,16 @@ export async function createAutomaticBackup(): Promise<{
     bridgeError = error instanceof Error ? error.message : '연결 폴더에 자동 백업을 복사하지 못했습니다.';
   }
 
+  let replicaCopied = false;
+  let replicaError: string | undefined;
+  try {
+    const replica = await copyAutomaticBackupToReplica(destination, fileName, { force: options.forceBackupReplica });
+    replicaCopied = replica.copied;
+    if (replicaCopied) await pruneReplicaAutomaticBackups();
+  } catch (error) {
+    replicaError = error instanceof Error ? error.message : '보호 사본 위치에 자동 백업을 복사하지 못했습니다.';
+  }
+
   const entries = (await fs.readdir(backupDirectory, { withFileTypes: true }))
     .filter((entry) => entry.isFile() && /^(?:pagedock|annot)-auto-.*\.zip$/i.test(entry.name))
     .map((entry) => entry.name)
@@ -250,7 +266,7 @@ export async function createAutomaticBackup(): Promise<{
   await Promise.all(entries.slice(AUTOMATIC_BACKUP_RETENTION).map((name) => (
     fs.rm(path.join(backupDirectory, name), { force: true })
   )));
-  return { fileName, size, bridgeCopied, bridgeError };
+  return { fileName, size, bridgeCopied, bridgeError, replicaCopied, replicaError };
 }
 
 export async function createManualBackupInMobileBridge(): Promise<{

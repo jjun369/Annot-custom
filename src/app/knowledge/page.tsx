@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import Image from 'next/image';
 import {
   AlertTriangle,
   BookOpenText,
@@ -8,6 +9,7 @@ import {
   Download,
   FileInput,
   Inbox,
+  ImagePlus,
   Loader2,
   Merge,
   Plus,
@@ -95,6 +97,7 @@ export default function KnowledgePage() {
   const [data, setData] = useState<KnowledgeSnapshot>(EMPTY);
   const [view, setView] = useState<View>('inbox');
   const [noteText, setNoteText] = useState('');
+  const [noteImage, setNoteImage] = useState<File | null>(null);
   const [noteProvenanceKind, setNoteProvenanceKind] = useState<KnowledgeProvenanceKind>('personal_hypothesis');
   const [noteOriginDate, setNoteOriginDate] = useState(today);
   const [message, setMessage] = useState<{ text: string; error?: boolean } | null>(null);
@@ -124,6 +127,7 @@ export default function KnowledgePage() {
   const stopBatch = useRef(false);
   const activeRequest = useRef<AbortController | null>(null);
   const draftLoaded = useRef(false);
+  const imageInput = useRef<HTMLInputElement | null>(null);
 
   const refresh = useCallback(async () => {
     const snapshot = await responseJson<KnowledgePagePayload>(await fetch('/api/knowledge', { cache: 'no-store' }));
@@ -236,16 +240,42 @@ export default function KnowledgePage() {
       setMessage({ text: '원본 날짜는 YYYY-MM 또는 YYYY-MM-DD 형식으로 입력해 주세요.', error: true });
       return;
     }
-    const captured = await captureInputs([{
-      text: noteText,
-      sourceName: '직접 입력',
-      provenance: {
-        kind: noteProvenanceKind,
-        ...(originDate ? { originDate } : {}),
-      },
-    }]);
+    const provenance = {
+      kind: noteProvenanceKind,
+      ...(originDate ? { originDate } : {}),
+    };
+    let captured: boolean;
+    if (noteImage) {
+      setCaptureBusy(true);
+      setMessage(null);
+      try {
+        const form = new FormData();
+        form.set('text', noteText);
+        form.set('image', noteImage);
+        form.set('provenance', JSON.stringify(provenance));
+        const result = await responseJson<CaptureKnowledgeResult>(await fetch('/api/knowledge/image-note', {
+          method: 'POST', body: form,
+        }));
+        await refresh();
+        setMessage({ text: `${result.captured.length}개 이미지 메모를 수집했습니다.${result.duplicates.length ? ' 같은 그림과 설명은 이미 보관되어 있어 건너뛰었습니다.' : ''}` });
+        captured = true;
+      } catch (error) {
+        setMessage({ text: error instanceof Error ? error.message : '이미지 메모를 저장하지 못했습니다.', error: true });
+        captured = false;
+      } finally {
+        setCaptureBusy(false);
+      }
+    } else {
+      captured = await captureInputs([{
+        text: noteText,
+        sourceName: '직접 입력',
+        provenance,
+      }]);
+    }
     if (captured) {
       setNoteText('');
+      setNoteImage(null);
+      if (imageInput.current) imageInput.current.value = '';
       window.localStorage.removeItem(DRAFT_KEY);
     }
   }
@@ -643,7 +673,7 @@ export default function KnowledgePage() {
           {view === 'inbox' && <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.75fr)]">
             <section><h2 className="text-xl font-bold">모아둔 메모</h2><p className="mt-1 text-xs text-on-surface-variant">아직 정리된 노트에 반영하지 않은 개인 메모입니다. 원문은 그대로 보관하며 같은 내용은 두 번 담지 않습니다.</p>
               <div onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void captureFiles(event.dataTransfer.files); }} className="mt-4 rounded-2xl border border-outline-variant/25 bg-surface-container-lowest p-4 shadow-sm">
-                <p className="mb-3 rounded-lg bg-surface-container-low px-3 py-2 text-[11px] leading-5 text-on-surface-variant">이 메모는 이 PC의 로컬 수집함에 저장됩니다. <strong className="font-semibold text-on-surface">AI로 전송되지 않습니다.</strong></p>
+                <p className="mb-3 rounded-lg bg-surface-container-low px-3 py-2 text-[11px] leading-5 text-on-surface-variant">이 메모와 첨부 그림은 이 PC의 로컬 수집함에 저장됩니다. <strong className="font-semibold text-on-surface">AI로 자동 전송되지 않습니다.</strong></p>
                 <textarea value={noteText} onChange={(event) => setNoteText(event.target.value)} placeholder="기술 메모, 관찰, 질문, 실험 결과, 나중에 확인할 것…" className="h-48 w-full resize-y bg-transparent text-sm leading-7 outline-none placeholder:text-outline" maxLength={100_000} />
                 <div className="mt-3 flex flex-wrap items-end justify-between gap-3 border-t border-outline-variant/20 pt-3">
                   <div className="flex flex-wrap items-end gap-2">
@@ -658,8 +688,8 @@ export default function KnowledgePage() {
                       <input value={noteOriginDate} onChange={(event) => setNoteOriginDate(event.target.value)} maxLength={10} placeholder="YYYY-MM-DD" className="mt-1 h-8 w-32 rounded-lg border border-outline-variant/30 bg-white px-2 text-[11px] text-on-surface outline-none" />
                     </label>
                   </div>
-                  <p className="w-full text-[10px] leading-4 text-on-surface-variant">출처와 성격을 표시하는 정보이며, 사실 여부나 신뢰도를 의미하지 않습니다.</p>
-                  <div className="flex flex-wrap items-center justify-end gap-2"><span className="text-[10px] text-outline">{noteText.length.toLocaleString()}자 · 입력 중인 초안은 이 PC에 자동 저장됩니다</span><label className="flex cursor-pointer items-center gap-1.5 rounded-xl bg-surface-container px-3 py-2.5 text-xs font-bold"><Upload size={14} />파일 여러 개<input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" multiple className="hidden" onChange={(event) => { if (event.target.files) void captureFiles(event.target.files); event.target.value = ''; }} /></label><button onClick={() => void captureText()} disabled={!noteText.trim() || captureBusy} className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-on-primary disabled:opacity-40">{captureBusy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}메모 보관</button></div>
+                  <p className="w-full text-[10px] leading-4 text-on-surface-variant">출처와 성격을 표시하는 정보이며, 사실 여부나 신뢰도를 의미하지 않습니다. 그림은 PNG/JPEG 10MB 이하 한 장만 붙일 수 있고, 설명 텍스트만 원격 AI 정리 대상으로 선택할 수 있습니다.</p>
+                  <div className="flex flex-wrap items-center justify-end gap-2"><span className="text-[10px] text-outline">{noteText.length.toLocaleString()}자 · 입력 중인 초안은 이 PC에 자동 저장됩니다</span><label className="flex cursor-pointer items-center gap-1.5 rounded-xl bg-surface-container px-3 py-2.5 text-xs font-bold"><ImagePlus size={14} />{noteImage ? `그림 첨부됨 · ${noteImage.name}` : '그림 첨부'}<input ref={imageInput} type="file" accept="image/png,image/jpeg" className="hidden" onChange={(event) => { setNoteImage(event.target.files?.[0] ?? null); }} /></label><label className="flex cursor-pointer items-center gap-1.5 rounded-xl bg-surface-container px-3 py-2.5 text-xs font-bold"><Upload size={14} />파일 여러 개<input type="file" accept=".txt,.md,.markdown,text/plain,text/markdown" multiple className="hidden" onChange={(event) => { if (event.target.files) void captureFiles(event.target.files); event.target.value = ''; }} /></label><button onClick={() => void captureText()} disabled={!noteText.trim() || captureBusy} className="flex items-center gap-2 rounded-xl bg-primary px-4 py-2.5 text-xs font-bold text-on-primary disabled:opacity-40">{captureBusy ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}{noteImage ? '이미지 메모 보관' : '메모 보관'}</button></div>
                 </div>
               </div>
               <KnowledgeFolderCard
@@ -675,7 +705,7 @@ export default function KnowledgePage() {
               />
             </section>
               <section><div className="flex items-center justify-between gap-3"><div><h2 className="text-sm font-bold">다음으로 정리해 볼 메모 {inboxNotes.length}개</h2><p className="mt-1 text-[10px] text-on-surface-variant">원격 AI는 사용자가 요청할 때만 초안을 제안하며, 확인 전에는 정리된 노트를 바꾸지 않습니다.</p>{batchProgress && <p className="mt-1 text-[10px] text-primary">{batchProgress.done}/{batchProgress.total} 처리 중 · 오류가 나면 자동 중지</p>}</div>{batchProgress ? <div className="flex gap-2"><button onClick={() => { stopBatch.current = true; }} className="rounded-lg bg-surface-container px-3 py-2 text-[10px] font-bold text-on-surface-variant">현재 작업 후 중지</button><button onClick={cancelCurrent} className="flex items-center gap-1 rounded-lg bg-red-50 px-3 py-2 text-[10px] font-bold text-error"><StopCircle size={13} />즉시 취소</button></div> : <div className="flex gap-2"><button onClick={() => void processBatch(inboxNotes.slice(0, 10))} disabled={!oauthReady || !inboxNotes.length || !!processingId} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary disabled:opacity-40"><Sparkles size={13} />원격 AI로 초안 만들기</button>{inboxNotes.length > 10 && <button onClick={() => void processEverything()} disabled={!oauthReady || !!processingId} className="rounded-lg bg-surface-container px-3 py-2 text-[10px] font-bold text-on-surface-variant disabled:opacity-40">모든 메모의 초안 만들기</button>}</div>}</div>
-              <div className="mt-3 space-y-3">{visibleInboxNotes.map((note) => <article key={note.id} className="rounded-2xl border border-outline-variant/25 bg-surface-container-lowest p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-xs font-bold">{note.title}</h3><span className="mt-1 block text-[10px] text-outline">{note.sourceName} · {dateLabel(note.createdAt)} · {note.rawText.length.toLocaleString()}자{note.rawText.length > 20_000 ? ' · 큰 작업' : ''}</span></div>{processingId === note.id && !batchProgress ? <button onClick={cancelCurrent} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-[10px] font-bold text-error"><StopCircle size={12} />즉시 취소</button> : <button onClick={() => void processOne(note.id)} disabled={!oauthReady || !!processingId || !!batchProgress} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-container px-3 py-2 text-[10px] font-bold text-primary disabled:opacity-40">{note.status === 'error' ? <RotateCcw size={12} /> : <Sparkles size={12} />}{note.status === 'error' ? '원격 AI로 다시 정리' : '원격 AI로 정리'}</button>}</div><p className="mt-3 line-clamp-4 whitespace-pre-wrap text-[11px] leading-5 text-on-surface-variant">{note.rawText}</p>{note.error && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[10px] leading-5 text-error">{note.error}</p>}</article>)}{inboxNotes.length > inboxVisible && <button onClick={() => setInboxVisible((value) => value + PAGE_SIZE)} className="w-full rounded-xl bg-surface-container py-3 text-xs font-bold text-on-surface-variant">메모 {Math.min(PAGE_SIZE, inboxNotes.length - inboxVisible)}개 더 보기</button>}{!inboxNotes.length && <div className="rounded-2xl border border-dashed border-outline-variant/40 p-8 text-center text-xs text-on-surface-variant"><FileInput className="mx-auto mb-2" size={22} />정리를 기다리는 메모가 없습니다.</div>}</div>
+              <div className="mt-3 space-y-3">{visibleInboxNotes.map((note) => <article key={note.id} className="rounded-2xl border border-outline-variant/25 bg-surface-container-lowest p-4"><div className="flex items-start justify-between gap-3"><div className="min-w-0"><h3 className="truncate text-xs font-bold">{note.title}</h3><span className="mt-1 block text-[10px] text-outline">{note.sourceName} · {dateLabel(note.createdAt)} · {note.rawText.length.toLocaleString()}자{note.rawText.length > 20_000 ? ' · 큰 작업' : ''}</span></div>{processingId === note.id && !batchProgress ? <button onClick={cancelCurrent} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-red-50 px-3 py-2 text-[10px] font-bold text-error"><StopCircle size={12} />즉시 취소</button> : <button onClick={() => void processOne(note.id)} disabled={!oauthReady || !!processingId || !!batchProgress} className="flex shrink-0 items-center gap-1.5 rounded-lg bg-primary-container px-3 py-2 text-[10px] font-bold text-primary disabled:opacity-40">{note.status === 'error' ? <RotateCcw size={12} /> : <Sparkles size={12} />}{note.status === 'error' ? '원격 AI로 다시 정리' : '원격 AI로 정리'}</button>}</div><p className="mt-3 line-clamp-4 whitespace-pre-wrap text-[11px] leading-5 text-on-surface-variant">{note.rawText}</p>{note.attachments?.length ? <div className="mt-3 grid gap-2 sm:grid-cols-2">{note.attachments.map((attachment) => <figure key={attachment.id} className="overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-low"><Image src={`/api/knowledge/image-asset?noteId=${encodeURIComponent(note.id)}&assetId=${attachment.id}`} alt={`${note.title || '이미지 메모'} 첨부 그림`} width={1200} height={900} unoptimized className="h-auto max-h-64 w-full object-contain" /><figcaption className="px-2 py-1.5 text-[10px] text-on-surface-variant">로컬 이미지 메모 · {Math.ceil(attachment.byteLength / 1024)}KB</figcaption></figure>)}</div> : null}{note.error && <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[10px] leading-5 text-error">{note.error}</p>}</article>)}{inboxNotes.length > inboxVisible && <button onClick={() => setInboxVisible((value) => value + PAGE_SIZE)} className="w-full rounded-xl bg-surface-container py-3 text-xs font-bold text-on-surface-variant">메모 {Math.min(PAGE_SIZE, inboxNotes.length - inboxVisible)}개 더 보기</button>}{!inboxNotes.length && <div className="rounded-2xl border border-dashed border-outline-variant/40 p-8 text-center text-xs text-on-surface-variant"><FileInput className="mx-auto mb-2" size={22} />정리를 기다리는 메모가 없습니다.</div>}</div>
             </section>
           </div>}
 

@@ -12,9 +12,15 @@ let configRoot: string;
 let bridgeRoot: string;
 let mobile: typeof import('@/lib/mobile-bridge');
 let store: typeof import('@/lib/knowledge-store');
+let imageAssets: typeof import('@/lib/knowledge-image-assets');
 let database: typeof import('@/lib/research-db');
 let mobileKnowledge: typeof import('@/lib/mobile-knowledge');
 let knowledgeRoute: typeof import('@/app/api/mobile-bridge/knowledge/route');
+
+const ONE_PIXEL_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mNk+M/wHwAF/gL+X1VdNwAAAABJRU5ErkJggg==',
+  'base64',
+);
 
 async function extractPdfText(filePath: string): Promise<string> {
   const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
@@ -56,6 +62,7 @@ beforeAll(async () => {
   await mkdir(path.join(root, 'papers'), { recursive: true });
   mobile = await import('@/lib/mobile-bridge');
   store = await import('@/lib/knowledge-store');
+  imageAssets = await import('@/lib/knowledge-image-assets');
   database = await import('@/lib/research-db');
   mobileKnowledge = await import('@/lib/mobile-knowledge');
   knowledgeRoute = await import('@/app/api/mobile-bridge/knowledge/route');
@@ -120,6 +127,26 @@ describe('mobile knowledge selection', () => {
     expect(text).not.toContain('# 원문 제목');
     expect(Buffer.from(await readFile(sourcePdfPath)).equals(Buffer.from(originalBytes))).toBe(true);
     if (process.env.PAGEDOCK_PRINT_MOBILE_FIXTURE === '1') console.log(artifact);
+  });
+
+  test('renders a selected local image memo into the phone PDF without a web upload', async () => {
+    const attachment = await imageAssets.storeKnowledgeImageAsset(ONE_PIXEL_PNG, 'image/png');
+    const result = await store.captureKnowledgeNotes([{
+      text: '회로도에서 전원 경로를 다시 점검한다.',
+      sourceName: '이미지 메모 · power-path.png',
+      attachments: [attachment],
+    }]);
+    const note = result.captured[0];
+    await mobile.updateMobileBridgeSettings({
+      bridgeRoot,
+      shelfDocumentIds: [],
+      shelfTopicIds: [],
+      shelfNoteIds: [note.id],
+    });
+    await mobile.publishMobileBridge();
+    const text = await extractPdfText(path.join(bridgeRoot, 'Mobile', 'PageDock-Mobile.pdf'));
+    expect(text).toContain('회로도에서 전원 경로를 다시 점검한다.');
+    expect(text).toContain('로컬 이미지 메모 1');
   });
 
   test('keeps unselected notes out, preserves missing selections, and deletes missing ids', async () => {

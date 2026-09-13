@@ -14,6 +14,7 @@ import {
 } from 'pdf-lib';
 
 import { getWorkspaceRoot, listSessions, resolveFolderPath } from '@/lib/annot-sessions';
+import { readKnowledgeImageAsset } from '@/lib/knowledge-image-assets';
 import { getKnowledgeSnapshot, type KnowledgeNote, type KnowledgeTopic } from '@/lib/knowledge-store';
 import {
   getKnowledgeSourceAnchors,
@@ -925,7 +926,7 @@ function addStandaloneKnowledgeTopic(composer: PdfComposer, entry: ExportKnowled
   addKnowledgeSourceRefs(composer, entry.sourceRefs);
 }
 
-function addStandaloneKnowledgeNote(composer: PdfComposer, entry: ExportKnowledgeNote): void {
+async function addStandaloneKnowledgeNote(composer: PdfComposer, entry: ExportKnowledgeNote): Promise<void> {
   const note = entry.note;
   const status = ({ inbox: '받은 메모', review: '검토 중', integrated: '주제 반영됨', error: '처리 오류' } as Record<string, string>)[note.status] || note.status;
   addLabel(composer, `캡처한 원문 메모 · ${knowledgeProvenanceLabel(note.provenance?.kind)}`, rgb(0.42, 0.33, 0.57));
@@ -936,6 +937,21 @@ function addStandaloneKnowledgeNote(composer: PdfComposer, entry: ExportKnowledg
     gapAfter: 4,
   });
   addText(composer, note.rawText || '[빈 메모]', { size: 12, gapAfter: 4 });
+  for (const [index, attachment] of (note.attachments ?? []).entries()) {
+    try {
+      const bytes = await readKnowledgeImageAsset(attachment);
+      const image = attachment.mime === 'image/png'
+        ? await composer.document.embedPng(bytes)
+        : await composer.document.embedJpg(bytes);
+      await addImage(composer, image, `로컬 이미지 메모 ${index + 1} · Windows PageDock에서 원본 보관`);
+    } catch {
+      addText(composer, `[이미지 메모 ${index + 1}은 이번 모바일 사본에 넣지 못했습니다. Windows PageDock에서 원본을 다시 확인해 주세요.]`, {
+        size: 9.5,
+        color: rgb(0.55, 0.22, 0.18),
+        gapAfter: 4,
+      });
+    }
+  }
   addKnowledgeSourceRefs(composer, entry.sourceRefs);
 }
 
@@ -1088,7 +1104,7 @@ async function buildMobilePdf(
     if (knowledge.notes.length) {
       addRule(composer);
       addText(composer, '캡처한 원문 메모', { size: 13, bold: true, gapAfter: 5 });
-      for (const note of knowledge.notes) addStandaloneKnowledgeNote(composer, note);
+      for (const note of knowledge.notes) await addStandaloneKnowledgeNote(composer, note);
     }
   }
 
