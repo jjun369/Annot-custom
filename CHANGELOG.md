@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Validate complete PNG/JPEG payloads for visual Knowledge notes and bound multipart requests before parsing.
+- Publish concurrent same-hash image blobs without overwriting or swallowing unrelated filesystem errors.
+- Keep original image attachments visible during Knowledge proposal review.
+- Verify exact visual Knowledge asset bytes across portable v1/v2 backup restore tests.
+- Bound JSON Knowledge capture by request bytes, note count, aggregate text, per-note text, and source-name length.
+- Clear stale NAS status when its target changes and stream replica ZIP hashes instead of buffering whole archives.
+- Remove obsolete macOS package targets from the Windows-only build configuration.
+
 ## 0.9.3 — Visual Knowledge notes
 
 - Added deliberate local PNG/JPEG image memos for diagrams, circuit captures, and photographs: one short explanation plus a 10 MB-or-smaller image is retained in the existing Knowledge inbox without an OCR or AI vision step.

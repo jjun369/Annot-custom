@@ -1,10 +1,14 @@
 # Current state
 
+## 0.9.3 image-retention maintenance (2026-09-19)
+
+The visual Knowledge implementation now validates complete PNG/JPEG structure instead of accepting leading signatures alone, rejects oversized multipart requests before parsing, and publishes same-hash blobs with an atomic no-overwrite link so unrelated filesystem errors cannot masquerade as successful deduplication. The original local image remains visible beside its text while the user reviews an AI proposal. JSON note capture is bounded to a 2 MB request, 100 notes, 1,000,000 aggregate characters, 100,000 characters per note, and 300-character source names. Portable v1/v2 import compatibility is unchanged; synthetic round-trip coverage now verifies both the note reference and exact image bytes. Changing a NAS replica target clears the previous target's receipt/failure state, and replica ZIP hashes stream from disk. Windows-only packaging no longer contains obsolete macOS targets. SQLite schema 1, Knowledge format 2, annotation sidecar version 1, and portable-backup manifest v2 remain unchanged.
+
 ## 0.9.3 visual Knowledge notes (2026-09-14)
 
 PageDock 0.9.3 adds deliberate visual memory to the existing local Knowledge inbox: a user can keep one PNG/JPEG diagram, screenshot, or photo (up to 10 MB) alongside a short explanation. The binary is a verified content-addressed file under `.annot/knowledge-assets`; the format-2 Knowledge JSON stores only its hash, MIME, and byte count. The same image is stored once, but the same caption with another image remains a distinct note. Image bytes are never automatically sent to PageDock AI, Codex, DeepSeek, or a web provider. Existing portable v2 backup collection carries them as normal Library files, while the Mobile Bridge embeds them only for explicitly selected notes. SQLite schema 1, annotation-sidecar version 1, portable-backup manifest v2, and NAS snapshot protocol remain unchanged.
 
-0.9.3 verification (2026-09-14): `docs:check`, ESLint, TypeScript, full Vitest (34 passing files / 168 passing tests, one intentionally skipped file/test), production build, and icon generation passed. The production build completed with five known broad dynamic-filesystem tracing warnings around existing sidecar/Knowledge routes. A final fresh NSIS installer and unpacked Windows package were generated in a separate `dist-visual-knowledge-0.9.3-final` output; its `--smoke-test` server exited 0. A separate user-data directory and synthetic two-page PDF were used for visual QA: the packaged Library loaded only `synthetic-study.pdf`; the Reader showed `1 / 2`, selectable source text, and the synthetic rectangle visibly rendered on page 1. No user Library/PDF, credential, or AI request was used.
+0.9.3 verification (2026-09-19): `docs:check`, ESLint, TypeScript, full Vitest (36 passing files / 176 passing tests, one intentionally skipped file/test), production build, icon generation, and fresh isolated Windows x64 packaging passed. The production build completed with five known broad dynamic-filesystem tracing warnings around existing sidecar/Knowledge routes. The fresh `dist-acceptance-20260919` unpacked package and NSIS installer were generated without publishing. A separate explicit Electron `--user-data-dir` and synthetic two-page PDF were used for visual QA: the packaged Library loaded only `synthetic-study.pdf`; the Reader showed `1 / 2`, selectable source text, and the synthetic rectangle visibly rendered on page 1. No user Library/PDF, credential, or AI request was used.
 
 ## 0.9.2 NAS safety snapshots (2026-09-13)
 
@@ -42,6 +46,8 @@ Mobile Knowledge final verification (2026-09-08): docs check, ESLint, TypeScript
 - Collapsed library rail: when the folder/file explorer is closed or temporarily compacted for reading/chat, the rail no longer rotates the `탐색기` label; it shows a stable folder icon and tooltip so the narrow state stays legible.
 
 Known issues:
+
+- Closing or navigating away from a running primary chat does not cancel its provider turn. A correct fix must carry one abort contract through the browser stream, server route, Codex CLI/account fallback, and Claude runtime while preserving the already-saved user question; UI-only fetch abort would misleadingly leave server work running, so it remains deferred.
 
 - KIPRIS Plus and EPO OPS support authenticated search; richer citation, family, and legal-event normalization remains planned. Manual number/URL/PDF and external provider links work without keys.
 - Codex-assisted query expansion/reranking and robust author/year/patent-number extraction remain planned. Exact local FTS remains the offline fallback.

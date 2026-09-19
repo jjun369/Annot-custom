@@ -1,5 +1,10 @@
 # Roadmap
 
+## Completed maintenance (2026-09-19)
+
+- Harden visual Knowledge capture beyond magic bytes, bound multipart/JSON capture, make concurrent content-addressed publication no-overwrite, retain attachment visibility through proposal review, and verify image bytes in portable v1/v2 restore tests.
+- Reset target-specific NAS receipt state on target changes, stream replica hashes, and align package targets with the Windows-only support contract.
+
 ## Implemented — 0.9.3 visual Knowledge notes (working tree)
 
 - A short local Knowledge memo can deliberately retain one PNG/JPEG diagram, screenshot, or photo up to 10 MB. The bytes are content-addressed and integrity-checked below `.annot/knowledge-assets`; duplicate images are stored once without making a different diagram disappear behind the same caption.

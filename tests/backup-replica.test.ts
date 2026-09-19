@@ -7,12 +7,14 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 let libraryRoot: string;
 let configRoot: string;
 let replicaRoot: string;
+let secondReplicaRoot: string;
 let replica: typeof import('@/lib/backup-replica');
 
 beforeAll(async () => {
   libraryRoot = await mkdtemp(path.join(tmpdir(), 'pagedock-replica-library-'));
   configRoot = await mkdtemp(path.join(tmpdir(), 'pagedock-replica-config-'));
   replicaRoot = await mkdtemp(path.join(tmpdir(), 'pagedock-replica-target-'));
+  secondReplicaRoot = await mkdtemp(path.join(tmpdir(), 'pagedock-replica-target-second-'));
   process.env.PAGEDOCK_ROOT = libraryRoot;
   process.env.ANNOT_ROOT = libraryRoot;
   process.env.PAGEDOCK_CONFIG_DIR = configRoot;
@@ -24,6 +26,7 @@ afterAll(async () => {
     rm(libraryRoot, { recursive: true, force: true }),
     rm(configRoot, { recursive: true, force: true }),
     rm(replicaRoot, { recursive: true, force: true }),
+    rm(secondReplicaRoot, { recursive: true, force: true }),
   ]);
 });
 
@@ -72,6 +75,15 @@ describe('NAS safety snapshot replica', () => {
     expect(copied.destination).not.toBe(originalDestination);
     expect(await readFile(originalDestination, 'utf8')).toBe('an older archive with the same name');
     expect(await readFile(copied.destination!, 'utf8')).toBe('a new locally verified archive');
+  });
+
+  test('clears target-specific status when the normalized replica target changes', async () => {
+    expect((await replica.getBackupReplicaInfo()).lastAutomaticArtifact).toBeTruthy();
+    const updated = await replica.updateBackupReplicaSettings({ targetRoot: secondReplicaRoot });
+    expect(updated.lastAutomaticArtifact).toBeUndefined();
+    expect(updated.lastFailureAt).toBeUndefined();
+    expect((await replica.getBackupReplicaInfo()).status).toBe('manual-only');
+    await replica.updateBackupReplicaSettings({ targetRoot: replicaRoot });
   });
 
   test('prunes only old automatic ZIPs in the replica folder', async () => {

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'crypto';
 import { promises as fs } from 'fs';
 import path from 'path';
+import { inflateSync } from 'zlib';
 
 import { getWorkspaceRoot } from '@/lib/annot-sessions';
 import type { KnowledgeImageAttachment } from '@/lib/knowledge-store';
@@ -9,7 +10,7 @@ export const MAX_KNOWLEDGE_IMAGE_BYTES = 10 * 1024 * 1024;
 
 type KnowledgeImageMime = KnowledgeImageAttachment['mime'];
 
-function isPng(bytes: Uint8Array): boolean {
+function hasPngSignature(bytes: Uint8Array): boolean {
   return bytes.length >= 8
     && bytes[0] === 0x89
     && bytes[1] === 0x50
@@ -21,13 +22,104 @@ function isPng(bytes: Uint8Array): boolean {
     && bytes[7] === 0x0a;
 }
 
-function isJpeg(bytes: Uint8Array): boolean {
-  return bytes.length >= 3 && bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+function readUint32(bytes: Uint8Array, offset: number): number {
+  return ((bytes[offset] * 0x1000000) + (bytes[offset + 1] << 16)
+    + (bytes[offset + 2] << 8) + bytes[offset + 3]) >>> 0;
 }
 
-function mimeForBytes(bytes: Uint8Array): KnowledgeImageMime | null {
-  if (isPng(bytes)) return 'image/png';
-  if (isJpeg(bytes)) return 'image/jpeg';
+function crc32(bytes: Uint8Array): number {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    }
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function isValidPng(bytes: Uint8Array): boolean {
+  if (!hasPngSignature(bytes)) return false;
+  let offset = 8;
+  let sawHeader = false;
+  let sawData = false;
+  const compressed: Uint8Array[] = [];
+  try {
+    while (offset + 12 <= bytes.length) {
+      const length = readUint32(bytes, offset);
+      if (length > MAX_KNOWLEDGE_IMAGE_BYTES || offset + 12 + length > bytes.length) return false;
+      const typeStart = offset + 4;
+      const dataStart = typeStart + 4;
+      const crcOffset = dataStart + length;
+      const type = String.fromCharCode(...bytes.subarray(typeStart, dataStart));
+      if (crc32(bytes.subarray(typeStart, crcOffset)) !== readUint32(bytes, crcOffset)) return false;
+      if (!sawHeader) {
+        if (type !== 'IHDR' || length !== 13) return false;
+        const width = readUint32(bytes, dataStart);
+        const height = readUint32(bytes, dataStart + 4);
+        if (width < 1 || height < 1 || width > 100_000 || height > 100_000) return false;
+        sawHeader = true;
+      } else if (type === 'IHDR') return false;
+      if (type === 'IDAT') {
+        sawData = true;
+        compressed.push(bytes.slice(dataStart, crcOffset));
+      }
+      offset = crcOffset + 4;
+      if (type === 'IEND') {
+        if (length !== 0 || !sawData || offset !== bytes.length) return false;
+        inflateSync(Buffer.concat(compressed), { maxOutputLength: 512 * 1024 * 1024 });
+        return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function isValidJpeg(bytes: Uint8Array): boolean {
+  if (bytes.length < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return false;
+  let offset = 2;
+  let sawFrame = false;
+  let sawScan = false;
+  while (offset < bytes.length) {
+    if (bytes[offset] !== 0xff) return false;
+    while (offset < bytes.length && bytes[offset] === 0xff) offset += 1;
+    if (offset >= bytes.length) return false;
+    const marker = bytes[offset];
+    offset += 1;
+    if (marker === 0xd9) return sawFrame && sawScan && offset === bytes.length;
+    if (marker === 0x00 || marker === 0xd8 || (marker >= 0xd0 && marker <= 0xd7) || marker === 0x01) return false;
+    if (offset + 2 > bytes.length) return false;
+    const length = (bytes[offset] << 8) | bytes[offset + 1];
+    if (length < 2 || offset + length > bytes.length) return false;
+    if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) sawFrame = true;
+    offset += length;
+    if (marker !== 0xda) continue;
+    sawScan = true;
+    while (offset < bytes.length) {
+      if (bytes[offset] !== 0xff) {
+        offset += 1;
+        continue;
+      }
+      let next = offset + 1;
+      while (next < bytes.length && bytes[next] === 0xff) next += 1;
+      if (next >= bytes.length) return false;
+      const scanMarker = bytes[next];
+      if (scanMarker === 0x00 || (scanMarker >= 0xd0 && scanMarker <= 0xd7)) {
+        offset = next + 1;
+        continue;
+      }
+      offset = next - 1;
+      break;
+    }
+  }
+  return false;
+}
+
+function validatedMime(bytes: Uint8Array): KnowledgeImageMime | null {
+  if (isValidPng(bytes)) return 'image/png';
+  if (isValidJpeg(bytes)) return 'image/jpeg';
   return null;
 }
 
@@ -58,7 +150,7 @@ async function verifyStoredImage(destination: string, attachment: KnowledgeImage
   const bytes = await fs.readFile(destination);
   if (bytes.length !== attachment.byteLength
     || hashBytes(bytes) !== attachment.sha256
-    || mimeForBytes(bytes) !== attachment.mime) {
+    || validatedMime(bytes) !== attachment.mime) {
     throw new Error('저장된 이미지 메모의 무결성을 확인하지 못했습니다. 원본을 다시 추가해 주세요.');
   }
   return bytes;
@@ -66,7 +158,8 @@ async function verifyStoredImage(destination: string, attachment: KnowledgeImage
 
 /**
  * Stores a deliberate note image as a local, content-addressed asset. The
- * browser MIME label is not trusted: only PNG and JPEG magic bytes are kept.
+ * browser MIME label is not trusted: the full PNG/JPEG structure and encoded
+ * payload must validate before the bytes are published.
  */
 export async function storeKnowledgeImageAsset(
   bytes: Uint8Array,
@@ -76,7 +169,7 @@ export async function storeKnowledgeImageAsset(
   if (bytes.length > MAX_KNOWLEDGE_IMAGE_BYTES) {
     throw new Error('이미지 메모 하나는 10MB 이하로 추가해 주세요.');
   }
-  const mime = mimeForBytes(bytes);
+  const mime = validatedMime(bytes);
   if (!mime) throw new Error('현재는 PNG 또는 JPEG 이미지만 메모에 추가할 수 있습니다.');
   if (declaredMime && declaredMime !== mime && declaredMime !== 'image/jpg') {
     throw new Error('선택한 파일의 이미지 형식이 브라우저 정보와 일치하지 않습니다.');
@@ -103,12 +196,12 @@ export async function storeKnowledgeImageAsset(
     }
     await verifyStoredImage(temporary, attachment);
     try {
-      await fs.rename(temporary, destination);
+      // Publish with an atomic no-overwrite operation. A concurrent writer of
+      // the same hash wins safely; unrelated EPERM/ENOTEMPTY failures must not
+      // be mistaken for successful deduplication.
+      await fs.link(temporary, destination);
     } catch (error) {
-      // Two captures can finish the same content hash at once. Windows may
-      // reject the second rename; an already-complete, identical blob is the
-      // desired deduplicated result, never a reason to overwrite it.
-      if (!['EEXIST', 'ENOTEMPTY', 'EPERM'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
     await verifyStoredImage(destination, attachment);
     return attachment;

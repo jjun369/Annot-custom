@@ -18,7 +18,7 @@ let mobileKnowledge: typeof import('@/lib/mobile-knowledge');
 let knowledgeRoute: typeof import('@/app/api/mobile-bridge/knowledge/route');
 
 const ONE_PIXEL_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR42mNk+M/wHwAF/gL+X1VdNwAAAABJRU5ErkJggg==',
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAAXNSR0IArs4c6QAAAARzQklUCAgICHwIZIgAAAARSURBVAiZY/zPwPCfgYGBAQANBQIA/up4ZwAAAABJRU5ErkJggg==',
   'base64',
 );
 

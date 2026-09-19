@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from 'crypto';
-import { promises as fs } from 'fs';
+import { createReadStream, promises as fs } from 'fs';
 import path from 'path';
 
 import { getWorkspaceRoot } from '@/lib/annot-sessions';
@@ -137,10 +137,16 @@ async function writeJsonAtomic(filePath: string, value: unknown): Promise<void> 
 }
 
 async function fingerprint(filePath: string): Promise<{ size: number; sha256: string }> {
-  const data = await fs.readFile(filePath);
+  const digest = createHash('sha256');
+  let size = 0;
+  for await (const chunk of createReadStream(filePath)) {
+    const bytes = chunk as Buffer;
+    size += bytes.byteLength;
+    digest.update(bytes);
+  }
   return {
-    size: data.byteLength,
-    sha256: createHash('sha256').update(data).digest('hex'),
+    size,
+    sha256: digest.digest('hex'),
   };
 }
 
@@ -203,10 +209,12 @@ export async function updateBackupReplicaSettings(
       ? normalizeTargetRoot(updates.targetRoot)
       : current.targetRoot;
     if (targetRoot) validateTargetRoot(targetRoot);
+    const targetChanged = targetRoot !== current.targetRoot;
     return {
       ...current,
       version: BACKUP_REPLICA_SCHEMA_VERSION,
       targetRoot,
+      ...(targetChanged ? { lastAutomaticArtifact: undefined, lastFailureAt: undefined } : {}),
       automaticEnabled: Object.prototype.hasOwnProperty.call(updates, 'automaticEnabled')
         ? updates.automaticEnabled === true
         : current.automaticEnabled,

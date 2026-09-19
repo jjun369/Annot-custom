@@ -4,6 +4,11 @@ import path from 'node:path';
 import JSZip from 'jszip';
 import { afterEach, expect, test, vi } from 'vitest';
 
+const SYNTHETIC_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAAXNSR0IArs4c6QAAAARzQklUCAgICHwIZIgAAAARSURBVAiZY/zPwPCfgYGBAQANBQIA/up4ZwAAAABJRU5ErkJggg==',
+  'base64',
+);
+
 afterEach(() => { vi.unstubAllEnvs(); vi.resetModules(); });
 
 test.each([1, 2])('restores complete Knowledge records into an empty Library from portable v%i', async (version) => {
@@ -15,9 +20,12 @@ test.each([1, 2])('restores complete Knowledge records into an empty Library fro
   vi.stubEnv('PAGEDOCK_CONFIG_DIR', config);
   vi.resetModules();
   const store = await import('@/lib/knowledge-store');
+  const imageAssets = await import('@/lib/knowledge-image-assets');
+  const attachment = await imageAssets.storeKnowledgeImageAsset(SYNTHETIC_PNG, 'image/png');
   const captured = await store.captureKnowledgeNotes([{
     text: '합성 장기 보관 메모입니다. 휴대폰 사본과 복구 백업은 다릅니다.',
     sourceName: 'synthetic-memo.md', provenance: { kind: 'personal_hypothesis' },
+    attachments: [attachment],
   }]);
   const note = captured.captured[0];
   const [review] = await store.saveKnowledgeProposals(note.id, {
@@ -59,6 +67,8 @@ test.each([1, 2])('restores complete Knowledge records into an empty Library fro
   const restored = await (await import('@/lib/knowledge-store')).getKnowledgeSnapshot();
   expect(restored.notes[0].rawText).toBe(note.rawText);
   expect(restored.notes[0].provenance?.kind).toBe('personal_hypothesis');
+  expect(restored.notes[0].attachments).toEqual([attachment]);
+  expect(await (await import('@/lib/knowledge-image-assets')).readKnowledgeImageAsset(attachment)).toEqual(SYNTHETIC_PNG);
   expect(restored.topics[0].revisions).toHaveLength(1);
   expect(restored.topics[0].revision).toBe(2);
   const restoredTrash = await (await import('@/lib/knowledge-store')).getKnowledgeRevisionTrash();

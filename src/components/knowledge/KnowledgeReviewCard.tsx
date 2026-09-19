@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from 'react';
 import { AlertTriangle, Check, Edit3, Loader2, Save, X } from 'lucide-react';
+import Image from 'next/image';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -78,7 +79,7 @@ export function KnowledgeReviewCard({ review, note, topic, busy, onSave, onResol
         </div>
       ) : expanded ? (
         <div className="mt-4 grid gap-4 lg:grid-cols-[0.8fr_1.2fr]">
-          <div className="rounded-xl bg-surface-container-low p-4"><div className="text-[10px] font-bold uppercase tracking-wider text-outline">원본 · {note?.sourceName}</div><p className="mt-2 whitespace-pre-wrap text-xs leading-6">{note?.rawText}</p></div>
+          <div className="rounded-xl bg-surface-container-low p-4"><div className="text-[10px] font-bold uppercase tracking-wider text-outline">원본 · {note?.sourceName}</div><p className="mt-2 whitespace-pre-wrap text-xs leading-6">{note?.rawText}</p>{note?.attachments?.length ? <div className="mt-3 grid gap-2">{note.attachments.map((attachment) => <figure key={attachment.id} className="overflow-hidden rounded-xl border border-outline-variant/20 bg-white"><Image src={`/api/knowledge/image-asset?noteId=${encodeURIComponent(note.id)}&assetId=${attachment.id}`} alt={`${note.title || '이미지 메모'} 검토 첨부 그림`} width={1200} height={900} unoptimized className="h-auto max-h-72 w-full object-contain" /><figcaption className="px-2 py-1.5 text-[10px] text-on-surface-variant">원본 로컬 이미지 · {Math.ceil(attachment.byteLength / 1024)}KB · AI에는 전송되지 않음</figcaption></figure>)}</div> : null}</div>
           <div className="rounded-xl border border-outline-variant/25 bg-[#fbfcfd] p-4"><div className="flex items-center justify-between gap-3"><div className="text-[10px] font-bold uppercase tracking-wider text-primary">{preview ? '결과 미리보기' : '변경 내용'}</div><div className="flex rounded-lg bg-surface-container p-0.5 text-[9px] font-bold"><button onClick={() => setPreview(false)} className={`rounded-md px-2 py-1 ${!preview ? 'bg-white text-primary shadow-sm' : 'text-on-surface-variant'}`}>변경 비교</button><button onClick={() => setPreview(true)} className={`rounded-md px-2 py-1 ${preview ? 'bg-white text-primary shadow-sm' : 'text-on-surface-variant'}`}>Markdown 미리보기</button></div></div>{preview ? <div className="prose prose-sm mt-3 max-h-[32rem] max-w-none overflow-y-auto text-xs leading-6"><ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown></div> : <pre className="mt-2 max-h-[32rem] overflow-y-auto whitespace-pre-wrap font-mono text-[11px] leading-5">{diff.map((line, index) => <span key={`${index}-${line.kind}`} className={`block px-1 ${line.kind === 'added' ? 'bg-emerald-50 text-emerald-800' : line.kind === 'removed' ? 'bg-red-50 text-red-700 line-through' : line.kind === 'omitted' ? 'my-1 rounded bg-surface-container px-2 py-1 text-center italic text-outline' : 'text-on-surface-variant'}`}>{line.kind === 'added' ? '+ ' : line.kind === 'removed' ? '- ' : line.kind === 'omitted' ? '' : '  '}{line.text || ' '}</span>)}</pre>}</div>
         </div>
       ) : null}
