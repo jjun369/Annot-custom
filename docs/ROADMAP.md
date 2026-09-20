@@ -1,5 +1,11 @@
 # Roadmap
 
+## Completed Research discovery maintenance (2026-09-20)
+
+- Added a collapsible, lawful source-finding guide below Research provider tabs: Crossref/OpenAlex for title or DOI discovery, then Unpaywall, author repositories, or institutional libraries for public copies. Unofficial paywall-bypass/mirror routes such as Sci-Hub are explicitly unsupported and never linked or recommended.
+- Added a confirmation before importing a provider-marked public PDF, renamed the external metadata action to `제공처에서 열기`, and retained the existing `pdfUrl` gate and download-security checks.
+- Cleared stale provider results when switching search scopes, kept local materials visible until a search is submitted, clarified empty-result next steps, and exposed provider selection to assistive technology. No persistence, schema, or API change was needed.
+
 ## Completed maintenance (2026-09-19)
 
 - Harden visual Knowledge capture beyond magic bytes, bound multipart/JSON capture, make concurrent content-addressed publication no-overwrite, retain attachment visibility through proposal review, and verify image bytes in portable v1/v2 restore tests.

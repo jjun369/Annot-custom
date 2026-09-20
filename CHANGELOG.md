@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a calm collapsible Research source-finding guide for Crossref/OpenAlex discovery and lawful public copies via Unpaywall, author repositories, or institutional libraries. Unofficial paywall-bypass/mirror routes such as Sci-Hub are unsupported, unlinked, and not recommended.
+- Added an explicit `공개 PDF 가져오기` confirmation that asks the user to verify the provider and terms before the existing `pdfUrl`-gated download path runs; renamed `원문 페이지` to `제공처에서 열기`.
+- Cleared stale results when changing Research provider tabs, kept local materials visible until a query is submitted, improved empty-result guidance, and exposed the selected provider state with `aria-pressed`.
 - Validate complete PNG/JPEG payloads for visual Knowledge notes and bound multipart requests before parsing.
 - Publish concurrent same-hash image blobs without overwriting or swallowing unrelated filesystem errors.
 - Keep original image attachments visible during Knowledge proposal review.

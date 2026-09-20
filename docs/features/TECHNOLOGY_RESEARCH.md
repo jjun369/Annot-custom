@@ -9,6 +9,7 @@ Implemented:
 - Project/document many-to-many organization.
 - Local FTS5 over title, abstract, indexed PDF pages, patent claims, tags, and personal paper notes.
 - Crossref and configured OpenAlex metadata search, configured Unpaywall DOI lookup, manual PDF and URL/number patent workflows.
+- A calm, collapsible source-finding guide in the Research search flow points readers to Crossref/OpenAlex for title or DOI discovery and Unpaywall, author repositories, or institutional libraries for lawful public copies. It does not support or recommend unofficial paywall-bypass/mirror routes such as Sci-Hub; public PDF import remains user-approved and the provider's terms remain the user's responsibility.
 - KIPRIS Plus and EPO OPS authenticated search with explicit authentication/quota errors, plus KIPRIS/Espacenet/Google Patents links when credentials are absent.
 - User-approved public PDF import with HTTPS, redirect, private-network, size, and PDF validation.
 - Manual patent metadata/claims, filename suggestions, confirmed physical rename, display-title editing.

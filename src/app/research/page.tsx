@@ -23,6 +23,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { AppHeader } from '@/components/layout/AppHeader';
 import { useFeedback } from '@/components/common/FeedbackProvider';
+import { ResearchDiscoveryNotice } from '@/components/research/ResearchDiscoveryNotice';
+import { getResearchSearchEmptyHint, matchesResearchSearch, PUBLIC_PDF_IMPORT_CONFIRMATION } from '@/lib/research-discovery';
 import type { OnlineResearchResult } from '@/lib/research-sources';
 import type {
   AnalysisProfile,
@@ -129,6 +131,7 @@ export default function ResearchPage() {
   const [indexJobRecoveryNotice, setIndexJobRecoveryNotice] = useState<{ documentId: string; message: string } | null>(null);
   const [query, setQuery] = useState('');
   const [searchSource, setSearchSource] = useState<SearchSource>('local');
+  const [lastSearch, setLastSearch] = useState<{ source: SearchSource; query: string } | null>(null);
   const [localResults, setLocalResults] = useState<ResearchSearchResult[]>([]);
   const [onlineResults, setOnlineResults] = useState<OnlineResearchResult[]>([]);
   const [patentLinks, setPatentLinks] = useState<Array<{ provider: string; url: string }>>([]);
@@ -149,6 +152,7 @@ export default function ResearchPage() {
   const [patentDraft, setPatentDraft] = useState<PatentMetadata | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const completedIndexJobs = useRef(new Set<string>());
+  const searchRequestVersion = useRef(0);
 
   const activeIndexing = isActiveIndexJob(indexJob);
   const indexingCurrentDocument = activeIndexing && indexJob?.documentId === detail?.document.id;
@@ -159,6 +163,7 @@ export default function ResearchPage() {
     () => data?.projects.find((project) => project.id === selectedProjectId) || null,
     [data?.projects, selectedProjectId],
   );
+  const currentSearchMatches = matchesResearchSearch(lastSearch, searchSource, query);
   const visibleDocuments = useMemo(() => {
     if (!data) return [];
     if (!selectedProjectId) return data.documents;
@@ -166,14 +171,14 @@ export default function ResearchPage() {
       // The selected detail stays visible while the project list refreshes.
     }
     const resultIds = new Set(localResults.map((result) => result.document.id));
-    if (query.trim() && searchSource === 'local') {
+    if (currentSearchMatches && searchSource === 'local') {
       return data.documents.filter((document) => resultIds.has(document.id));
     }
     return data.documents.filter((document) => {
       const cached = (document as ResearchDocument & { projectIds?: string[] }).projectIds;
       return cached?.includes(selectedProjectId) || document.id === selectedDocumentId;
     });
-  }, [data, detail, localResults, query, searchSource, selectedDocumentId, selectedProjectId]);
+  }, [currentSearchMatches, data, detail, localResults, searchSource, selectedDocumentId, selectedProjectId]);
 
   const loadBootstrap = useCallback(async () => {
     setLoading(true);
@@ -270,24 +275,30 @@ export default function ResearchPage() {
   }, [activeIndexDocumentId, activeIndexJobId, loadBootstrap, loadDetail, notify, selectedDocumentId]);
 
   const runSearch = async () => {
-    if (query.trim().length < 2) return;
+    const normalizedQuery = query.trim();
+    if (normalizedQuery.length < 2) return;
+    const requestVersion = ++searchRequestVersion.current;
+    const requestSource = searchSource;
     setBusy('search');
     setLocalResults([]);
     setOnlineResults([]);
     setPatentLinks([]);
     try {
-      const params = new URLSearchParams({ q: query.trim(), source: searchSource });
-      if (selectedProjectId && searchSource === 'local') params.set('projectId', selectedProjectId);
+      const params = new URLSearchParams({ q: normalizedQuery, source: requestSource });
+      if (selectedProjectId && requestSource === 'local') params.set('projectId', selectedProjectId);
       const response = await fetch(`/api/research/search?${params}`, { cache: 'no-store' });
       const payload = await response.json();
+      if (requestVersion !== searchRequestVersion.current) return;
       if (!response.ok || payload.error) throw new Error(payload.error || '검색에 실패했습니다.');
-      if (searchSource === 'local') setLocalResults(payload.results || []);
-      else if (searchSource === 'patent-links') setPatentLinks(payload.links || []);
+      if (requestSource === 'local') setLocalResults(payload.results || []);
+      else if (requestSource === 'patent-links') setPatentLinks(payload.links || []);
       else setOnlineResults(payload.results || []);
+      setLastSearch({ source: requestSource, query: normalizedQuery });
     } catch (error) {
+      if (requestVersion !== searchRequestVersion.current) return;
       notify(error instanceof Error ? error.message : '검색에 실패했습니다.', 'error');
     } finally {
-      setBusy('');
+      if (requestVersion === searchRequestVersion.current) setBusy('');
     }
   };
 
@@ -385,6 +396,10 @@ export default function ResearchPage() {
   };
 
   const saveOnlineResult = async (result: OnlineResearchResult, download = false) => {
+    if (download) {
+      const approved = await confirm(PUBLIC_PDF_IMPORT_CONFIRMATION);
+      if (!approved) return;
+    }
     setBusy(`online:${result.externalId}`);
     try {
       const response = await fetch('/api/research/imports', {
@@ -486,6 +501,16 @@ export default function ResearchPage() {
     } catch (error) {
       notify(error instanceof Error ? error.message : '색인에 실패했습니다.', 'error');
     }
+  };
+
+  const changeSearchSource = (source: SearchSource) => {
+    searchRequestVersion.current += 1;
+    setSearchSource(source);
+    setBusy((current) => current === 'search' ? '' : current);
+    setLastSearch(null);
+    setLocalResults([]);
+    setOnlineResults([]);
+    setPatentLinks([]);
   };
 
   const cancelIndexDocument = async () => {
@@ -671,7 +696,7 @@ export default function ResearchPage() {
             </div>
             <button onClick={() => void runSearch()} disabled={busy === 'search'} className="flex h-10 min-w-16 items-center justify-center rounded-lg bg-primary px-3 text-xs font-semibold text-on-primary transition-opacity hover:opacity-90 disabled:opacity-50">{busy === 'search' ? <Loader2 size={14} className="animate-spin" /> : '검색'}</button>
           </div>
-          <div className="mt-2 flex gap-1 overflow-x-auto pb-1">
+          <div className="mt-2 flex gap-1 overflow-x-auto pb-1" role="group" aria-label="검색 제공처">
             {([
               ['local', '내 자료'], ['crossref', '논문 · Crossref'],
               ...(data?.sources.unpaywallEmail ? [['unpaywall', '공개 원문 · DOI'] as const] : []),
@@ -680,9 +705,10 @@ export default function ResearchPage() {
               ...(data?.sources.epoConfigured ? [['epo', 'EPO OPS'] as const] : []),
               ['patent-links', '특허 웹검색'],
             ] as const).map(([value, label]) => (
-              <button key={value} onClick={() => setSearchSource(value)} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[10px] font-semibold transition-colors ${searchSource === value ? 'bg-primary-container text-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>{label}</button>
+              <button key={value} type="button" onClick={() => changeSearchSource(value)} aria-pressed={searchSource === value} className={`whitespace-nowrap rounded-lg px-2.5 py-1.5 text-[10px] font-semibold transition-colors ${searchSource === value ? 'bg-primary-container text-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>{label}</button>
             ))}
           </div>
+          <ResearchDiscoveryNotice />
           <div className="mt-4 flex items-center justify-between">
             <h1 className="text-sm font-bold text-on-surface">{selectedProject?.name || '전체 자료'}</h1>
             <div className="flex gap-1">
@@ -703,7 +729,7 @@ export default function ResearchPage() {
                   <div className="mt-3 flex gap-2">
                     <button onClick={() => void saveOnlineResult(result, false)} className="rounded-lg bg-surface-container px-2.5 py-1.5 text-[10px] font-semibold">메타데이터 저장</button>
                     {result.pdfUrl && <button onClick={() => void saveOnlineResult(result, true)} className="rounded-lg bg-primary px-2.5 py-1.5 text-[10px] font-semibold text-on-primary">공개 PDF 가져오기</button>}
-                    {result.url && <a href={result.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 px-2 py-1.5 text-[10px] text-primary">원문 페이지 <ExternalLink size={10} /></a>}
+                    {result.url && <a href={result.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 px-2 py-1.5 text-[10px] text-primary">제공처에서 열기 <ExternalLink size={10} /></a>}
                   </div>
                 </article>
               ))}
@@ -713,7 +739,7 @@ export default function ResearchPage() {
           {patentLinks.length > 0 && <section className="mt-3 grid gap-2">{patentLinks.map((link) => <a key={link.provider} href={link.url} target="_blank" rel="noreferrer" className="flex items-center justify-between rounded-xl border border-outline-variant/20 bg-surface-container-lowest px-3 py-3 text-xs font-semibold">{link.provider}에서 “{query}” 검색 <ExternalLink size={13} /></a>)}</section>}
 
           <section className="mt-3 space-y-2">
-            {(query.trim() && searchSource === 'local' ? localResults.map((item) => item.document) : visibleDocuments).map((document) => (
+            {(currentSearchMatches && searchSource === 'local' ? localResults.map((item) => item.document) : visibleDocuments).map((document) => (
               <button key={document.id} onClick={() => void loadDetail(document.id)} className={`w-full rounded-xl border p-3 text-left transition-colors ${selectedDocumentId === document.id ? 'border-primary bg-primary/5' : 'border-outline-variant/15 bg-surface-container-lowest hover:border-outline-variant/40'}`}>
                 <div className="flex items-start gap-2">
                   {document.kind === 'patent' ? <FileSearch size={16} className="mt-0.5 shrink-0 text-violet-600" /> : <FileText size={16} className="mt-0.5 shrink-0 text-primary" />}
@@ -724,7 +750,16 @@ export default function ResearchPage() {
                 </div>
               </button>
             ))}
-            {!onlineResults.length && !patentLinks.length && visibleDocuments.length === 0 && <div className="rounded-xl bg-surface-container p-5 text-center text-xs text-on-surface-variant">프로젝트에 연결된 자료가 없습니다.</div>}
+            {currentSearchMatches && (
+              (searchSource === 'local' ? localResults.length === 0 : searchSource === 'patent-links' ? patentLinks.length === 0 : onlineResults.length === 0)
+            ) ? (
+              <div className="rounded-xl bg-surface-container p-5 text-center text-xs text-on-surface-variant" role="status" aria-live="polite">
+                <div className="font-semibold text-on-surface">검색 결과가 없습니다.</div>
+                <p className="mt-1 leading-5">{getResearchSearchEmptyHint(searchSource)}</p>
+              </div>
+            ) : !onlineResults.length && !patentLinks.length && visibleDocuments.length === 0 ? (
+              <div className="rounded-xl bg-surface-container p-5 text-center text-xs text-on-surface-variant">프로젝트에 연결된 자료가 없습니다.</div>
+            ) : null}
           </section>
         </main>
 
