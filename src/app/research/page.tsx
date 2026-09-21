@@ -25,6 +25,7 @@ import { AppHeader } from '@/components/layout/AppHeader';
 import { useFeedback } from '@/components/common/FeedbackProvider';
 import { ResearchDiscoveryNotice } from '@/components/research/ResearchDiscoveryNotice';
 import { getResearchSearchEmptyHint, matchesResearchSearch, PUBLIC_PDF_IMPORT_CONFIRMATION } from '@/lib/research-discovery';
+import { createResearchAsyncController, type ResearchDocumentDraft, type ResearchSelectionSnapshot } from '@/lib/research-async-controller';
 import type { OnlineResearchResult } from '@/lib/research-sources';
 import type {
   AnalysisProfile,
@@ -153,6 +154,7 @@ export default function ResearchPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const completedIndexJobs = useRef(new Set<string>());
   const searchRequestVersion = useRef(0);
+  const asyncController = useRef(createResearchAsyncController<ResearchDocumentDraft>((left, right) => JSON.stringify(left) === JSON.stringify(right)));
 
   const activeIndexing = isActiveIndexJob(indexJob);
   const indexingCurrentDocument = activeIndexing && indexJob?.documentId === detail?.document.id;
@@ -167,20 +169,33 @@ export default function ResearchPage() {
   const visibleDocuments = useMemo(() => {
     if (!data) return [];
     if (!selectedProjectId) return data.documents;
-    if (detail && detail.projectIds.includes(selectedProjectId)) {
-      // The selected detail stays visible while the project list refreshes.
-    }
     const resultIds = new Set(localResults.map((result) => result.document.id));
     if (currentSearchMatches && searchSource === 'local') {
       return data.documents.filter((document) => resultIds.has(document.id));
     }
     return data.documents.filter((document) => {
       const cached = (document as ResearchDocument & { projectIds?: string[] }).projectIds;
-      return cached?.includes(selectedProjectId) || document.id === selectedDocumentId;
+      return cached?.includes(selectedProjectId);
     });
-  }, [currentSearchMatches, data, detail, localResults, searchSource, selectedDocumentId, selectedProjectId]);
+  }, [currentSearchMatches, data, localResults, searchSource, selectedProjectId]);
 
-  const loadBootstrap = useCallback(async () => {
+  const selectProject = useCallback((projectId: string) => {
+    const selection = asyncController.current.selectProject(projectId);
+    setSelectedProjectId(projectId);
+    setSelectedDocumentId('');
+    setDetail(null);
+    setIndexJob(null);
+    setIndexJobRecoveryNotice(null);
+    searchRequestVersion.current += 1;
+    setLocalResults([]);
+    setOnlineResults([]);
+    setPatentLinks([]);
+    setLastSearch(null);
+    return selection;
+  }, []);
+
+  const loadBootstrap = useCallback(async (selection = asyncController.current.currentSelection()) => {
+    const request = asyncController.current.beginBootstrap(selection);
     setLoading(true);
     try {
       const response = await fetch('/api/research/bootstrap', { cache: 'no-store' });
@@ -188,56 +203,88 @@ export default function ResearchPage() {
       if (!response.ok || payload.error) throw new Error(payload.error || '리서치 데이터를 불러오지 못했습니다.');
       const next = payload as BootstrapData;
       // Add membership information with one bounded request per selected project.
-      if (selectedProjectId) {
-        const projectResponse = await fetch(`/api/research/documents?projectId=${encodeURIComponent(selectedProjectId)}`, { cache: 'no-store' });
+      if (selection.projectId) {
+        const projectResponse = await fetch(`/api/research/documents?projectId=${encodeURIComponent(selection.projectId)}`, { cache: 'no-store' });
         const projectPayload = await projectResponse.json();
         const projectIds = new Set((projectPayload.documents || []).map((item: ResearchDocument) => item.id));
-        next.documents = next.documents.map((item) => ({ ...item, projectIds: projectIds.has(item.id) ? [selectedProjectId] : [] }));
+        next.documents = next.documents.map((item) => ({ ...item, projectIds: projectIds.has(item.id) ? [selection.projectId] : [] }));
       }
+      if (!asyncController.current.isCurrentBootstrap(request)) return;
       setData(next);
     } catch (error) {
+      if (!asyncController.current.isCurrentBootstrap(request)) return;
       notify(error instanceof Error ? error.message : '리서치 데이터를 불러오지 못했습니다.', 'error');
     } finally {
-      setLoading(false);
+      if (asyncController.current.isCurrentBootstrap(request)) setLoading(false);
     }
-  }, [notify, selectedProjectId]);
+  }, [notify]);
 
-  const loadDetail = useCallback(async (documentId: string) => {
-    setSelectedDocumentId(documentId);
+  const loadDetail = useCallback(async (documentId: string, selection = asyncController.current.currentSelection()) => {
+    if (selection.documentId !== documentId) return;
+    const request = asyncController.current.beginDetail(selection);
     try {
       const response = await fetch(`/api/research/documents?id=${encodeURIComponent(documentId)}`, { cache: 'no-store' });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || '문서를 불러오지 못했습니다.');
+      if (!asyncController.current.isCurrentDetail(request)) return;
       const next = payload as DocumentDetail;
       setDetail(next);
-      setTitleDraft(next.document.displayTitle);
-      setKindDraft(next.document.kind);
-      setPatentDraft(next.patent || {
-        documentId,
-        assignees: [], inventors: [], citations: [], claimsText: '', updatedAt: new Date().toISOString(),
+      const nextDraft = asyncController.current.applyServerDraft(documentId, {
+        title: next.document.displayTitle,
+        kind: next.document.kind,
+        patent: next.patent || {
+          documentId,
+          assignees: [], inventors: [], citations: [], claimsText: '', updatedAt: new Date().toISOString(),
+        },
       });
+      setTitleDraft(nextDraft.value.title);
+      setKindDraft(nextDraft.value.kind);
+      setPatentDraft(nextDraft.value.patent);
     } catch (error) {
+      if (!asyncController.current.isCurrentDetail(request)) return;
       notify(error instanceof Error ? error.message : '문서를 불러오지 못했습니다.', 'error');
     }
   }, [notify]);
 
-  useEffect(() => { void loadBootstrap(); }, [loadBootstrap]);
+  const selectDocument = useCallback((documentId: string) => {
+    const selection = asyncController.current.selectDocument(documentId);
+    setSelectedDocumentId(documentId);
+    setDetail(null);
+    setIndexJob(null);
+    setIndexJobRecoveryNotice(null);
+    void loadDetail(documentId, selection);
+  }, [loadDetail]);
+
+  const updateDocumentDraft = useCallback((patch: Partial<ResearchDocumentDraft>) => {
+    if (!selectedDocumentId) return;
+    const current = asyncController.current.getDraft(selectedDocumentId)?.value || {
+      title: titleDraft,
+      kind: kindDraft,
+      patent: patentDraft,
+    };
+    asyncController.current.updateDraft(selectedDocumentId, { ...current, ...patch });
+  }, [kindDraft, patentDraft, selectedDocumentId, titleDraft]);
+
+  useEffect(() => { void loadBootstrap(asyncController.current.currentSelection()); }, [loadBootstrap, selectedProjectId]);
   useEffect(() => {
     if (!selectedDocumentId) return;
     const hasRunning = detail?.analyses.some((analysis) => analysis.status === 'queued' || analysis.status === 'running');
     if (!hasRunning) return;
-    const timer = window.setInterval(() => void loadDetail(selectedDocumentId), 2500);
+    const selection = asyncController.current.currentSelection();
+    const timer = window.setInterval(() => void loadDetail(selectedDocumentId, selection), 2500);
     return () => window.clearInterval(timer);
   }, [detail?.analyses, loadDetail, selectedDocumentId]);
 
   useEffect(() => {
     if (!activeIndexJobId || !activeIndexDocumentId) return;
+    const selection = asyncController.current.currentSelection();
+    if (selection.documentId !== activeIndexDocumentId) return;
     let disposed = false;
     const poll = async () => {
       try {
         const response = await fetch(`/api/research/documents/index?jobId=${encodeURIComponent(activeIndexJobId)}`, { cache: 'no-store' });
         const payload = await response.json();
-        if (disposed) return;
+        if (disposed || !asyncController.current.isCurrentSelection(selection)) return;
         if (!response.ok || payload.error) {
           if (response.status === 404) {
             const message = payload.error || '색인 작업 상태를 찾을 수 없습니다. 기존 색인은 그대로 유지되며 다시 시작할 수 있습니다.';
@@ -249,13 +296,16 @@ export default function ResearchPage() {
           throw new Error(payload.error || '색인 진행 상황을 확인하지 못했습니다.');
         }
         const next = payload.job as IndexJob;
+        if (next.documentId !== activeIndexDocumentId) return;
         setIndexJob(next);
         if (!isActiveIndexJob(next) && !completedIndexJobs.current.has(next.id)) {
           completedIndexJobs.current.add(next.id);
           if (next.state === 'succeeded') {
             notify(`${next.pagesProcessed}페이지를 ${next.chunks}개 검색 단위로 색인했습니다.`, 'success');
-            void loadBootstrap();
-            if (next.documentId === selectedDocumentId) void loadDetail(next.documentId);
+            if (asyncController.current.isCurrentSelection(selection)) {
+              void loadBootstrap(selection);
+              void loadDetail(next.documentId, selection);
+            }
           } else if (next.state === 'cancelled') {
             notify('본문 색인을 취소했습니다. 기존 색인은 그대로 유지됩니다.', 'success');
           } else if (next.state === 'failed') {
@@ -263,7 +313,7 @@ export default function ResearchPage() {
           }
         }
       } catch (error) {
-        if (!disposed) notify(error instanceof Error ? error.message : '색인 진행 상황을 확인하지 못했습니다.', 'error');
+        if (!disposed && asyncController.current.isCurrentSelection(selection)) notify(error instanceof Error ? error.message : '색인 진행 상황을 확인하지 못했습니다.', 'error');
       }
     };
     void poll();
@@ -272,7 +322,7 @@ export default function ResearchPage() {
       disposed = true;
       window.clearInterval(timer);
     };
-  }, [activeIndexDocumentId, activeIndexJobId, loadBootstrap, loadDetail, notify, selectedDocumentId]);
+  }, [activeIndexDocumentId, activeIndexJobId, loadBootstrap, loadDetail, notify]);
 
   const runSearch = async () => {
     const normalizedQuery = query.trim();
@@ -304,6 +354,7 @@ export default function ResearchPage() {
 
   const createNewProject = async () => {
     if (!projectName.trim()) return;
+    const startingSelection = asyncController.current.currentSelection();
     setBusy('project');
     try {
       const response = await fetch('/api/research/projects', {
@@ -312,37 +363,50 @@ export default function ResearchPage() {
       });
       const project = await response.json();
       if (!response.ok || project.error) throw new Error(project.error || '프로젝트를 만들지 못했습니다.');
+      if (!asyncController.current.isCurrentSelection(startingSelection)) {
+        await loadBootstrap();
+        return;
+      }
       setProjectDialog(false);
       setProjectName('');
       setProjectDescription('');
-      setSelectedProjectId(project.id);
-      await loadBootstrap();
+      const selection = selectProject(project.id);
+      await loadBootstrap(selection);
     } catch (error) {
       notify(error instanceof Error ? error.message : '프로젝트를 만들지 못했습니다.', 'error');
-    } finally { setBusy(''); }
+    } finally { setBusy((current) => current === 'project' ? '' : current); }
   };
 
   const saveProjectEdit = async () => {
     if (!projectEdit?.name.trim()) return;
+    const edit = projectEdit;
+    const startingSelection = asyncController.current.currentSelection();
     setBusy('project-edit');
     try {
       const response = await fetch('/api/research/projects', {
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(projectEdit),
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(edit),
       });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || '프로젝트를 수정하지 못했습니다.');
+      if (!asyncController.current.isCurrentSelection(startingSelection)) {
+        await loadBootstrap();
+        return;
+      }
       setProjectEdit(null);
-      await loadBootstrap();
+      await loadBootstrap(startingSelection);
       notify('프로젝트 정보를 수정했습니다.', 'success');
     } catch (error) {
       notify(error instanceof Error ? error.message : '프로젝트를 수정하지 못했습니다.', 'error');
     } finally {
-      setBusy('');
+      setBusy((current) => current === 'project-edit' ? '' : current);
     }
   };
 
   const removeSelectedProject = async () => {
     if (!selectedProject) return;
+    const projectId = selectedProject.id;
+    const startingSelection = asyncController.current.currentSelection();
+    if (startingSelection.projectId !== projectId) return;
     const approved = await confirm({
       title: '리서치 프로젝트 삭제',
       message: `'${selectedProject.name}' 프로젝트를 삭제할까요? PDF 원본과 문서 분석은 삭제하지 않고 프로젝트 연결만 제거합니다.`,
@@ -350,16 +414,18 @@ export default function ResearchPage() {
       destructive: true,
     });
     if (!approved) return;
-    const response = await fetch(`/api/research/projects?id=${encodeURIComponent(selectedProject.id)}`, { method: 'DELETE' });
+    const response = await fetch(`/api/research/projects?id=${encodeURIComponent(projectId)}`, { method: 'DELETE' });
     const payload = await response.json();
     if (!response.ok || payload.error) {
       notify(payload.error || '프로젝트를 삭제하지 못했습니다.', 'error');
       return;
     }
-    setSelectedProjectId('');
-    setSelectedDocumentId('');
-    setDetail(null);
-    await loadBootstrap();
+    if (asyncController.current.isCurrentSelection(startingSelection)) {
+      const selection = selectProject('');
+      await loadBootstrap(selection);
+    } else {
+      await loadBootstrap();
+    }
     notify('프로젝트 연결을 삭제했습니다. 원본 자료는 그대로 유지됩니다.', 'success');
   };
 
@@ -373,6 +439,7 @@ export default function ResearchPage() {
       });
       if (!approved) return;
     }
+    const startingSelection = asyncController.current.currentSelection();
     const response = await fetch('/api/research/conflicts', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: item.id, action }),
     });
@@ -381,21 +448,36 @@ export default function ResearchPage() {
       notify(payload.error || '복구 확인을 완료하지 못했습니다.', 'error');
       return;
     }
-    await loadBootstrap();
+    await loadBootstrap(asyncController.current.isCurrentSelection(startingSelection)
+      ? startingSelection
+      : asyncController.current.currentSelection());
   };
 
-  const linkDocument = async (documentId: string, linked = true) => {
-    if (!selectedProjectId) return;
+  const linkDocument = async (
+    documentId: string,
+    linked = true,
+    projectId = asyncController.current.currentSelection().projectId,
+    startingSelection: ResearchSelectionSnapshot = asyncController.current.currentSelection(),
+  ) => {
+    if (!projectId) return;
     const response = await fetch('/api/research/projects', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: selectedProjectId, documentId, linked }),
+      body: JSON.stringify({ id: projectId, documentId, linked }),
     });
     const payload = await response.json();
     if (!response.ok || payload.error) throw new Error(payload.error || '프로젝트 연결을 변경하지 못했습니다.');
-    await Promise.all([loadBootstrap(), loadDetail(documentId)]);
+    if (asyncController.current.isCurrentSelection(startingSelection)) {
+      await Promise.all([
+        loadBootstrap(startingSelection),
+        startingSelection.documentId === documentId ? loadDetail(documentId, startingSelection) : Promise.resolve(),
+      ]);
+    } else {
+      await loadBootstrap();
+    }
   };
 
   const saveOnlineResult = async (result: OnlineResearchResult, download = false) => {
+    const startingSelection = asyncController.current.currentSelection();
     if (download) {
       const approved = await confirm(PUBLIC_PDF_IMPORT_CONFIRMATION);
       if (!approved) return;
@@ -407,7 +489,7 @@ export default function ResearchPage() {
         body: JSON.stringify({
           action: download ? 'download-pdf' : 'save-metadata',
           result,
-          projectId: selectedProjectId || undefined,
+          projectId: startingSelection.projectId || undefined,
           url: result.pdfUrl,
           preferredName: `${result.publicationYear || ''} - ${result.authors[0] || ''} - ${result.title}.pdf`,
         }),
@@ -415,33 +497,43 @@ export default function ResearchPage() {
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || '자료를 저장하지 못했습니다.');
       notify(download ? '공개 PDF를 라이브러리에 복사했습니다.' : '논문 메타데이터를 저장했습니다.', 'success');
-      await loadBootstrap();
-      if (payload.document?.id) await loadDetail(payload.document.id);
+      if (!asyncController.current.isCurrentSelection(startingSelection)) {
+        await loadBootstrap();
+        return;
+      }
+      await loadBootstrap(startingSelection);
+      if (payload.document?.id && asyncController.current.isCurrentSelection(startingSelection)) selectDocument(payload.document.id);
     } catch (error) {
       notify(error instanceof Error ? error.message : '자료를 저장하지 못했습니다.', 'error');
-    } finally { setBusy(''); }
+    } finally { setBusy((current) => current === `online:${result.externalId}` ? '' : current); }
   };
 
   const createManualPatent = async () => {
     if (!manualPatent.publicationNumber.trim()) return;
+    const startingSelection = asyncController.current.currentSelection();
+    const projectId = startingSelection.projectId;
     setBusy('manual-patent');
     try {
       const response = await fetch('/api/research/documents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...manualPatent, projectId: selectedProjectId || undefined }),
+        body: JSON.stringify({ ...manualPatent, projectId: projectId || undefined }),
       });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || '특허 자료를 추가하지 못했습니다.');
+      if (!asyncController.current.isCurrentSelection(startingSelection)) {
+        await loadBootstrap();
+        return;
+      }
       setPatentDialog(false);
       setManualPatent({ title: '', publicationNumber: '', sourceUrl: '' });
-      await loadBootstrap();
-      await loadDetail(payload.document.id);
+      await loadBootstrap(startingSelection);
+      if (asyncController.current.isCurrentSelection(startingSelection)) selectDocument(payload.document.id);
       notify('특허 번호와 메타데이터를 추가했습니다. PDF는 나중에 연결할 수 있습니다.', 'success');
     } catch (error) {
       notify(error instanceof Error ? error.message : '특허 자료를 추가하지 못했습니다.', 'error');
     } finally {
-      setBusy('');
+      setBusy((current) => current === 'manual-patent' ? '' : current);
     }
   };
 
@@ -449,6 +541,8 @@ export default function ResearchPage() {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
+    const startingSelection = asyncController.current.currentSelection();
+    const projectId = startingSelection.projectId;
     setBusy('upload');
     try {
       const form = new FormData();
@@ -457,44 +551,60 @@ export default function ResearchPage() {
       const response = await fetch('/api/papers', { method: 'POST', body: form });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || 'PDF를 추가하지 못했습니다.');
-      if (selectedProjectId && payload.documentId) await linkDocument(payload.documentId, true);
-      await loadBootstrap();
-      if (payload.documentId) await loadDetail(payload.documentId);
+      if (projectId && payload.documentId) await linkDocument(payload.documentId, true, projectId, startingSelection);
+      if (!asyncController.current.isCurrentSelection(startingSelection)) {
+        await loadBootstrap();
+        return;
+      }
+      await loadBootstrap(startingSelection);
+      if (payload.documentId && asyncController.current.isCurrentSelection(startingSelection)) selectDocument(payload.documentId);
     } catch (error) {
       notify(error instanceof Error ? error.message : 'PDF를 추가하지 못했습니다.', 'error');
-    } finally { setBusy(''); }
+    } finally { setBusy((current) => current === 'upload' ? '' : current); }
   };
 
   const saveDocument = async () => {
     if (!detail) return;
+    const startingSelection = asyncController.current.currentSelection();
+    const documentId = detail.document.id;
+    const draft: ResearchDocumentDraft = { title: titleDraft, kind: kindDraft, patent: patentDraft };
+    asyncController.current.updateDraft(documentId, draft);
     setBusy('save-document');
     try {
       const response = await fetch('/api/research/documents', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          id: detail.document.id,
+          id: documentId,
           updates: { displayTitle: titleDraft, kind: kindDraft },
           patent: kindDraft === 'patent' ? patentDraft : undefined,
         }),
       });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || '문서를 저장하지 못했습니다.');
+      asyncController.current.markDraftSaved(documentId, draft);
       notify('문서 정보를 저장했습니다.', 'success');
-      await Promise.all([loadBootstrap(), loadDetail(detail.document.id)]);
+      if (!asyncController.current.isCurrentSelection(startingSelection)) {
+        await loadBootstrap();
+        return;
+      }
+      await Promise.all([loadBootstrap(startingSelection), loadDetail(documentId, startingSelection)]);
     } catch (error) {
       notify(error instanceof Error ? error.message : '문서를 저장하지 못했습니다.', 'error');
-    } finally { setBusy(''); }
+    } finally { setBusy((current) => current === 'save-document' ? '' : current); }
   };
 
   const indexDocument = async () => {
     if (!detail) return;
+    const startingSelection = asyncController.current.currentSelection();
+    const documentId = detail.document.id;
     try {
       const response = await fetch('/api/research/documents/index', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentId: detail.document.id }),
+        body: JSON.stringify({ documentId }),
       });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || '색인에 실패했습니다.');
+      if (!asyncController.current.isCurrentSelection(startingSelection)) return;
       setIndexJob(payload.job as IndexJob);
       setIndexJobRecoveryNotice(null);
       if (payload.reused) notify('이미 진행 중인 본문 색인을 계속 표시합니다.', 'success');
@@ -515,11 +625,13 @@ export default function ResearchPage() {
 
   const cancelIndexDocument = async () => {
     if (!indexJob) return;
+    const startingSelection = asyncController.current.currentSelection();
+    const jobId = indexJob.id;
     try {
-      const response = await fetch(`/api/research/documents/index?jobId=${encodeURIComponent(indexJob.id)}`, { method: 'DELETE' });
+      const response = await fetch(`/api/research/documents/index?jobId=${encodeURIComponent(jobId)}`, { method: 'DELETE' });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || '색인을 취소하지 못했습니다.');
-      setIndexJob(payload.job as IndexJob);
+      if (asyncController.current.isCurrentSelection(startingSelection)) setIndexJob(payload.job as IndexJob);
     } catch (error) {
       notify(error instanceof Error ? error.message : '색인을 취소하지 못했습니다.', 'error');
     }
@@ -527,6 +639,9 @@ export default function ResearchPage() {
 
   const applySuggestedFilename = async () => {
     if (!detail?.document.currentPath) return;
+    const startingSelection = asyncController.current.currentSelection();
+    const documentId = detail.document.id;
+    const currentPath = detail.document.currentPath;
     const suggestion = detail.filenameSuggestion.fileName;
     const approved = await confirm({
       title: 'PDF 파일명 변경',
@@ -538,33 +653,39 @@ export default function ResearchPage() {
     try {
       const response = await fetch('/api/papers', {
         method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ path: detail.document.currentPath, name: suggestion, action: 'rename' }),
+        body: JSON.stringify({ path: currentPath, name: suggestion, action: 'rename' }),
       });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || '파일명을 바꾸지 못했습니다.');
       notify('PDF 파일명과 연결 정보를 함께 변경했습니다.', 'success');
-      await Promise.all([loadBootstrap(), loadDetail(detail.document.id)]);
+      if (!asyncController.current.isCurrentSelection(startingSelection)) {
+        await loadBootstrap();
+        return;
+      }
+      await Promise.all([loadBootstrap(startingSelection), loadDetail(documentId, startingSelection)]);
     } catch (error) {
       notify(error instanceof Error ? error.message : '파일명을 바꾸지 못했습니다.', 'error');
-    } finally { setBusy(''); }
+    } finally { setBusy((current) => current === 'rename' ? '' : current); }
   };
 
   const startAnalysis = async () => {
     if (!detail) return;
+    const startingSelection = asyncController.current.currentSelection();
+    const documentId = detail.document.id;
     const profileId = selectedProject?.profileId || 'profile-general';
     setBusy('analysis');
     try {
       const response = await fetch('/api/research/analyses', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ documentId: detail.document.id, projectId: selectedProjectId || undefined, profileId, model: 'auto', reasoningEffort: 'auto' }),
+        body: JSON.stringify({ documentId, projectId: startingSelection.projectId || undefined, profileId, model: 'auto', reasoningEffort: 'auto' }),
       });
       const payload = await response.json();
       if (!response.ok || payload.error) throw new Error(payload.error || '분석을 시작하지 못했습니다.');
       notify('근거 기반 분석을 시작했습니다.', 'success');
-      await loadDetail(detail.document.id);
+      if (asyncController.current.isCurrentSelection(startingSelection)) await loadDetail(documentId, startingSelection);
     } catch (error) {
       notify(error instanceof Error ? error.message : '분석을 시작하지 못했습니다.', 'error');
-    } finally { setBusy(''); }
+    } finally { setBusy((current) => current === 'analysis' ? '' : current); }
   };
 
   const openProfileEditor = () => {
@@ -590,6 +711,9 @@ export default function ResearchPage() {
 
   const saveTerminology = async () => {
     if (!terminologyProfile) return;
+    const startingSelection = asyncController.current.currentSelection();
+    const projectId = startingSelection.projectId;
+    const profileDraftSnapshot = terminologyProfile;
     const terminology = Object.fromEntries(terminologyDraft.split(/\r?\n/)
       .map((line) => line.split('=').map((item) => item.trim()))
       .filter(([term, variants]) => term && variants)
@@ -599,47 +723,60 @@ export default function ResearchPage() {
       const response = await fetch('/api/research/profiles', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...terminologyProfile, terminology }),
+        body: JSON.stringify({ ...profileDraftSnapshot, terminology }),
       });
       const profile = await response.json();
       if (!response.ok || profile.error) throw new Error(profile.error || '용어 연결을 저장하지 못했습니다.');
-      if (selectedProjectId) {
+      if (projectId) {
         const projectResponse = await fetch('/api/research/projects', {
-          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: selectedProjectId, profileId: profile.id }),
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: projectId, profileId: profile.id }),
         });
         const projectPayload = await projectResponse.json();
         if (!projectResponse.ok || projectPayload.error) throw new Error(projectPayload.error || '프로젝트에 용어 프로필을 적용하지 못했습니다.');
       }
+      if (!asyncController.current.isCurrentSelection(startingSelection)) {
+        await loadBootstrap();
+        return;
+      }
       setTerminologyProfile(null);
-      await loadBootstrap();
+      await loadBootstrap(startingSelection);
       notify('전문용어와 검색·분석용 표현을 저장했습니다.', 'success');
     } catch (error) {
       notify(error instanceof Error ? error.message : '용어 연결을 저장하지 못했습니다.', 'error');
     } finally {
-      setBusy('');
+      setBusy((current) => current === 'terminology' ? '' : current);
     }
   };
 
   const saveProfile = async () => {
     if (!profileDraft?.name.trim()) return;
+    const startingSelection = asyncController.current.currentSelection();
+    const projectId = startingSelection.projectId;
+    const profileDraftSnapshot = profileDraft;
     setBusy('profile');
     try {
       const response = await fetch('/api/research/profiles', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profileDraft),
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(profileDraftSnapshot),
       });
       const profile = await response.json();
       if (!response.ok || profile.error) throw new Error(profile.error || '프로필을 저장하지 못했습니다.');
-      if (selectedProjectId) {
-        await fetch('/api/research/projects', {
+      if (projectId) {
+        const projectResponse = await fetch('/api/research/projects', {
           method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ id: selectedProjectId, profileId: profile.id }),
+          body: JSON.stringify({ id: projectId, profileId: profile.id }),
         });
+        const projectPayload = await projectResponse.json();
+        if (!projectResponse.ok || projectPayload.error) throw new Error(projectPayload.error || '프로젝트에 프로필을 적용하지 못했습니다.');
+      }
+      if (!asyncController.current.isCurrentSelection(startingSelection)) {
+        await loadBootstrap();
+        return;
       }
       setProfileDialog(false);
-      await loadBootstrap();
+      await loadBootstrap(startingSelection);
     } catch (error) {
       notify(error instanceof Error ? error.message : '프로필을 저장하지 못했습니다.', 'error');
-    } finally { setBusy(''); }
+    } finally { setBusy((current) => current === 'profile' ? '' : current); }
   };
 
   if (loading && !data) {
@@ -664,9 +801,9 @@ export default function ResearchPage() {
             <button onClick={() => setProjectDialog(true)} className="flex h-7 w-7 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface" title="프로젝트 만들기"><Plus size={14} /></button>
           </div>
           <nav className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
-            <button onClick={() => setSelectedProjectId('')} className={`mb-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${!selectedProjectId ? 'bg-surface-container-lowest font-semibold text-on-surface shadow-sm' : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'}`}><Database size={14} />전체 자료</button>
+            <button onClick={() => selectProject('')} className={`mb-1 flex w-full items-center gap-2 rounded-lg px-2.5 py-2 text-left text-xs transition-colors ${!selectedProjectId ? 'bg-surface-container-lowest font-semibold text-on-surface shadow-sm' : 'text-on-surface-variant hover:bg-surface-container-high hover:text-on-surface'}`}><Database size={14} />전체 자료</button>
             {data?.projects.map((project) => (
-              <button key={project.id} onClick={() => { setSelectedProjectId(project.id); setLocalResults([]); void loadBootstrap(); }} className={`mb-1 w-full rounded-lg px-2.5 py-2 text-left transition-colors ${selectedProjectId === project.id ? 'bg-surface-container-lowest shadow-sm' : 'hover:bg-surface-container-high'}`}>
+              <button key={project.id} onClick={() => selectProject(project.id)} className={`mb-1 w-full rounded-lg px-2.5 py-2 text-left transition-colors ${selectedProjectId === project.id ? 'bg-surface-container-lowest shadow-sm' : 'hover:bg-surface-container-high'}`}>
                 <span className={`flex items-center gap-2 text-xs font-semibold ${selectedProjectId === project.id ? 'text-on-surface' : 'text-on-surface-variant'}`}><FolderKanban size={14} />{project.name}</span>
                 <span className="mt-1 block pl-[22px] text-[10px] text-outline">자료 {project.documentCount}개</span>
               </button>
@@ -740,7 +877,7 @@ export default function ResearchPage() {
 
           <section className="mt-3 space-y-2">
             {(currentSearchMatches && searchSource === 'local' ? localResults.map((item) => item.document) : visibleDocuments).map((document) => (
-              <button key={document.id} onClick={() => void loadDetail(document.id)} className={`w-full rounded-xl border p-3 text-left transition-colors ${selectedDocumentId === document.id ? 'border-primary bg-primary/5' : 'border-outline-variant/15 bg-surface-container-lowest hover:border-outline-variant/40'}`}>
+              <button key={document.id} onClick={() => selectDocument(document.id)} className={`w-full rounded-xl border p-3 text-left transition-colors ${selectedDocumentId === document.id ? 'border-primary bg-primary/5' : 'border-outline-variant/15 bg-surface-container-lowest hover:border-outline-variant/40'}`}>
                 <div className="flex items-start gap-2">
                   {document.kind === 'patent' ? <FileSearch size={16} className="mt-0.5 shrink-0 text-violet-600" /> : <FileText size={16} className="mt-0.5 shrink-0 text-primary" />}
                   <span className="min-w-0 flex-1">
@@ -770,9 +907,9 @@ export default function ResearchPage() {
             <div className="mx-auto max-w-3xl">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <input value={titleDraft} onChange={(event) => setTitleDraft(event.target.value)} className="w-full border-b border-transparent bg-transparent text-lg font-bold outline-none focus:border-primary" />
+                  <input value={titleDraft} onChange={(event) => { setTitleDraft(event.target.value); updateDocumentDraft({ title: event.target.value }); }} className="w-full border-b border-transparent bg-transparent text-lg font-bold outline-none focus:border-primary" />
                   <div className="mt-2 flex flex-wrap items-center gap-2 text-[10px] text-outline">
-                    <select value={kindDraft} onChange={(event) => setKindDraft(event.target.value as ResearchDocument['kind'])} className="rounded-lg bg-surface-container px-2 py-1.5 outline-none">
+                    <select value={kindDraft} onChange={(event) => { const value = event.target.value as ResearchDocument['kind']; setKindDraft(value); updateDocumentDraft({ kind: value }); }} className="rounded-lg bg-surface-container px-2 py-1.5 outline-none">
                       <option value="paper">논문</option><option value="patent">특허</option><option value="conference">학회</option><option value="product">제품자료</option><option value="technical">기술자료</option>
                     </select>
                     {detail.document.doi && <span>DOI {detail.document.doi}</span>}
@@ -812,11 +949,11 @@ export default function ResearchPage() {
                   <h3 className="text-xs font-bold">특허 메타데이터</h3>
                   <div className="mt-3 grid grid-cols-2 gap-2">
                     {[['공개번호', 'publicationNumber'], ['출원번호', 'applicationNumber'], ['등록번호', 'registrationNumber'], ['최초 우선일', 'priorityDate'], ['관할', 'jurisdiction'], ['법적 상태(참고)', 'legalStatus']] .map(([label, key]) => (
-                      <label key={key} className="text-[10px] text-on-surface-variant">{label}<input value={String(patentDraft[key as keyof PatentMetadata] || '')} onChange={(event) => setPatentDraft({ ...patentDraft, [key]: event.target.value })} className="mt-1 w-full rounded-lg bg-surface-container px-2 py-2 text-xs text-on-surface outline-none" /></label>
+                      <label key={key} className="text-[10px] text-on-surface-variant">{label}<input value={String(patentDraft[key as keyof PatentMetadata] || '')} onChange={(event) => { const next = { ...patentDraft, [key]: event.target.value }; setPatentDraft(next); updateDocumentDraft({ patent: next }); }} className="mt-1 w-full rounded-lg bg-surface-container px-2 py-2 text-xs text-on-surface outline-none" /></label>
                     ))}
                   </div>
-                  <label className="mt-3 block text-[10px] text-on-surface-variant">출원인 (쉼표 구분)<input value={patentDraft.assignees.join(', ')} onChange={(event) => setPatentDraft({ ...patentDraft, assignees: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) })} className="mt-1 w-full rounded-lg bg-surface-container px-2 py-2 text-xs outline-none" /></label>
-                  <label className="mt-3 block text-[10px] text-on-surface-variant">청구항<textarea value={patentDraft.claimsText} onChange={(event) => setPatentDraft({ ...patentDraft, claimsText: event.target.value })} className="mt-1 h-32 w-full resize-y rounded-lg bg-surface-container px-3 py-2 text-xs leading-5 outline-none" /></label>
+                  <label className="mt-3 block text-[10px] text-on-surface-variant">출원인 (쉼표 구분)<input value={patentDraft.assignees.join(', ')} onChange={(event) => { const next = { ...patentDraft, assignees: event.target.value.split(',').map((item) => item.trim()).filter(Boolean) }; setPatentDraft(next); updateDocumentDraft({ patent: next }); }} className="mt-1 w-full rounded-lg bg-surface-container px-2 py-2 text-xs outline-none" /></label>
+                  <label className="mt-3 block text-[10px] text-on-surface-variant">청구항<textarea value={patentDraft.claimsText} onChange={(event) => { const next = { ...patentDraft, claimsText: event.target.value }; setPatentDraft(next); updateDocumentDraft({ patent: next }); }} className="mt-1 h-32 w-full resize-y rounded-lg bg-surface-container px-3 py-2 text-xs leading-5 outline-none" /></label>
                   <p className="mt-2 text-[10px] text-outline">법적 상태는 참고 정보이며 자유실시 가능 여부를 판단하지 않습니다.</p>
                 </div>
               )}
@@ -857,7 +994,7 @@ export default function ResearchPage() {
                 <article key={item.id} className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-amber-950">
                   <div className="break-all text-xs font-semibold">{item.path}</div>
                   <p className="mt-1 text-[11px] leading-5">{item.details || item.kind}</p>
-                  {item.documentId && <button onClick={() => { setConflictDialog(false); void loadDetail(item.documentId!); }} className="mr-3 mt-2 text-[11px] font-semibold underline">문서 확인</button>}
+                  {item.documentId && <button onClick={() => { setConflictDialog(false); selectDocument(item.documentId!); }} className="mr-3 mt-2 text-[11px] font-semibold underline">문서 확인</button>}
                   <button onClick={() => void resolveConflict(item)} className="mt-2 text-[11px] font-semibold underline">{item.kind === 'content-changed' ? '현재 파일을 새 버전으로 연결' : '확인 완료로 표시'}</button>
                 </article>
               ))}

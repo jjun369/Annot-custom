@@ -17,6 +17,7 @@ Implemented:
 - On-demand Codex structured analysis and evidence links back to PDF pages.
 - Evidence rejection when page/quote does not exist in indexed source text.
 - Visible recovery confirmation for ambiguous hashes.
+- Project switching, document detail refresh/polling, and mutation completions reject stale asynchronous responses by selection epoch and stable identity; switching projects clears the previous document/detail/index/search state, dirty document drafts survive refreshes and in-flight saves, and delayed deletion cannot steal the current project selection.
 - Single-flight background PDF indexing with real page progress, cancellation during extraction, and an explicit non-cancellable save boundary.
 - JSONL Python/PyMuPDF extraction streamed into disposable OS-temp NDJSON staging; only a verified unchanged source is atomically committed to SQLite/FTS.
 

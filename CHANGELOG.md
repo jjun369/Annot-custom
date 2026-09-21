@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Guarded Research project bootstrap/membership, document-detail loads, polling, and mutation completions against slower responses from an earlier selection, including A→B→A revisits. Project switches clear stale document/detail/index/search state, dirty title/kind/patent drafts survive background refreshes and in-flight saves, and delayed deletion refreshes the current project without stealing selection. No persistence, schema, backup, or API contract changed.
 - Added a calm collapsible Research source-finding guide for Crossref/OpenAlex discovery and lawful public copies via Unpaywall, author repositories, or institutional libraries. Unofficial paywall-bypass/mirror routes such as Sci-Hub are unsupported, unlinked, and not recommended.
 - Added an explicit `공개 PDF 가져오기` confirmation that asks the user to verify the provider and terms before the existing `pdfUrl`-gated download path runs; renamed `원문 페이지` to `제공처에서 열기`.
 - Cleared stale results when changing Research provider tabs, kept local materials visible until a query is submitted, improved empty-result guidance, and exposed the selected provider state with `aria-pressed`.

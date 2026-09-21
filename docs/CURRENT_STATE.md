@@ -1,5 +1,9 @@
 # Current state
 
+## 0.9.3 Research async-state maintenance (2026-09-21)
+
+Research project switching and document detail loading now reject stale asynchronous responses by selection epoch and selected project/document identity. Project changes clear the previous document/detail/index state and invalidate old polls; mutation completions refresh the current list without stealing a newer selection. Detail polling preserves dirty per-document title/kind/patent drafts, including edits made while a save is in flight. This is a UI-state safety fix only; SQLite schema 1, portable backup v2, and Research API contracts are unchanged. Deferred-response regression coverage exercises dirty polling, late save completion after a switch, project switching during polling, and delayed project deletion. Primary AI turn cancellation remains deferred because a correct fix still requires one abort contract through the browser stream, server route, Codex CLI/account fallback, and Claude runtime while preserving the saved question.
+
 ## 0.9.3 Research discovery guidance (2026-09-20)
 
 Research search now includes a calm, collapsible source-finding guide below the provider tabs. It explains Crossref/OpenAlex title-or-DOI discovery and lawful public-copy routes through Unpaywall, author repositories, and institutional libraries. It explicitly does not support or recommend unofficial paywall-bypass/mirror routes such as Sci-Hub. The guide is presentation-only; no persistence, SQLite schema, or API contract changed. Public PDF import remains gated by `pdfUrl`, existing download validation is unchanged, and the import action now shows a user confirmation that asks the reader to verify the provider and terms. Switching search providers clears stale results, local documents stay visible until a query is actually submitted, empty results explain a next action, and provider buttons expose their selected state with `aria-pressed`.

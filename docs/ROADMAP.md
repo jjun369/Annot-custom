@@ -1,5 +1,10 @@
 # Roadmap
 
+## Completed Research async-state maintenance (2026-09-21)
+
+- Guarded project bootstrap/membership and document-detail responses by selection epoch plus the latest selected project/document, so slower responses from an earlier selection—including A→B→A—cannot replace the current Research state.
+- Project switching now clears and invalidates old document/detail/index polls and search results. Dirty per-document drafts survive background detail refreshes and in-flight saves; late save/rename/create/import/index/delete completions refresh only the current selection and cannot steal it. No persistence, schema, backup, or API contract changed.
+
 ## Completed Research discovery maintenance (2026-09-20)
 
 - Added a collapsible, lawful source-finding guide below Research provider tabs: Crossref/OpenAlex for title or DOI discovery, then Unpaywall, author repositories, or institutional libraries for public copies. Unofficial paywall-bypass/mirror routes such as Sci-Hub are explicitly unsupported and never linked or recommended.
