@@ -1,5 +1,9 @@
 # Roadmap
 
+## Completed maintenance (2026-09-27)
+
+- Hardened packaged Windows updater and shell logging against a closed parent stdout/stderr pipe without changing update behavior; unrelated errors remain visible.
+
 ## Completed Research async-state maintenance (2026-09-21)
 
 - Guarded project bootstrap/membership and document-detail responses by selection epoch plus the latest selected project/document, so slower responses from an earlier selection—including A→B→A—cannot replace the current Research state.

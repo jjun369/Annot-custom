@@ -1,5 +1,9 @@
 # Current state
 
+## 0.9.3 packaged updater pipe safety (2026-09-27)
+
+The packaged Windows shell now gives `electron-updater` a narrow EPIPE-safe logger and guards owned server/main-process logging when a launcher closes stdout/stderr. Only broken-pipe errors are ignored; unrelated logger or stream errors still surface. Update checking, download prompts, and installation behavior are unchanged.
+
 ## 0.9.3 Research async-state maintenance (2026-09-21)
 
 Research project switching and document detail loading now reject stale asynchronous responses by selection epoch and selected project/document identity. Project changes clear the previous document/detail/index state and invalidate old polls; mutation completions refresh the current list without stealing a newer selection. Detail polling preserves dirty per-document title/kind/patent drafts, including edits made while a save is in flight. This is a UI-state safety fix only; SQLite schema 1, portable backup v2, and Research API contracts are unchanged. Deferred-response regression coverage exercises dirty polling, late save completion after a switch, project switching during polling, and delayed project deletion. Primary AI turn cancellation remains deferred because a correct fix still requires one abort contract through the browser stream, server route, Codex CLI/account fallback, and Claude runtime while preserving the saved question.

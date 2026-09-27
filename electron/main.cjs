@@ -7,6 +7,7 @@ const path = require('node:path');
 
 const { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, session, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
+const { createSafeLogger, installBrokenPipeHandlers } = require('./safe-console.cjs');
 
 const isDevelopment = process.argv.includes('--dev') || !app.isPackaged;
 const isSmokeTest = process.argv.includes('--smoke-test');
@@ -19,6 +20,8 @@ let serverProcess = null;
 let baseUrl = null;
 let isQuitting = false;
 let desktopToken = null;
+const safeConsole = createSafeLogger(console);
+installBrokenPipeHandlers();
 
 app.setName('PageDock');
 app.setAppUserModelId('app.pagedock.desktop');
@@ -149,8 +152,8 @@ async function startProductionServer() {
     },
   });
 
-  serverProcess.stdout?.on('data', (chunk) => console.log(`[PageDock server] ${chunk}`));
-  serverProcess.stderr?.on('data', (chunk) => console.error(`[PageDock server] ${chunk}`));
+  serverProcess.stdout?.on('data', (chunk) => safeConsole.info(`[PageDock server] ${chunk}`));
+  serverProcess.stderr?.on('data', (chunk) => safeConsole.error(`[PageDock server] ${chunk}`));
   serverProcess.once('exit', (code) => {
     serverProcess = null;
     if (!isQuitting && code !== 0) {
@@ -228,7 +231,7 @@ function createWindow(url) {
   });
   mainWindow.on('closed', () => { mainWindow = null; });
   void mainWindow.loadURL(`${url}/`, desktopToken ? { extraHeaders: `x-pagedock-desktop-token: ${desktopToken}\r\n` } : undefined)
-    .catch((error) => console.error(`[PageDock] main load failed: ${error instanceof Error ? error.message : String(error)}`));
+    .catch((error) => safeConsole.error(`[PageDock] main load failed: ${error instanceof Error ? error.message : String(error)}`));
 }
 
 async function openDeepSeekWebWindow() {
@@ -503,6 +506,9 @@ function configureAutoUpdate() {
   // macOS friend-test artifacts are unsigned and private; enable Mac updates only
   // after Developer ID signing, notarization, and latest-mac metadata are verified.
   if (process.platform === 'darwin') return;
+  // electron-updater defaults to the global console. A packaged app may be
+  // launched from a parent whose stdout/stderr pipe has already closed.
+  autoUpdater.logger = createSafeLogger(console);
   autoUpdater.autoDownload = false;
   autoUpdater.autoInstallOnAppQuit = true;
   autoUpdater.on('update-available', async (info) => {
@@ -570,7 +576,7 @@ void app.whenReady().then(async () => {
     configureAutoUpdate();
   } catch (error) {
     if (isSmokeTest) {
-      console.error(error);
+      safeConsole.error(error);
       app.exit(1);
       return;
     }
