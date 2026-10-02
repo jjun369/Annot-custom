@@ -84,7 +84,8 @@ Critical invariants:
 - `src/app/api/knowledge/**`: capture, OAuth-gated processing, review editing/resolution, conflicts, restore.
 - `src/app/api/knowledge/auth`: fast, no-cache CLI OAuth status for the knowledge UI; processing still rechecks authorization independently.
 - The knowledge page calls the auth endpoint once on entry and again only after explicit refresh or reconnect. Ordinary data refreshes never spawn a CLI status process.
-- `src/app/knowledge/page.tsx`: orchestration and top-level UX.
+- `src/app/knowledge/page.tsx`: orchestration and top-level UX, including combined topic/source-note retrieval and stable-ID Reader return.
+- `src/lib/knowledge-retrieval.ts`: local topic/memo search, provenance labels, bounded previews, and current-library PDF target resolution. Reader links open the saved page only; selection highlights are not restored.
 - `src/components/knowledge/KnowledgeReviewCard.tsx`: proposal diff/edit/accept UI.
 - `src/components/knowledge/KnowledgeWikiPanel.tsx`: direct editing, history, revision trash, and source UX.
 - `src/components/knowledge/KnowledgeConflictCard.tsx`: conflict evidence and resolution notes.
@@ -101,7 +102,7 @@ Critical invariants:
 4. The wiki has local browsing/search, direct editing, revision restore, recoverable history cleanup, and current-projection Markdown export, but no topic merge/split yet.
 5. Conflict resolution captures an explanation and can open the related wiki for a direct edit, but it does not automatically generate or apply a resolved topic proposal.
 6. Line diff collapses long unchanged runs and preserves common prefixes/suffixes in the large-document fallback. It is still line-based rather than word-based.
-7. Reader/AI promotion preserves a source anchor but Knowledge does not yet navigate that anchor directly or mix multiple source scopes into an AI conversation.
+7. Reader/AI promotion preserves a source anchor and Knowledge can return to its saved PDF page through the current stable document identity. This page-only link does not restore the original selection highlight. Knowledge still does not mix multiple private source scopes into an AI conversation.
 8. The memo-folder path and fingerprint ledger are device-local; they are not restored as portable library data.
 9. Image capture intentionally has no OCR, vision analysis, thumbnail cache, clipboard watcher, automatic PDF crop, or silent orphan cleanup. Use one descriptive memo per useful image and return to the PDF visual-region tool when the primary source is an existing PDF page.
 

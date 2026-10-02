@@ -21,6 +21,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 import { KnowledgeConflictCard } from '@/components/knowledge/KnowledgeConflictCard';
 import { KnowledgeFolderCard } from '@/components/knowledge/KnowledgeFolderCard';
@@ -40,6 +41,7 @@ import type { KnowledgeImportSettings, KnowledgeImportSettingsSummary } from '@/
 import type {
   CaptureKnowledgeResult,
   KnowledgeConflict,
+  KnowledgeNote,
   KnowledgeProvenance,
   KnowledgeProvenanceKind,
   KnowledgeRevisionTrashItem,
@@ -47,6 +49,8 @@ import type {
   KnowledgeStoreInfo,
   KnowledgeTopic,
 } from '@/lib/knowledge-store';
+import { buildKnowledgeReaderUrl, findKnowledgeReaderTarget, knowledgeProvenanceLabel, searchKnowledgeRecords, type KnowledgeRetrievalFilter } from '@/lib/knowledge-retrieval';
+import type { ChatSourceContext, TreeNode } from '@/types';
 
 type View = 'inbox' | 'review' | 'conflicts' | 'wiki';
 type KnowledgePagePayload = KnowledgeSnapshot & { storeInfo: KnowledgeStoreInfo };
@@ -94,6 +98,7 @@ function today(): string {
 }
 
 export default function KnowledgePage() {
+  const router = useRouter();
   const [data, setData] = useState<KnowledgeSnapshot>(EMPTY);
   const [view, setView] = useState<View>('inbox');
   const [noteText, setNoteText] = useState('');
@@ -106,7 +111,9 @@ export default function KnowledgePage() {
   const [storeInfo, setStoreInfo] = useState<KnowledgeStoreInfo>(EMPTY_STORE_INFO);
   const [revisionTrash, setRevisionTrash] = useState<KnowledgeRevisionTrashItem[]>([]);
   const [selectedTopicId, setSelectedTopicId] = useState<string | null>(null);
-  const [topicSearch, setTopicSearch] = useState('');
+  const [sourceSearch, setSourceSearch] = useState('');
+  const [sourceFilter, setSourceFilter] = useState<KnowledgeRetrievalFilter>('all');
+  const [selectedSourceNoteId, setSelectedSourceNoteId] = useState<string | null>(null);
   const [captureBusy, setCaptureBusy] = useState(false);
   const [loginBusy, setLoginBusy] = useState(false);
   const [processingId, setProcessingId] = useState<string | null>(null);
@@ -204,14 +211,40 @@ export default function KnowledgePage() {
   const pendingReviews = useMemo(() => data.reviews.filter((review) => review.status === 'pending'), [data.reviews]);
   const openConflicts = useMemo(() => data.conflicts.filter((conflict) => conflict.status === 'open'), [data.conflicts]);
   const selectedTopic = data.topics.find((topic) => topic.id === selectedTopicId) ?? null;
-  const filteredTopics = useMemo(() => {
-    const query = topicSearch.trim().toLocaleLowerCase('ko');
-    if (!query) return data.topics;
-    return data.topics.filter((topic) => `${topic.title}\n${topic.summary}\n${topic.bodyMarkdown}`.toLocaleLowerCase('ko').includes(query));
-  }, [data.topics, topicSearch]);
   const visibleInboxNotes = inboxNotes.slice(0, inboxVisible);
   const visibleReviews = pendingReviews.slice(0, reviewVisible);
-  const visibleTopics = filteredTopics.slice(0, topicVisible);
+  const visibleTopics = data.topics.slice(0, topicVisible);
+  const retrievalResults = useMemo(
+    () => searchKnowledgeRecords(data, sourceSearch, sourceFilter),
+    [data, sourceFilter, sourceSearch],
+  );
+  const showRetrievalResults = Boolean(sourceSearch.trim()) || sourceFilter !== 'all';
+  const visibleRetrievalResults = retrievalResults.slice(0, topicVisible);
+
+  async function openSource(anchor: ChatSourceContext): Promise<boolean> {
+    if (!anchor.documentId || !anchor.page) return false;
+    const response = await fetch('/api/workspace/tree', { cache: 'no-store' });
+    const root = await responseJson<TreeNode>(response);
+    const target = findKnowledgeReaderTarget(root, anchor.documentId, anchor.page);
+    const url = buildKnowledgeReaderUrl(target);
+    if (!url) return false;
+    router.push(url);
+    return true;
+  }
+
+  async function openSourceNote(note: KnowledgeNote): Promise<void> {
+    const anchor = note.sourceAnchors?.find((item) => item.documentId && item.page);
+    if (!anchor) {
+      setMessage({ text: '이 메모에는 PDF 페이지 연결이 없습니다. 저장된 메모와 출처 정보는 그대로 확인할 수 있습니다.', error: true });
+      return;
+    }
+    try {
+      const opened = await openSource(anchor);
+      if (!opened) setMessage({ text: '연결된 PDF를 현재 라이브러리에서 찾지 못했습니다. 메모의 저장된 페이지 정보는 유지됩니다.', error: true });
+    } catch (error) {
+      setMessage({ text: error instanceof Error ? error.message : 'PDF 페이지를 열지 못했습니다.', error: true });
+    }
+  }
 
   async function captureInputs(notes: Array<{ text: string; sourceName: string; provenance?: KnowledgeProvenance }>): Promise<boolean> {
     setCaptureBusy(true);
@@ -713,7 +746,47 @@ export default function KnowledgePage() {
 
           {view === 'conflicts' && <section><h2 className="text-xl font-bold">미해결 충돌</h2><p className="mt-1 text-xs text-on-surface-variant">충돌을 등록해도 현재 위키 본문은 바뀌지 않습니다. 위키를 직접 수정한 뒤 해결 이유를 남길 수 있습니다.</p><div className="mt-5 space-y-4">{openConflicts.map((conflict) => <KnowledgeConflictCard key={conflict.id} conflict={conflict} topic={data.topics.find((item) => item.id === conflict.topicId)} note={data.notes.find((item) => item.id === conflict.noteId)} onOpenTopic={(topicId) => { setSelectedTopicId(topicId); setView('wiki'); }} onResolve={closeConflict} />)}{!openConflicts.length && <div className="rounded-2xl border border-dashed border-outline-variant/40 p-12 text-center text-xs text-on-surface-variant"><Check className="mx-auto mb-2 text-primary" size={24} />미해결 충돌이 없습니다.</div>}</div></section>}
 
-          {view === 'wiki' && <section><div className="mb-4 flex flex-wrap items-center justify-between gap-3"><div><h2 className="text-xl font-bold">정리된 노트</h2><p className="mt-1 text-xs text-on-surface-variant">내가 확인한 현재 메모만 일반 Markdown 폴더로 내보낼 수 있습니다.</p></div><button type="button" onClick={() => void exportKnowledge()} disabled={exportBusy} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary disabled:opacity-40">{exportBusy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}Markdown 내보내기</button></div><div className="grid min-h-[calc(100vh-7.5rem)] gap-5 lg:grid-cols-[280px_minmax(0,1fr)]"><aside className="rounded-2xl border border-outline-variant/25 bg-white p-3"><div className="relative"><Search size={13} className="absolute left-3 top-2.5 text-outline" /><input value={topicSearch} onChange={(event) => { setTopicSearch(event.target.value); setTopicVisible(50); }} placeholder="정리된 노트 검색" className="w-full rounded-lg bg-surface-container-low py-2 pl-8 pr-3 text-xs outline-none" /></div><div className="mt-2 space-y-1">{visibleTopics.map((topic) => <button key={topic.id} onClick={() => setSelectedTopicId(topic.id)} className={`w-full rounded-xl px-3 py-2.5 text-left ${selectedTopicId === topic.id ? 'bg-primary-container text-primary' : 'hover:bg-surface-container'}`}><span className="block truncate text-xs font-bold">{topic.title}</span><span className="mt-1 block line-clamp-2 text-[10px] leading-4 text-on-surface-variant">{topic.summary}</span></button>)}{filteredTopics.length > topicVisible && <button onClick={() => setTopicVisible((value) => value + 50)} className="w-full rounded-lg bg-surface-container py-2 text-[10px] font-bold text-on-surface-variant">문서 50개 더 보기</button>}</div></aside>{selectedTopic ? <KnowledgeWikiPanel key={`${selectedTopic.id}-${selectedTopic.revision}`} topic={selectedTopic} notes={data.notes} openConflictCount={openConflicts.filter((item) => item.topicId === selectedTopic.id).length} trashItems={revisionTrash.filter((item) => item.topicId === selectedTopic.id)} dateLabel={dateLabel} onOpenConflicts={() => setView('conflicts')} onEdit={(update) => editTopic(selectedTopic, update)} onRestore={(revision) => restoreRevision(selectedTopic, revision)} onTrash={(revision) => trashRevision(selectedTopic, revision)} onRestoreTrash={restoreTrashRevision} onDeleteTrash={deleteTrashRevision} onRequestReview={() => requestTopicReview(selectedTopic)} onCompleteReview={() => completeTopicReview(selectedTopic)} /> : <article className="flex min-h-80 items-center justify-center rounded-2xl border border-outline-variant/25 bg-white p-6 text-xs text-on-surface-variant"><BookOpenText className="mr-2" size={18} />정리된 노트를 선택하세요.</article>}</div></section>}
+          {view === 'wiki' && <section>
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <div><h2 className="text-xl font-bold">정리된 노트와 원본 찾기</h2><p className="mt-1 text-xs text-on-surface-variant">확인한 주제와 아직 정리 전인 원본 메모를 함께 검색합니다.</p></div>
+              <button type="button" onClick={() => void exportKnowledge()} disabled={exportBusy} className="flex items-center gap-1.5 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary disabled:opacity-40">{exportBusy ? <Loader2 size={13} className="animate-spin" /> : <Download size={13} />}Markdown 내보내기</button>
+            </div>
+            <div className="mb-4 flex flex-wrap gap-2 rounded-2xl border border-outline-variant/25 bg-white p-3">
+              <label className="relative min-w-56 flex-1"><Search size={13} className="absolute left-3 top-2.5 text-outline" /><input value={sourceSearch} onChange={(event) => { setSourceSearch(event.target.value); setTopicVisible(50); }} placeholder="주제, 원본 메모, 인용, 출처에서 찾기" className="w-full rounded-lg bg-surface-container-low py-2 pl-8 pr-3 text-xs outline-none" /></label>
+              <select value={sourceFilter} onChange={(event) => { setSourceFilter(event.target.value as KnowledgeRetrievalFilter); setTopicVisible(50); }} aria-label="검색 범위" className="rounded-lg border border-outline-variant/30 bg-white px-3 py-2 text-xs">
+                <option value="all">주제와 원본</option><option value="topics">정리된 주제</option><option value="sources">원본 메모</option>
+                <option value="literature_claim">문헌 주장</option><option value="work_observation">업무 관찰</option><option value="personal_hypothesis">개인 가설</option><option value="ai_inference">AI 추론</option>
+              </select>
+            </div>
+            <div className="grid min-h-[calc(100vh-11rem)] gap-5 lg:grid-cols-[320px_minmax(0,1fr)]">
+              <aside className="rounded-2xl border border-outline-variant/25 bg-white p-3">
+                <div className="mb-2 px-2 text-[10px] font-semibold text-on-surface-variant">{showRetrievalResults ? `검색 결과 ${retrievalResults.length}개` : '최근 정리된 주제'}</div>
+                <div className="max-h-[calc(100vh-16rem)] space-y-1 overflow-y-auto">
+                  {showRetrievalResults ? visibleRetrievalResults.map((result) => <button key={`${result.kind}:${result.id}`} onClick={() => {
+                    if (result.kind === 'topic') { setSelectedTopicId(result.topic.id); setSelectedSourceNoteId(null); }
+                    else { setSelectedSourceNoteId(result.note.id); setSelectedTopicId(null); }
+                  }} className={`w-full rounded-xl px-3 py-2.5 text-left hover:bg-surface-container ${(result.kind === 'topic' && result.topic.id === selectedTopicId) || (result.kind === 'source' && result.note.id === selectedSourceNoteId) ? 'bg-primary-container text-primary' : ''}`}>
+                    <span className="block truncate text-xs font-bold">{result.kind === 'source' ? '원본 메모 · ' : ''}{result.title}</span><span className="mt-1 block truncate text-[10px] text-outline">{result.detail}</span><span className="mt-1 block line-clamp-3 whitespace-pre-wrap text-[10px] leading-4 text-on-surface-variant">{result.preview}</span>
+                  </button>) : visibleTopics.map((topic) => <button key={topic.id} onClick={() => { setSelectedTopicId(topic.id); setSelectedSourceNoteId(null); }} className={`w-full rounded-xl px-3 py-2.5 text-left ${selectedTopicId === topic.id ? 'bg-primary-container text-primary' : 'hover:bg-surface-container'}`}><span className="block truncate text-xs font-bold">{topic.title}</span><span className="mt-1 block line-clamp-2 text-[10px] leading-4 text-on-surface-variant">{topic.summary}</span></button>)}
+                  {showRetrievalResults && !retrievalResults.length && <p className="p-4 text-xs text-on-surface-variant">일치하는 주제나 원본 메모가 없습니다.</p>}
+                  {showRetrievalResults && retrievalResults.length > topicVisible && <button onClick={() => setTopicVisible((value) => value + 50)} className="w-full rounded-lg bg-surface-container py-2 text-[10px] font-bold text-on-surface-variant">결과 50개 더 보기</button>}
+                  {!showRetrievalResults && data.topics.length > topicVisible && <button onClick={() => setTopicVisible((value) => value + 50)} className="w-full rounded-lg bg-surface-container py-2 text-[10px] font-bold text-on-surface-variant">주제 50개 더 보기</button>}
+                </div>
+              </aside>
+              {selectedSourceNoteId ? (() => {
+                const note = data.notes.find((item) => item.id === selectedSourceNoteId);
+                if (!note) return <article className="rounded-2xl border border-outline-variant/25 bg-white p-6 text-xs text-on-surface-variant">이 원본 메모를 찾을 수 없습니다.</article>;
+                const linkedTopics = data.topics.filter((topic) => topic.sourceNoteIds.includes(note.id));
+                const anchor = note.sourceAnchors?.find((item) => item.documentId && item.page);
+                return <article className="rounded-2xl border border-outline-variant/25 bg-white p-6 lg:p-8">
+                  <div className="text-[10px] font-semibold text-outline">원본 메모 · {note.sourceName} · {dateLabel(note.createdAt)} · {knowledgeProvenanceLabel(note.provenance?.kind)}</div><h3 className="mt-2 text-xl font-bold">{note.title || note.sourceName}</h3>{note.summary && <p className="mt-2 text-sm leading-6 text-on-surface-variant">{note.summary}</p>}
+                  {anchor ? <div className="mt-4 rounded-xl bg-surface-container-low p-3"><p className="text-[10px] font-semibold text-on-surface-variant">저장된 원문 선택 · p.{anchor.page} — 아래 동작은 PDF 페이지로 이동합니다. 선택 강조 자체는 복원하지 않습니다.</p>{anchor.text && <blockquote className="mt-2 border-l-2 border-primary/40 pl-3 text-xs leading-5">{anchor.text}</blockquote>}<button type="button" onClick={() => void openSourceNote(note)} className="mt-3 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary">원문 PDF p.{anchor.page} 열기</button></div> : <p className="mt-4 rounded-xl bg-surface-container-low p-3 text-xs text-on-surface-variant">이 메모에는 연결된 PDF 페이지가 없습니다. 메모와 출처 정보는 확인할 수 있지만 원문 PDF로 바로 이동할 수 없습니다.</p>}
+                  <div className="mt-5"><h4 className="text-xs font-bold">이 메모를 근거로 한 정리</h4>{linkedTopics.length ? <div className="mt-2 flex flex-wrap gap-2">{linkedTopics.map((topic) => <button key={topic.id} onClick={() => { setSelectedTopicId(topic.id); setSelectedSourceNoteId(null); }} className="rounded-lg bg-primary-container px-3 py-2 text-[10px] font-bold text-primary">{topic.title} · Rev.{topic.revision}</button>)}</div> : <p className="mt-2 text-xs text-on-surface-variant">아직 이 원본을 포함한 정리된 주제가 없습니다.</p>}</div>
+                  <details className="mt-5 rounded-xl bg-surface-container-low p-4"><summary className="cursor-pointer text-xs font-bold">저장된 원본 메모 전체 보기</summary><p className="mt-3 whitespace-pre-wrap text-xs leading-6">{note.rawText}</p></details>
+                </article>;
+              })() : selectedTopic ? <KnowledgeWikiPanel key={`${selectedTopic.id}-${selectedTopic.revision}`} topic={selectedTopic} notes={data.notes} openConflictCount={openConflicts.filter((item) => item.topicId === selectedTopic.id).length} trashItems={revisionTrash.filter((item) => item.topicId === selectedTopic.id)} dateLabel={dateLabel} onOpenConflicts={() => setView('conflicts')} onEdit={(update) => editTopic(selectedTopic, update)} onRestore={(revision) => restoreRevision(selectedTopic, revision)} onTrash={(revision) => trashRevision(selectedTopic, revision)} onRestoreTrash={restoreTrashRevision} onDeleteTrash={deleteTrashRevision} onRequestReview={() => requestTopicReview(selectedTopic)} onCompleteReview={() => completeTopicReview(selectedTopic)} onOpenSource={openSource} /> : <article className="flex min-h-80 items-center justify-center rounded-2xl border border-outline-variant/25 bg-white p-6 text-xs text-on-surface-variant"><BookOpenText className="mr-2" size={18} />정리된 노트나 원본 메모를 선택하세요.</article>}
+            </div>
+          </section>}
         </div></section>
       </div>
       {splitPreview && <KnowledgeSplitDialog sourceName={splitPreview.sourceName} charCount={splitPreview.charCount} segments={splitPreview.segments} warnings={splitPreview.warnings} allowSingle={splitPreview.charCount <= 100_000} busy={splitBusy} onCancel={() => { if (!splitBusy) { setSplitPreview(null); setManualQueue([]); } }} onImport={(mode) => void importSplitPreview(mode)} />}

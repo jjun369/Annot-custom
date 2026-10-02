@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Expanded local Knowledge discovery to search curated topics and captured source memos together, with previews and source-type filters. Topic source notes now expose stable-document-id Reader links that open the current PDF at the saved page; selection text is shown as a locator only because this Reader route does not restore the old selection highlight. No Knowledge/SQLite/backup schema changed.
 - Fixed a packaged Windows startup crash where `electron-updater` logging could raise `EPIPE` after the launcher closed its stdout/stderr pipe. Only broken-pipe logging failures are suppressed; update checking and download/install behavior are unchanged.
 - Guarded Research project bootstrap/membership, document-detail loads, polling, and mutation completions against slower responses from an earlier selection, including A→B→A revisits. Project switches clear stale document/detail/index/search state, dirty title/kind/patent drafts survive background refreshes and in-flight saves, and delayed deletion refreshes the current project without stealing selection. No persistence, schema, backup, or API contract changed.
 - Added a calm collapsible Research source-finding guide for Crossref/OpenAlex discovery and lawful public copies via Unpaywall, author repositories, or institutional libraries. Unofficial paywall-bypass/mirror routes such as Sci-Hub are unsupported, unlinked, and not recommended.

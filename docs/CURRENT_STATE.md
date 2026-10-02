@@ -1,5 +1,9 @@
 # Current state
 
+## Knowledge retrieval and source return (2026-10-02)
+
+The Knowledge wiki finder now searches curated topics and original captured memos together, including memo text, provenance, and saved source excerpts, with bounded previews and local provenance filters. Selecting a source memo shows its full local text and any topic built from it. Topic source-note cards expose the current Reader PDF link by stable `documentId`; Reader navigation is explicitly page-only and does not recreate the original selection highlight. Missing library documents or page anchors are reported without changing the stored Knowledge record. Knowledge JSON format 2, SQLite schema 1, sidecars, and portable backup manifest v2 are unchanged. Focused acceptance covers an unprocessed memo phrase, topic-body search, provenance, a renamed PDF path with URL-encoded characters, and a missing document; full packaging and broad QA were not run for this follow-up.
+
 ## 0.9.3 packaged updater pipe safety (2026-09-27)
 
 The packaged Windows shell now gives `electron-updater` a narrow EPIPE-safe logger and guards owned server/main-process logging when a launcher closes stdout/stderr. Only broken-pipe errors are ignored; unrelated logger or stream errors still surface. Update checking, download prompts, and installation behavior are unchanged.

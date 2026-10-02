@@ -1,5 +1,10 @@
 # Roadmap
 
+## Completed Knowledge retrieval follow-up (2026-10-02)
+
+- Search the current Knowledge wiki and immutable captured source notes together, with local provenance filters and short match previews. Selecting a source displays its saved memo and links back to any topic that uses it.
+- Return from a topic's source-note list to the current PDF path resolved through stable `documentId`, opening the saved page. Selection text remains a locator preview; the current Reader URL does not restore its prior selection highlight. No storage migration or new Evidence Brief format was added.
+
 ## Completed maintenance (2026-09-27)
 
 - Hardened packaged Windows updater and shell logging against a closed parent stdout/stderr pipe without changing update behavior; unrelated errors remain visible.

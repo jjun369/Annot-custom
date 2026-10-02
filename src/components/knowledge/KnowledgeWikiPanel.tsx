@@ -16,6 +16,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
+import type { ChatSourceContext } from '@/types';
 import type {
   KnowledgeNote,
   KnowledgeProvenanceKind,
@@ -37,6 +38,7 @@ interface KnowledgeWikiPanelProps {
   onDeleteTrash: (trashId: string) => Promise<void>;
   onRequestReview: () => Promise<void>;
   onCompleteReview: () => Promise<void>;
+  onOpenSource: (anchor: ChatSourceContext) => Promise<boolean>;
 }
 
 const PROVENANCE_LABELS: Record<KnowledgeProvenanceKind, string> = {
@@ -50,8 +52,7 @@ function provenanceLabel(kind: KnowledgeProvenanceKind | undefined): string {
   return kind ? PROVENANCE_LABELS[kind] : '유형 미지정 · 기존 지식';
 }
 
-function anchorLabel(note: KnowledgeNote): string | null {
-  const anchor = note.sourceAnchors?.[0];
+function anchorLabel(anchor: NonNullable<KnowledgeNote['sourceAnchors']>[number]): string | null {
   if (!anchor?.page) return null;
   return `p.${anchor.page} · ${anchor.scope === 'selection' ? '선택 영역' : anchor.scope === 'page' ? '현재 페이지' : '현재 PDF'}`;
 }
@@ -70,6 +71,7 @@ export function KnowledgeWikiPanel({
   onDeleteTrash,
   onRequestReview,
   onCompleteReview,
+  onOpenSource,
 }: KnowledgeWikiPanelProps) {
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState(topic.title);
@@ -78,6 +80,7 @@ export function KnowledgeWikiPanel({
   const [changeNote, setChangeNote] = useState('');
   const [busy, setBusy] = useState(false);
   const [reviewBusy, setReviewBusy] = useState(false);
+  const [sourceNotice, setSourceNotice] = useState('');
   const reviewRequested = Boolean(topic.trust?.reviewRequestedAt);
 
   async function save(): Promise<void> {
@@ -106,6 +109,16 @@ export function KnowledgeWikiPanel({
       await onCompleteReview();
     } finally {
       setReviewBusy(false);
+    }
+  }
+
+  async function openSource(anchor: ChatSourceContext): Promise<void> {
+    setSourceNotice('');
+    try {
+      const opened = await onOpenSource(anchor);
+      if (!opened) setSourceNotice('현재 라이브러리에서 연결된 PDF를 찾지 못했습니다. 저장된 메모와 페이지 표시는 그대로 남아 있습니다.');
+    } catch {
+      setSourceNotice('PDF 위치를 확인하지 못했습니다. 라이브러리 연결을 확인한 뒤 다시 시도해 주세요.');
     }
   }
 
@@ -141,7 +154,8 @@ export function KnowledgeWikiPanel({
           <button onClick={() => setEditing(true)} className="flex items-center gap-1.5 rounded-lg bg-primary-container px-3 py-2 text-[10px] font-bold text-primary"><Edit3 size={12} />직접 수정</button>
         </div>
         <p className="mt-2 text-sm leading-6 text-on-surface-variant">{topic.summary}</p>
-        {openConflictCount > 0 && <button onClick={onOpenConflicts} className="mt-3 flex items-center gap-1 rounded-lg bg-amber-50 px-3 py-2 text-[10px] font-bold text-amber-800"><AlertTriangle size={12} />미해결 충돌 {openConflictCount}개</button>}
+      {openConflictCount > 0 && <button onClick={onOpenConflicts} className="mt-3 flex items-center gap-1 rounded-lg bg-amber-50 px-3 py-2 text-[10px] font-bold text-amber-800"><AlertTriangle size={12} />미해결 충돌 {openConflictCount}개</button>}
+      {sourceNotice && <p role="status" className="mt-3 rounded-lg bg-amber-50 px-3 py-2 text-[10px] leading-5 text-amber-900">{sourceNotice}</p>}
       </header>
 
       <section className="mt-4 rounded-xl bg-surface-container-low p-3" aria-label="지식 출처와 내가 확인한 상태">
@@ -183,8 +197,7 @@ export function KnowledgeWikiPanel({
           {topic.sourceNoteIds.map((id) => {
             const note = notes.find((item) => item.id === id);
             if (!note) return null;
-            const anchor = anchorLabel(note);
-            return <div key={id} className="rounded-lg bg-white p-3"><div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-outline"><span>{note.sourceName} · {dateLabel(note.createdAt)}</span><span className="font-semibold text-on-surface-variant">{provenanceLabel(note.provenance?.kind)}</span>{note.provenance?.originDate && <span>원본 날짜 {note.provenance.originDate}</span>}{anchor && <span>{anchor}</span>}</div><p className="mt-1 whitespace-pre-wrap text-[11px] leading-5">{note.rawText}</p></div>;
+            return <div key={id} className="rounded-lg bg-white p-3"><div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-outline"><span>{note.sourceName} · {dateLabel(note.createdAt)}</span><span className="font-semibold text-on-surface-variant">{provenanceLabel(note.provenance?.kind)}</span>{note.provenance?.originDate && <span>원본 날짜 {note.provenance.originDate}</span>}</div>{note.sourceAnchors?.map((source, index) => <div key={`${source.id}-${index}`} className="mt-2 flex flex-wrap items-center gap-2 rounded-lg bg-surface-container-low px-2.5 py-2"><span className="text-[10px] font-semibold text-on-surface-variant">{anchorLabel(source) || '저장된 원문 위치'}</span>{source.documentId && source.page ? <button type="button" onClick={() => void openSource(source)} className="rounded-md bg-primary-container px-2 py-1 text-[10px] font-bold text-primary">원문 PDF p.{source.page} 열기 · 페이지로 이동</button> : <span className="text-[10px] text-outline">PDF 페이지 연결 정보 없음</span>}{source.scope === 'selection' && <span className="text-[10px] text-outline">선택 강조는 복원되지 않음</span>}</div>)}<p className="mt-1 whitespace-pre-wrap text-[11px] leading-5">{note.rawText}</p></div>;
           })}
         </div>
       </details>
