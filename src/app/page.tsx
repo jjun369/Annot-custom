@@ -16,6 +16,7 @@ import { FolderView } from '@/components/workspace/FolderView';
 import { ChatPanel } from '@/components/workspace/ChatPanel';
 import { Topbar } from '@/components/layout/Topbar';
 import { findNode, getParentFolderPath, hasPdfDescendant } from '@/lib/tree-utils';
+import { parseKnowledgeReaderNavigation } from '@/lib/knowledge-retrieval';
 import { PageDockMark } from '@/components/common/PageDockMark';
 import { OnboardingDialog } from '@/components/common/OnboardingDialog';
 import { StudyCardDialog } from '@/components/workspace/StudyCardDialog';
@@ -437,8 +438,16 @@ export default function AppPage() {
             throw new Error(typeof data?.error === 'string' ? data.error : '라이브러리를 불러오지 못했습니다.');
           }
           const nextTree = data as TreeNode;
-          const requestedPdfPath = new URLSearchParams(window.location.search).get('pdf');
-          const requestedPdf = requestedPdfPath ? findNode(nextTree, requestedPdfPath) : null;
+          const search = window.location.search;
+          const params = new URLSearchParams(search);
+          const requestedPdfPath = params.get('pdf');
+          const requestedDocumentId = params.get('doc');
+          const sourceNavigation = parseKnowledgeReaderNavigation(search);
+          const requestedPdf = requestedDocumentId !== null
+            ? sourceNavigation?.documentId === requestedDocumentId
+              ? findPdfByDocumentId(nextTree, requestedDocumentId)
+              : null
+            : requestedPdfPath ? findNode(nextTree, requestedPdfPath) : null;
           const rememberedPdfPath = requestedPdfPath ? null : readLastReaderPath();
           const rememberedPdf = rememberedPdfPath ? findNode(nextTree, rememberedPdfPath) : null;
           const readerTarget = requestedPdf?.type === 'pdf'
@@ -449,7 +458,21 @@ export default function AppPage() {
           if (rememberedPdfPath && !rememberedPdf) writeLastReaderPath(null);
           setState((current) => {
             if (readerTarget) {
-              return openPdfInContext({ ...current, treeRoot: nextTree, treeLoading: false }, readerTarget);
+              const opened = openPdfInContext({ ...current, treeRoot: nextTree, treeLoading: false }, readerTarget);
+              if (sourceNavigation && readerTarget.documentId === sourceNavigation.documentId) {
+                return {
+                  ...opened,
+                  activePdfPage: sourceNavigation.page,
+                  pendingPdfSourceNavigation: {
+                    id: crypto.randomUUID(),
+                    pdfPath: readerTarget.path,
+                    documentId: readerTarget.documentId,
+                    page: sourceNavigation.page,
+                    ...(sourceNavigation.rects ? { rects: sourceNavigation.rects } : {}),
+                  },
+                };
+              }
+              return opened;
             }
 
             // Reopening the library should expose the calm "continue reading" landing

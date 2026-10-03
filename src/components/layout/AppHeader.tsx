@@ -2,12 +2,12 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { BookOpen, BookOpenText, CircleHelp, MoreHorizontal, Search, Settings, Telescope } from 'lucide-react';
+import { BookOpen, BookOpenText, CircleHelp, MoreHorizontal, PencilLine, Search, Settings, Telescope } from 'lucide-react';
 
 import { HelpDialog } from '@/components/common/HelpDialog';
 import { PageDockMark } from '@/components/common/PageDockMark';
 
-type AppSection = 'library' | 'research' | 'knowledge' | 'settings';
+type AppSection = 'library' | 'sources' | 'studio' | 'research' | 'knowledge' | 'settings';
 
 interface AppHeaderProps {
   active: AppSection;
@@ -17,11 +17,13 @@ interface AppHeaderProps {
 
 const PRIMARY_NAV_ITEMS = [
   { id: 'library' as const, href: '/', label: '라이브러리', icon: BookOpen },
+  { id: 'sources' as const, href: '/sources', label: '자료함', icon: BookOpenText },
+  { id: 'knowledge' as const, href: '/knowledge', label: '지식 위키', icon: BookOpenText },
+  { id: 'studio' as const, href: '/studio', label: '글쓰기', icon: PencilLine },
 ];
 
 const SECONDARY_NAV_ITEMS = [
   { id: 'research' as const, href: '/research', label: '리서치', icon: Telescope },
-  { id: 'knowledge' as const, href: '/knowledge', label: '지식', icon: BookOpenText },
 ];
 
 export function AppHeader({ active, actions, onSearch }: AppHeaderProps) {
@@ -57,7 +59,7 @@ export function AppHeader({ active, actions, onSearch }: AppHeaderProps) {
     };
   }, []);
 
-  const hasSecondaryActive = active === 'research' || active === 'knowledge';
+  const hasSecondaryActive = active === 'research';
 
   return (
     <>
@@ -73,7 +75,7 @@ export function AppHeader({ active, actions, onSearch }: AppHeaderProps) {
         <nav className="flex items-center gap-1 rounded-xl bg-surface-container-low p-1" aria-label="주 메뉴">
           {PRIMARY_NAV_ITEMS.map((item) => {
             const Icon = item.icon;
-            const selected = active === item.id;
+            const selected = item.id === 'sources' ? active === 'sources' || active === 'research' : active === item.id;
             return (
               <Link
                 key={item.id}

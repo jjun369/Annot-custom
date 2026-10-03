@@ -49,7 +49,7 @@ import type {
   KnowledgeStoreInfo,
   KnowledgeTopic,
 } from '@/lib/knowledge-store';
-import { buildKnowledgeReaderUrl, findKnowledgeReaderTarget, knowledgeProvenanceLabel, searchKnowledgeRecords, type KnowledgeRetrievalFilter } from '@/lib/knowledge-retrieval';
+import { buildKnowledgeSourceReaderUrl, knowledgeProvenanceLabel, searchKnowledgeRecords, type KnowledgeRetrievalFilter } from '@/lib/knowledge-retrieval';
 import type { ChatSourceContext, TreeNode } from '@/types';
 
 type View = 'inbox' | 'review' | 'conflicts' | 'wiki';
@@ -225,8 +225,7 @@ export default function KnowledgePage() {
     if (!anchor.documentId || !anchor.page) return false;
     const response = await fetch('/api/workspace/tree', { cache: 'no-store' });
     const root = await responseJson<TreeNode>(response);
-    const target = findKnowledgeReaderTarget(root, anchor.documentId, anchor.page);
-    const url = buildKnowledgeReaderUrl(target);
+    const url = buildKnowledgeSourceReaderUrl(root, anchor);
     if (!url) return false;
     router.push(url);
     return true;
@@ -780,7 +779,7 @@ export default function KnowledgePage() {
                 const anchor = note.sourceAnchors?.find((item) => item.documentId && item.page);
                 return <article className="rounded-2xl border border-outline-variant/25 bg-white p-6 lg:p-8">
                   <div className="text-[10px] font-semibold text-outline">원본 메모 · {note.sourceName} · {dateLabel(note.createdAt)} · {knowledgeProvenanceLabel(note.provenance?.kind)}</div><h3 className="mt-2 text-xl font-bold">{note.title || note.sourceName}</h3>{note.summary && <p className="mt-2 text-sm leading-6 text-on-surface-variant">{note.summary}</p>}
-                  {anchor ? <div className="mt-4 rounded-xl bg-surface-container-low p-3"><p className="text-[10px] font-semibold text-on-surface-variant">저장된 원문 선택 · p.{anchor.page} — 아래 동작은 PDF 페이지로 이동합니다. 선택 강조 자체는 복원하지 않습니다.</p>{anchor.text && <blockquote className="mt-2 border-l-2 border-primary/40 pl-3 text-xs leading-5">{anchor.text}</blockquote>}<button type="button" onClick={() => void openSourceNote(note)} className="mt-3 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary">원문 PDF p.{anchor.page} 열기</button></div> : <p className="mt-4 rounded-xl bg-surface-container-low p-3 text-xs text-on-surface-variant">이 메모에는 연결된 PDF 페이지가 없습니다. 메모와 출처 정보는 확인할 수 있지만 원문 PDF로 바로 이동할 수 없습니다.</p>}
+                  {anchor ? <div className="mt-4 rounded-xl bg-surface-container-low p-3"><p className="text-[10px] font-semibold text-on-surface-variant">저장된 원문 위치 · p.{anchor.page} — 저장된 영역 좌표가 유효하면 Reader에서 잠시 강조합니다. 텍스트 선택 자체를 재생성하지는 않습니다.</p>{anchor.text && <blockquote className="mt-2 border-l-2 border-primary/40 pl-3 text-xs leading-5">{anchor.text}</blockquote>}<button type="button" onClick={() => void openSourceNote(note)} className="mt-3 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary">원문 PDF p.{anchor.page} 열기</button></div> : <p className="mt-4 rounded-xl bg-surface-container-low p-3 text-xs text-on-surface-variant">이 메모에는 연결된 PDF 페이지가 없습니다. 메모와 출처 정보는 확인할 수 있지만 원문 PDF로 바로 이동할 수 없습니다.</p>}
                   <div className="mt-5"><h4 className="text-xs font-bold">이 메모를 근거로 한 정리</h4>{linkedTopics.length ? <div className="mt-2 flex flex-wrap gap-2">{linkedTopics.map((topic) => <button key={topic.id} onClick={() => { setSelectedTopicId(topic.id); setSelectedSourceNoteId(null); }} className="rounded-lg bg-primary-container px-3 py-2 text-[10px] font-bold text-primary">{topic.title} · Rev.{topic.revision}</button>)}</div> : <p className="mt-2 text-xs text-on-surface-variant">아직 이 원본을 포함한 정리된 주제가 없습니다.</p>}</div>
                   <details className="mt-5 rounded-xl bg-surface-container-low p-4"><summary className="cursor-pointer text-xs font-bold">저장된 원본 메모 전체 보기</summary><p className="mt-3 whitespace-pre-wrap text-xs leading-6">{note.rawText}</p></details>
                 </article>;

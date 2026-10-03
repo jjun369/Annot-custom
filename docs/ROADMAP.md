@@ -1,5 +1,20 @@
 # Roadmap
 
+## Completed Sources / Studio (2026-10-03)
+
+- Added `/sources` for local memo and manually pasted clip capture, kind/tag/search, immutable Knowledge/Research reuse, original/detail editing, and reuse in Studio. Existing Library, Research and Knowledge import entry points remain available.
+- Added `/studio` with persistent drafts, explicit save and local recovery, selected reference snapshots with per-request inclusion, bounded request preview and existing-provider proposal, explicit compare/apply/undo, and Knowledge inbox capture that still requires the existing human review/revision pipeline.
+- `.annot/sources-studio.json` is fail-closed validated and atomically replaced; pending Knowledge capture remains recoverable. Portable backup v2 already includes it as a normal `.annot` file. No SQLite or manifest change. Browser recovery remains local/non-portable.
+- Validation: synthetic store, proposal-scope/staleness, and Reader source-return tests plus scoped lint/TypeScript. Production build and packaged EXE were not run for this bounded increment.
+- Follow-up design pass: Sources filter rail can collapse while retaining active filters; Studio reference controls stay visible with excerpts disclosed on demand.
+
+## Completed Sources / Studio (2026-10-03)
+
+- Added `/sources` for local memo and manually pasted clip capture, kind/tag/search, immutable Knowledge/Research reuse, original/detail editing, and reuse in Studio. Existing Library, Research and Knowledge import entry points remain available.
+- Added `/studio` with persistent drafts, explicit save and local recovery, selected reference snapshots with per-request inclusion, bounded request preview and existing-provider proposal, explicit compare/apply/undo, and Knowledge inbox capture that still requires the existing human review/revision pipeline.
+- `.annot/sources-studio.json` is fail-closed validated and atomically replaced; pending Knowledge capture remains recoverable. Portable backup v2 already includes it as a normal `.annot` file. No SQLite or manifest change. Browser recovery remains local/non-portable.
+- Validation: synthetic store, proposal-scope/staleness, and Reader source-return tests plus scoped lint/TypeScript. Production build and packaged EXE were not run for this bounded increment.
+
 ## Completed Knowledge retrieval follow-up (2026-10-02)
 
 - Search the current Knowledge wiki and immutable captured source notes together, with local provenance filters and short match previews. Selecting a source displays its saved memo and links back to any topic that uses it.

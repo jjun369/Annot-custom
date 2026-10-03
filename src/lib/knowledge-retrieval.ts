@@ -10,6 +10,49 @@ export type KnowledgeSearchResult =
 export interface KnowledgeReaderTarget {
   path: string;
   page: number;
+  documentId?: string;
+  rects?: Array<{ x: number; y: number; width: number; height: number }>;
+}
+
+const MAX_SOURCE_FOCUS_RECTS = 8;
+const MAX_SOURCE_FOCUS_QUERY_LENGTH = 640;
+const MAX_DOCUMENT_ID_LENGTH = 200;
+const MAX_READER_QUERY_LENGTH = 4096;
+
+export interface KnowledgeReaderNavigation {
+  documentId: string;
+  page: number;
+  rects?: Array<{ x: number; y: number; width: number; height: number }>;
+}
+
+function validDocumentId(value: string | undefined): value is string {
+  return Boolean(value && value.length <= MAX_DOCUMENT_ID_LENGTH && !/[\u0000-\u001f\u007f]/.test(value));
+}
+
+function validPage(value: number): boolean {
+  return Number.isSafeInteger(value) && value > 0 && value <= 100_000;
+}
+
+function normalizedRects(value: unknown): KnowledgeReaderTarget['rects'] | null {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_SOURCE_FOCUS_RECTS) return null;
+  const rects: NonNullable<KnowledgeReaderTarget['rects']> = [];
+  for (const item of value) {
+    if (!item || typeof item !== 'object') return null;
+    const rect = item as Record<string, unknown>;
+    const { x, y, width, height } = rect;
+    if (![x, y, width, height].every((part) => typeof part === 'number' && Number.isFinite(part))) return null;
+    const values = [x, y, width, height] as number[];
+    const [left, top, rectWidth, rectHeight] = values;
+    if (left < 0 || top < 0 || rectWidth <= 0 || rectHeight <= 0 || rectWidth > 1 || rectHeight > 1
+      || left + rectWidth > 1.000001 || top + rectHeight > 1.000001) return null;
+    rects.push({
+      x: Number(left.toFixed(6)),
+      y: Number(top.toFixed(6)),
+      width: Number(rectWidth.toFixed(6)),
+      height: Number(rectHeight.toFixed(6)),
+    });
+  }
+  return rects;
 }
 
 function normalized(value: string): string {
@@ -112,8 +155,9 @@ export function findKnowledgeReaderTarget(
   root: TreeNode | null | undefined,
   documentId: string | undefined,
   page: number | undefined,
+  rects?: unknown,
 ): KnowledgeReaderTarget | null {
-  if (!root || !documentId || !Number.isSafeInteger(page) || !page || page < 1) return null;
+  if (!root || !validDocumentId(documentId) || !page || !validPage(page)) return null;
   const visit = (node: TreeNode): string | null => {
     if (node.type === 'pdf' && node.documentId === documentId && node.path.trim()) return node.path;
     for (const child of node.children ?? []) {
@@ -123,11 +167,59 @@ export function findKnowledgeReaderTarget(
     return null;
   };
   const path = visit(root);
-  return path ? { path, page } : null;
+  if (!path) return null;
+  const safeRects = normalizedRects(rects);
+  return { path, page, documentId, ...(safeRects ? { rects: safeRects } : {}) };
+}
+
+/** Resolve a saved source anchor against today's Library tree for reusable source-open actions. */
+export function buildKnowledgeSourceReaderUrl(
+  root: TreeNode | null | undefined,
+  navigation: { documentId?: string; page?: number; rects?: KnowledgeReaderTarget['rects'] } | null,
+): string | null {
+  if (!navigation?.documentId || !navigation.page) return null;
+  return buildKnowledgeReaderUrl(findKnowledgeReaderTarget(
+    root,
+    navigation.documentId,
+    navigation.page,
+    navigation.rects,
+  ));
 }
 
 export function buildKnowledgeReaderUrl(target: KnowledgeReaderTarget | null): string | null {
-  if (!target || !target.path.trim() || !Number.isSafeInteger(target.page) || target.page < 1) return null;
+  if (!target || !target.path.trim() || !validPage(target.page)) return null;
   const query = new URLSearchParams({ pdf: target.path, page: String(target.page) });
+  if (validDocumentId(target.documentId)) {
+    query.set('doc', target.documentId);
+    const rects = normalizedRects(target.rects);
+    if (rects) {
+      const focus = JSON.stringify(rects);
+      if (focus.length <= MAX_SOURCE_FOCUS_QUERY_LENGTH) query.set('focus', focus);
+    }
+  }
   return `/?${query.toString()}`;
+}
+
+/** Parse the compact Reader URL handoff. Invalid focus is ignored; valid doc/page still open page-only. */
+export function parseKnowledgeReaderNavigation(search: string): KnowledgeReaderNavigation | null {
+  if (search.length > MAX_READER_QUERY_LENGTH) return null;
+  let params: URLSearchParams;
+  try {
+    params = new URLSearchParams(search.startsWith('?') ? search : `?${search}`);
+  } catch {
+    return null;
+  }
+  const documentId = params.get('doc') ?? undefined;
+  const pageText = params.get('page') ?? '';
+  if (!validDocumentId(documentId) || !/^[1-9]\d{0,5}$/.test(pageText)) return null;
+  const page = Number(pageText);
+  if (!validPage(page)) return null;
+  const rawFocus = params.get('focus');
+  if (!rawFocus || rawFocus.length > MAX_SOURCE_FOCUS_QUERY_LENGTH) return { documentId, page };
+  try {
+    const rects = normalizedRects(JSON.parse(rawFocus));
+    return { documentId, page, ...(rects ? { rects } : {}) };
+  } catch {
+    return { documentId, page };
+  }
 }
