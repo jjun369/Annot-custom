@@ -1,5 +1,9 @@
 # Roadmap
 
+## Windows installer refresh (2026-10-08)
+
+- Refresh the local Windows x64 NSIS installer to PageDock 0.9.4 so the latest Reader annotation fallback, Studio-draft retrieval, and study-workflow UI updates are available in the installed app. This verification build is not a public release.
+
 ## Completed UI clarity follow-up (2026-10-08)
 
 - Make source/provenance language easier to scan across Sources, concept synthesis, Studio, and existing record previews. Keep stable IDs in optional advanced detail, mark personal drafts clearly as unverified, retain the visible opt-in and exact outbound preview, and consolidate selected/excerpt totals in the fixed footer.

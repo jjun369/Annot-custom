@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.9.4 — Current Windows app refresh
+
+- Package the latest Reader annotation fallback, Studio-draft retrieval, and study-workflow UI clarity changes in a freshly built Windows x64 NSIS installer. This local verification build is not a public release.
+
 ## Unreleased
 
 - Reader now keeps a calm, actionable notice visible when the annotations response explicitly says native PDF annotations were not read; the link opens the existing PDF tool setup in Settings. The notice ignores raw runtime warning text and never claims that unread native annotations are absent.
