@@ -681,7 +681,7 @@ export default function KnowledgePage() {
       <AppHeader active="knowledge" />
       <div className="flex min-h-0 flex-1">
         <aside className="w-60 shrink-0 border-r border-outline-variant/25 bg-surface-container-lowest p-3">
-          <div className="px-2 pb-3 pt-2"><div className="text-[11px] font-bold tracking-[0.12em] text-primary">개인 기록</div><h1 className="mt-1 text-lg font-bold">개인 메모</h1><p className="mt-1 text-xs leading-5 text-on-surface-variant">메모를 이 PC에 모으고, 내가 확인한 내용만 정리된 노트에 남깁니다.</p></div>
+          <div className="px-2 pb-3 pt-2"><div className="text-[11px] font-bold tracking-[0.12em] text-primary">검토함 · 정리 노트</div><h1 className="mt-1 text-lg font-bold">지식 노트</h1><p className="mt-1 text-xs leading-5 text-on-surface-variant">모아둔 메모를 확인하고, 승인한 내용만 정리 노트에 반영합니다.</p></div>
           <nav className="space-y-1">{([
             ['inbox', '모아둔 메모', Inbox, inboxNotes.length],
             ['review', '확인할 제안', Merge, pendingReviews.length],
@@ -703,7 +703,7 @@ export default function KnowledgePage() {
           {message && <div role="status" aria-live="polite" className={`mb-5 flex items-center gap-2 rounded-xl px-4 py-3 text-xs ${message.error ? 'bg-red-50 text-error' : 'bg-primary-container text-primary'}`}>{message.error ? <AlertTriangle size={14} /> : <Check size={14} />}{message.text}<button onClick={() => setMessage(null)} className="ml-auto" aria-label="알림 닫기"><X size={13} /></button></div>}
 
           {view === 'inbox' && <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(340px,0.75fr)]">
-            <section><h2 className="text-xl font-bold">모아둔 메모</h2><p className="mt-1 text-xs text-on-surface-variant">아직 정리된 노트에 반영하지 않은 개인 메모입니다. 원문은 그대로 보관하며 같은 내용은 두 번 담지 않습니다.</p>
+            <section><h2 className="text-xl font-bold">모아둔 메모</h2><p className="mt-1 text-xs text-on-surface-variant">정리 전 개인 기록입니다. 원본은 그대로 보관되며, 정리 노트에는 확인하고 승인한 내용만 반영됩니다.</p>
               <div onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); void captureFiles(event.dataTransfer.files); }} className="mt-4 rounded-2xl border border-outline-variant/25 bg-surface-container-lowest p-4 shadow-sm">
                 <p className="mb-3 rounded-lg bg-surface-container-low px-3 py-2 text-[11px] leading-5 text-on-surface-variant">이 메모와 첨부 그림은 이 PC의 로컬 수집함에 저장됩니다. <strong className="font-semibold text-on-surface">AI로 자동 전송되지 않습니다.</strong></p>
                 <textarea value={noteText} onChange={(event) => setNoteText(event.target.value)} placeholder="기술 메모, 관찰, 질문, 실험 결과, 나중에 확인할 것…" className="h-48 w-full resize-y bg-transparent text-sm leading-7 outline-none placeholder:text-outline" maxLength={100_000} />

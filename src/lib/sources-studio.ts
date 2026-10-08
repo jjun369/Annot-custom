@@ -9,6 +9,7 @@ import type { KnowledgeNote } from '@/lib/knowledge-store';
 import type { ResearchDocument } from '@/types';
 import { makeStudioExcerpt } from '@/lib/sources-studio-shared';
 import { MAX_STUDIO_REFERENCE_EXCERPT, MAX_STUDIO_TEXT_CHARS, MAX_STUDIO_TITLE_CHARS, SOURCE_KINDS } from '@/lib/sources-studio-shared';
+import { normalizeChatSourceContext } from '@/lib/ai-providers/source-context';
 import type { StudioSourceKind } from '@/lib/sources-studio-shared';
 
 export { SOURCE_KINDS, buildStudioPrompt, inspectProposalReferenceIds, makeStudioExcerpt } from '@/lib/sources-studio-shared';
@@ -22,6 +23,8 @@ export interface StudioReference {
   sourceUpdatedAt: string;
   excerpt: string;
   includeInRequest: boolean;
+  /** Optional immutable citation snapshot for records not registered in Sources. */
+  evidenceSnapshot?: { provenanceLabel: string; anchor?: import('@/types').ChatSourceContext };
 }
 
 export interface StudioDraft {
@@ -123,6 +126,11 @@ function normalizeReference(value: unknown): StudioReference | null {
     sourceUpdatedAt: value.sourceUpdatedAt,
     excerpt: value.excerpt,
     includeInRequest: value.includeInRequest,
+    ...(isRecord(value.evidenceSnapshot) && typeof value.evidenceSnapshot.provenanceLabel === 'string'
+      ? { evidenceSnapshot: { provenanceLabel: value.evidenceSnapshot.provenanceLabel.slice(0, 180),
+        ...(value.evidenceSnapshot.anchor !== undefined && normalizeChatSourceContext(value.evidenceSnapshot.anchor)
+          ? { anchor: normalizeChatSourceContext(value.evidenceSnapshot.anchor)! } : {}) } }
+      : {}),
   };
 }
 
@@ -559,11 +567,17 @@ export async function validateStudioProposalBase(input: {
   });
 }
 
-export async function createStudioDraft(): Promise<StudioDraft> {
+export async function createStudioDraft(input: { title?: string; text?: string; references?: StudioReference[] } = {}): Promise<StudioDraft> {
+  const title = input.title?.trim() || '새 글';
+  const text = input.text ?? '';
+  const references = (input.references ?? []).map(normalizeReference);
+  if (title.length > MAX_TITLE_CHARS || text.length > MAX_TEXT_CHARS) throw new Error('초안 제목 또는 본문이 저장 한도를 넘었습니다.');
+  if (references.length > MAX_REFERENCES || references.some((reference) => !reference)
+    || new Set(references.map((reference) => reference!.sourceId)).size !== references.length) throw new Error('초안 참조 정보가 올바르지 않습니다.');
   return mutateStore((store) => {
     if (store.drafts.length >= MAX_DRAFTS) throw new Error(`초안은 최대 ${MAX_DRAFTS}개까지 보관할 수 있습니다.`);
     const now = new Date().toISOString();
-    const draft: StudioDraft = { id: randomUUID(), title: '새 글', text: '', references: [], revision: 1, createdAt: now, updatedAt: now };
+    const draft: StudioDraft = { id: randomUUID(), title, text, references: references as StudioReference[], revision: 1, createdAt: now, updatedAt: now };
     store.drafts.push(draft);
     return draft;
   });

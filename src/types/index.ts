@@ -133,6 +133,8 @@ export interface ChatMessage {
   timestamp: string;
   model?: string;
   sourceContext?: ChatSourceContext;
+  /** Exact bounded local-note excerpts included for this turn; absent means no note lookup. */
+  recordContext?: ChatRecordContextSnapshot;
   /** Mutable path hint for returning from a sidechat; documentId remains authoritative. */
   sourcePdfPath?: string;
   replyToMessageId?: string;
@@ -151,6 +153,23 @@ export interface ChatMessage {
   sideChatWebRequests?: SideChatWebRequest[];
   /** Optional user reflection kept only on this sidechat question. */
   sideChatReflection?: SideChatReflection;
+}
+
+export interface ChatRecordContextSnapshot {
+  scope: 'document' | 'library';
+  /** Hash of the exact bounded record payload shown for confirmation. */
+  snapshotHash?: string;
+  records: Array<{
+    id: string;
+    title: string;
+    originLabel: string;
+    provenanceLabel: string;
+    excerpt: string;
+    sourceUpdatedAt: string;
+    anchor?: ChatSourceContext;
+  }>;
+  omittedCount: number;
+  omittedChars: number;
 }
 
 export interface SideChatReflection {

@@ -28,10 +28,13 @@ describe('cross-platform runtime policy', () => {
     expect(electronMain).toMatch(/role:\s*['"]close['"]/);
   });
 
-  test('keeps the primary navigation in library, research, knowledge order', () => {
+  test('keeps the primary navigation in library, sources, knowledge, studio, research order', () => {
     const header = fs.readFileSync(path.join(process.cwd(), 'src', 'components', 'layout', 'AppHeader.tsx'), 'utf8');
     expect(header.indexOf("id: 'library'")).toBeLessThan(header.indexOf("id: 'research'"));
-    expect(header.indexOf("id: 'research'")).toBeLessThan(header.indexOf("id: 'knowledge'"));
+    expect(header.indexOf("id: 'library'")).toBeLessThan(header.indexOf("id: 'sources'"));
+    expect(header.indexOf("id: 'sources'")).toBeLessThan(header.indexOf("id: 'knowledge'"));
+    expect(header.indexOf("id: 'knowledge'")).toBeLessThan(header.indexOf("id: 'studio'"));
+    expect(header.indexOf("id: 'studio'")).toBeLessThan(header.indexOf("id: 'research'"));
   });
 
   test('exposes only the native directory picker through the Electron preload', () => {

@@ -1,4 +1,4 @@
-import { SessionKind, AIProvider, ChatSourceContext, ReasoningEffort } from '@/types';
+import { SessionKind, AIProvider, ChatRecordContextSnapshot, ChatSourceContext, ReasoningEffort } from '@/types';
 
 export interface ProviderReasoningLevel {
   effort: ReasoningEffort;
@@ -51,6 +51,7 @@ export interface ProviderTurnInput {
   prompt: string;
   currentPdfPath?: string | null;
   sourceContext?: ChatSourceContext;
+  recordContext?: ChatRecordContextSnapshot;
   /**
    * Existing messages used when a provider cannot resume its native session
    * (for example, the desktop Codex app has account auth but no standalone

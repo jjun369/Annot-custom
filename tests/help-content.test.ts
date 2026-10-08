@@ -4,7 +4,7 @@ import { GENERAL_HELP, SCREEN_HELP, TROUBLESHOOTING_HELP } from '@/lib/help-cont
 
 describe('static PageDock help content', () => {
   test('covers every app section with screen-specific guidance', () => {
-    expect(Object.keys(SCREEN_HELP).sort()).toEqual(['knowledge', 'library', 'research', 'settings']);
+    expect(Object.keys(SCREEN_HELP).sort()).toEqual(['knowledge', 'library', 'research', 'settings', 'sources', 'studio']);
     for (const content of Object.values(SCREEN_HELP)) {
       expect(content.title.length).toBeGreaterThan(0);
       expect(content.groups.length).toBeGreaterThanOrEqual(2);

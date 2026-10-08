@@ -1,5 +1,32 @@
 # Roadmap
 
+## Completed UI clarity follow-up (2026-10-08)
+
+- Make source/provenance language easier to scan across Sources, concept synthesis, Studio, and existing record previews. Keep stable IDs in optional advanced detail, mark personal drafts clearly as unverified, retain the visible opt-in and exact outbound preview, and consolidate selected/excerpt totals in the fixed footer.
+- Added a small text-only `InfoHint` with keyboard/click/touch support, Escape/outside dismissal, and edge-aware portal placement. Root-relayed 1280×720 and 800×600 UI checks, Studio save/reload, default-off/opt-in/opt-out behavior, and synthetic PDF text visibility passed. Actual pointer hover was not observable through the relay. Static gates (239 passed, 1 skipped) and production build passed; no storage or provider behavior changed.
+
+## Completed Studio draft re-entry (2026-10-08, working tree)
+
+- Existing saved Studio drafts can be explicitly included in concept-synthesis search; source-only search remains the default. Stable draft IDs, their unpublished/unverified provenance, bounded server-owned previews, and the existing snapshot hash/stale checks are preserved through prepare, generate, and save.
+- Opt-in Library record chat can retrieve those same canonical drafts. Current-PDF lookup includes only drafts whose persisted references anchor them to that stable document (and page when scoped), without pretending the draft is the PDF source. Drafts link back to their exact Studio ID; original citations remain separate.
+- No extra reflection template, automatic cards, new store, schema, or provider was added. Focused coverage: 6 test files / 30 tests passed; scoped lint, docs check, standard TypeScript check, and post-cache-repair production build passed. Synthetic browser relay verified default-off exclusion, opt-in discovery, stable draft return, exact bounded preview, basket retention across a changed query, opt-out clearing, Studio save/reopen, and visible synthetic PDF text at 1280×720. No AI generation was invoked. Forced Webpack dev has a PDF.js ESM runtime exception; default Turbopack renders the synthetic PDF. No dependency or app configuration change was made.
+
+## Completed UX continuity follow-up (2026-10-07, working tree)
+
+- Concept synthesis separates its question from related-record discovery. The selected canonical-ID basket survives new searches and question edits; final preview resolution is independent of search ranking, preserves selection order, and accepts only current server-owned source text within the existing eight-record / 8,000-character bounds.
+- Question/provider/selection revisions invalidate prepared previews and proposals, while request epochs prevent stale search/preview/generation results from becoming current again. Exact outbound text stays inspectable; generated content remains a new Studio draft and saving rechecks the source snapshot hash.
+- Studio exposes load/retry and save states, gates editing until a draft is installed, and labels request review as save-first. Knowledge inbox capture remains an optional separate step. No storage format, SQLite, PDF payload, or provider policy change.
+- Label/navigation/help copy integration is included. Automated synthetic checks, full static checks/build, root-relayed isolated UI verification, and actual synthetic-PDF render evidence passed; no AI generation was invoked.
+
+## Completed record-aware chat and synthesis (2026-10-03, working tree)
+
+- PDF chat can explicitly opt in to debounced, bounded local record retrieval; OFF adds no new lookups. Current PDF is the default scope, Library search is deliberate, exact excerpts are previewed, and source changes invalidate the preview before send. Provider history already sent cannot be retracted.
+- Sources can prepare a mixed-record concept proposal from explicitly selected notes and highlights. The exact outbound excerpts are shown before AI; generated output saves as a new Studio draft and still requires the existing human Knowledge review path.
+- The new-draft action is bound to the generated question, provider, selected record IDs, and exact prepared snapshot; if those inputs change, the old proposal stays visible for reference but cannot be saved as if it matched the new selection.
+- Saved Studio drafts can be searched by body and selected-source snapshot, are labelled as not yet in Knowledge, and reopen by stable draft ID so the exact saved reference shelf resumes. Reader-first PDF continuation remains primary.
+- Concept-synthesis search shows excerpts around the query, discloses omitted/capped results, clears stale results when the question changes, and requires deliberate record selection. The AI prompt now asks for a grounded self-check and concrete source-specific next action; answer structure remains advisory and human-reviewed.
+- No SQLite/sidecar/backup-manifest migration. Synthetic focused tests and scoped checks are recorded in CURRENT_STATE when complete; installed 0.9.3 release/EXE remains unchanged.
+
 ## Completed Sources / Studio (2026-10-03)
 
 - Added `/sources` for local memo and manually pasted clip capture, kind/tag/search, immutable Knowledge/Research reuse, original/detail editing, and reuse in Studio. Existing Library, Research and Knowledge import entry points remain available.

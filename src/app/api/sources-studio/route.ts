@@ -50,7 +50,14 @@ export async function POST(request: NextRequest) {
       });
       return NextResponse.json({ source }, { status: 201 });
     }
-    if (body.action === 'draft') return NextResponse.json({ draft: await createStudioDraft() }, { status: 201 });
+    if (body.action === 'draft') {
+      const references = Array.isArray(body.references) ? body.references as StudioReference[] : [];
+      return NextResponse.json({ draft: await createStudioDraft({
+        title: typeof body.title === 'string' ? body.title : undefined,
+        text: typeof body.text === 'string' ? body.text : undefined,
+        references,
+      }) }, { status: 201 });
+    }
     if (body.action === 'save-draft') {
       const references = Array.isArray(body.references) ? body.references as StudioReference[] : [];
       const draft = await saveStudioDraft({
@@ -72,14 +79,22 @@ export async function POST(request: NextRequest) {
       const refIndex = new Map(snapshot.sources.map((source) => [source.id, source]));
       const referenceLines = draft.references.map((reference) => {
         const source = refIndex.get(reference.sourceId);
-        return source ? `- ${source.title} · ${source.originLabel} · ${source.id}` : `- 자료 없음 · ${reference.title} · ${reference.sourceId}`;
+        const evidence = reference.evidenceSnapshot;
+        const anchorLabel = evidence?.anchor?.page ? ` · ${evidence.anchor.documentId ? `document ${evidence.anchor.documentId} ` : ''}p.${evidence.anchor.page}` : '';
+        return source ? `- ${source.title} · ${source.originLabel} · ${evidence?.provenanceLabel ?? source.originLabel} · ${source.id}${anchorLabel}` : `- ${reference.title} · ${evidence?.provenanceLabel ?? reference.originLabel} · ${reference.sourceId}${anchorLabel}\n  > ${reference.excerpt}`;
       });
       const text = [draft.text.trim(), referenceLines.length
         ? `## Sources/Studio 참조 선반 (출처 표기이며 주장 검증 완료를 뜻하지 않음)\n${referenceLines.join('\n')}`
         : ''].filter(Boolean).join('\n\n');
       if (!text.trim()) return NextResponse.json({ error: '본문 또는 참조가 있는 초안을 먼저 작성해 주세요.' }, { status: 400 });
       const sourceName = `Studio · ${draft.title}`.slice(0, 300);
-      const captured = await captureKnowledgeNotes([{ text, sourceName }]);
+      const synthesisRefs = draft.references.filter((reference) => reference.evidenceSnapshot?.provenanceLabel.startsWith('AI 합성 제안'));
+      const sourceAnchors = draft.references.flatMap((reference) => reference.evidenceSnapshot?.anchor ? [reference.evidenceSnapshot.anchor] : []);
+      const captured = await captureKnowledgeNotes([{
+        text, sourceName,
+        ...(synthesisRefs.length ? { provenance: { kind: 'ai_inference' as const } } : {}),
+        ...(sourceAnchors.length ? { sourceAnchors } : {}),
+      }]);
       const noteId = captured.captured[0]?.id ?? captured.duplicates[0]?.existingNoteId;
       if (!noteId) throw new Error('초안 검토 자료를 만들지 못했습니다.');
       return NextResponse.json({ noteId, captured: captured.captured.length > 0, href: '/knowledge' }, { status: 201 });

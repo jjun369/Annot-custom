@@ -5,6 +5,7 @@ import { getProviderRuntime } from '@/lib/ai-providers';
 import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
 import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
 import { normalizeChatSourceContext } from '@/lib/ai-providers/source-context';
+import { retrieveDocumentRecords, searchLibraryRecords, selectBoundedRecords } from '@/lib/record-retrieval';
 import { markMobileBridgeExportDirtyForDocument } from '@/lib/mobile-bridge';
 import { hasInvalidSideChatPdfPathHint, normalizeSideChatPdfPathHint } from '@/lib/side-chat';
 import type { ReasoningEffort } from '@/types';
@@ -20,6 +21,7 @@ export async function POST(req: NextRequest) {
       reasoningEffort,
       currentPdfPath,
       sourceContext: requestedSourceContext,
+      recordLookup: requestedRecordLookup,
       sourcePdfPath,
       userMessageId,
     } = body as {
@@ -30,6 +32,7 @@ export async function POST(req: NextRequest) {
       reasoningEffort?: ReasoningEffort;
       currentPdfPath?: string | null;
       sourceContext?: unknown;
+      recordLookup?: unknown;
       sourcePdfPath?: unknown;
       userMessageId?: string;
     };
@@ -77,6 +80,34 @@ export async function POST(req: NextRequest) {
       delete sourceContext.documentId;
     }
 
+    let recordContext: import('@/types').ChatRecordContextSnapshot | undefined;
+    if (requestedRecordLookup !== undefined && session.sessionKind === 'pdf') {
+      const recordRequest = requestedRecordLookup && typeof requestedRecordLookup === 'object'
+        ? requestedRecordLookup as { enabled?: unknown; scope?: unknown; page?: unknown; includeIds?: unknown; snapshotHash?: unknown }
+        : null;
+      if (recordRequest?.enabled === true) {
+        const ids = Array.isArray(recordRequest.includeIds)
+          ? [...new Set(recordRequest.includeIds.filter((id): id is string => typeof id === 'string'))]
+          : [];
+        if (ids.length > 8) return NextResponse.json({ error: '한 번에 기록은 최대 8개까지 포함할 수 있습니다.' }, { status: 400 });
+        const scope = recordRequest.scope === 'library' ? 'library' : 'document';
+        const page = Number.isSafeInteger(recordRequest.page) && Number(recordRequest.page) > 0 ? Number(recordRequest.page) : undefined;
+        if (!ids.length) return NextResponse.json({ error: 'AI에 포함할 기록을 먼저 선택해 주세요.' }, { status: 400 });
+        if (scope === 'library') {
+          const candidates = await searchLibraryRecords(prompt.trim(), { includeStudioDrafts: true });
+          recordContext = selectBoundedRecords(prompt.trim(), candidates, { scope, includeIds: ids, limit: 8, totalChars: 8_000 });
+        } else if (session.documentId) {
+          recordContext = await retrieveDocumentRecords({ documentId: session.documentId, query: prompt.trim(), page, includeIds: ids });
+        }
+        if (!recordContext || recordContext.records.length !== ids.length) {
+          return NextResponse.json({ error: '선택한 기록이 바뀌었거나 현재 검색 범위에서 찾을 수 없습니다. 다시 검색해 주세요.' }, { status: 409 });
+        }
+        if (typeof recordRequest.snapshotHash !== 'string' || recordRequest.snapshotHash !== recordContext.snapshotHash) {
+          return NextResponse.json({ error: '확인한 기록 발췌가 달라졌습니다. 다시 확인해 주세요.' }, { status: 409 });
+        }
+      }
+    }
+
     const userMessage = {
       id: userMessageId?.trim() || `u-${randomUUID()}`,
       role: 'user' as const,
@@ -84,6 +115,7 @@ export async function POST(req: NextRequest) {
       timestamp: new Date().toISOString(),
       sourceContext,
       sourcePdfPath: normalizedSourcePdfPath,
+      ...(recordContext ? { recordContext } : {}),
     };
     const sessionModel = normalizeModelPreference(session.model);
     const resolvedModel = normalizeModelPreference(model || sessionModel);
@@ -128,6 +160,7 @@ export async function POST(req: NextRequest) {
               ? null
               : session.pdfPath ?? currentPdfPath ?? null,
               sourceContext,
+              recordContext,
               conversation: session.messages
                 .filter((message) => message.role === 'user' || message.role === 'assistant')
                 .filter((message) => message.id !== userMessage.id)

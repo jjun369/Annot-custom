@@ -1,11 +1,14 @@
 'use client';
 
-import { ArrowDownToLine, BookOpen, ChevronDown, ChevronRight, CircleHelp, Eye, LoaderCircle, Plus, Undo2, X } from 'lucide-react';
+import { ArrowDownToLine, BookOpen, ChevronDown, ChevronRight, CircleHelp, Eye, LoaderCircle, Plus, Search, Undo2, X } from 'lucide-react';
 import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+import { InfoHint } from '@/components/common/InfoHint';
 import { AppHeader } from '@/components/layout/AppHeader';
 import { buildKnowledgeSourceReaderUrl } from '@/lib/knowledge-retrieval';
+import { sourceOriginForDisplay } from '@/lib/record-display';
+import { filterStudioDrafts, resolveStudioDraft, studioDraftHrefFromRecordId } from '@/lib/studio-draft-search';
 import { buildStudioPrompt, shouldCloseStudioEscape } from '@/lib/sources-studio-shared';
 import type { StudioDraft, StudioReference, StudioSource, StudioSourceKind } from '@/lib/sources-studio';
 import type { TreeNode } from '@/types';
@@ -60,6 +63,16 @@ function FocusableSourceLink({ source, root }: { source: StudioSource; root: Tre
   return <span title="현재 라이브러리에서 연결된 PDF를 찾지 못했습니다." className="inline-flex items-center gap-1 rounded-lg border border-outline-variant/20 px-2 py-1.5 text-[10px] text-outline"><Eye size={12} />원문 위치 없음</span>;
 }
 
+function FocusableReferenceLink({ reference, source, root }: { reference: StudioReference; source?: StudioSource; root: TreeNode | null }) {
+  const draftHref = studioDraftHrefFromRecordId(reference.sourceId);
+  if (draftHref) return <Link href={draftHref} className="inline-flex items-center gap-1 rounded-lg border border-outline-variant/25 px-2 py-1.5 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"><Eye size={12} />참조 개인 초안</Link>;
+  if (source) return <FocusableSourceLink source={source} root={root} />;
+  const anchor = reference.evidenceSnapshot?.anchor;
+  const href = anchor && root ? buildKnowledgeSourceReaderUrl(root, anchor) : null;
+  if (!href || !anchor?.page) return null;
+  return <a href={href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 rounded-lg border border-outline-variant/25 px-2 py-1.5 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"><Eye size={12} />원문 PDF p.{anchor.page}</a>;
+}
+
 function ReferencePicker({
   sources, currentIds, onAdd, onClose,
 }: { sources: StudioSource[]; currentIds: string[]; onAdd: (source: StudioSource) => void; onClose: () => void }) {
@@ -81,19 +94,19 @@ function ReferencePicker({
     `${source.title}\n${source.text}\n${source.tags.join(' ')}`.normalize('NFKC').toLowerCase().includes(needle)).slice(0, 150);
   return <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/35 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
     <div role="dialog" aria-modal="true" aria-labelledby="reference-picker-title" className="flex max-h-[86dvh] w-full max-w-2xl flex-col overflow-hidden rounded-2xl border border-outline-variant/30 bg-surface-container-lowest shadow-ambient">
-      <div className="flex items-center justify-between border-b border-outline-variant/20 px-4 py-3"><div><p className="text-[10px] font-bold text-primary">참조 자료 선택</p><h2 id="reference-picker-title" className="mt-0.5 text-sm font-bold text-on-surface">내 자료·Research·Knowledge</h2></div><button type="button" onClick={onClose} aria-label="닫기" className="rounded-lg p-2 hover:bg-surface-container"><X size={16} /></button></div>
+      <div className="flex items-center justify-between border-b border-outline-variant/20 px-4 py-3"><div><p className="text-[11px] font-semibold text-primary">참고할 자료 선택</p><h2 id="reference-picker-title" className="mt-0.5 text-sm font-bold text-on-surface">자료함 · 리서치 · 지식 메모</h2></div><button type="button" onClick={onClose} aria-label="닫기" className="rounded-lg p-2 hover:bg-surface-container"><X size={16} /></button></div>
       <label className="m-3 flex items-center gap-2 rounded-lg border border-outline-variant/25 px-3 py-2"><Eye size={14} className="text-outline" /><input ref={inputRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="자료 제목·본문·태그 찾기" className="min-w-0 flex-1 bg-transparent text-xs outline-none" /></label>
       <p className="px-4 pb-1 text-[10px] text-outline">추가 가능 {available.length} · 이미 추가 {sources.length - available.length}{needle ? ` · 검색 결과 ${results.length}` : ''}</p>
       <div className="min-h-0 flex-1 overflow-y-auto p-2">
         {results.map((source) => <div key={source.id} className="mb-1 flex items-center gap-3 rounded-xl border border-outline-variant/15 p-3">
-          <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold text-on-surface">{source.title}</p><p className="mt-0.5 truncate text-[10px] text-outline">{LABELS[source.kind]} · {source.originLabel} · {source.id}</p><p className="mt-1 line-clamp-2 text-[10px] leading-4 text-on-surface-variant">{source.text.slice(0, 280)}</p></div>
+          <div className="min-w-0 flex-1"><p className="truncate text-xs font-semibold text-on-surface">{source.title}</p><p className="mt-0.5 truncate text-[11px] text-on-surface-variant">{LABELS[source.kind]} · {sourceOriginForDisplay(source.originLabel)}</p><p className="mt-1 line-clamp-2 text-[11px] leading-5 text-on-surface-variant">{source.text.slice(0, 280)}</p></div>
           <button type="button" onClick={() => onAdd(source)} className="shrink-0 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary">추가</button>
         </div>)}
         {!sources.length && <div className="p-8 text-center text-xs text-on-surface-variant"><p>아직 자료함에 추가한 자료가 없습니다.</p><Link href="/sources" className="mt-2 inline-block text-primary underline">자료함에서 개인 메모 만들기</Link></div>}
         {sources.length > 0 && !available.length && <div className="p-8 text-center text-xs text-on-surface-variant"><p>사용 가능한 자료를 모두 참조 선반에 추가했습니다.</p><p className="mt-1">필요 없는 참조를 선반에서 제거하거나 새 자료를 추가하세요.</p><Link href="/sources" className="mt-2 inline-block text-primary underline">자료함에서 새 자료 추가</Link></div>}
         {available.length > 0 && !results.length && <div className="p-8 text-center text-xs text-on-surface-variant"><p>“{query.trim()}”와 일치하는 추가 가능 자료가 없습니다.</p><button type="button" onClick={() => setQuery('')} className="mt-2 rounded-lg border border-outline-variant/25 px-2.5 py-1.5 text-primary">검색 지우기</button><Link href="/sources" className="ml-2 text-primary underline">새 자료 추가</Link></div>}
       </div>
-      <p className="border-t border-outline-variant/15 px-4 py-2 text-[10px] text-outline">참조를 추가해도 전송되지 않습니다. 각 자료의 요청 포함 확인은 별도로 켜야 합니다.</p>
+      <p className="border-t border-outline-variant/15 px-4 py-2 text-[11px] text-on-surface-variant">자료를 추가해도 전송되지 않습니다. 각 자료에서 이번 요청 포함을 직접 선택하세요.</p>
     </div>
   </div>;
 }
@@ -124,8 +137,10 @@ export function StudioWorkspace() {
   const [text, setText] = useState('');
   const [references, setReferences] = useState<StudioReference[]>([]);
   const [baseDraft, setBaseDraft] = useState<StudioDraft | null>(null);
+  const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [draftSaving, setDraftSaving] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [requestTab, setRequestTab] = useState<'references' | 'proposal'>('references');
   const [instruction, setInstruction] = useState(DEFAULT_INSTRUCTION);
@@ -141,14 +156,17 @@ export function StudioWorkspace() {
   const [recoveryRecord, setRecoveryRecord] = useState<{ title: string; text: string; references: StudioReference[] } | null>(null);
   const [undoContent, setUndoContent] = useState<string | null>(null);
   const [draftListCollapsed, setDraftListCollapsed] = useState(false);
+  const [draftQuery, setDraftQuery] = useState('');
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const editEpoch = useRef(0);
   const proposalEpoch = useRef(0);
+  const loadEpoch = useRef(0);
   const initialSourceHandled = useRef(false);
 
   const dirty = Boolean(baseDraft && (title !== baseDraft.title || text !== baseDraft.text || JSON.stringify(references) !== JSON.stringify(baseDraft.references)));
   const selectedForRequest = references.filter((reference) => reference.includeInRequest);
   const selectedIds = new Set(references.map((reference) => reference.sourceId));
+  const visibleDrafts = useMemo(() => filterStudioDrafts(data.drafts, draftQuery), [data.drafts, draftQuery]);
   const previewPrompt = useMemo(() => buildStudioPrompt({
     draftTitle: title,
     draftText: text,
@@ -179,24 +197,38 @@ export function StudioWorkspace() {
     setProposalMessage('');
     setRecoveryAvailable(false);
     setRecoveryRecord(null);
+    const url = new URL(window.location.href);
+    url.searchParams.set('draft', draft.id);
+    window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
   }, []);
 
   const load = useCallback(async () => {
+    const requestId = ++loadEpoch.current;
+    setLoading(true);
+    setLoadError('');
     try {
-      const [next, treeResponse] = await Promise.all([
-        refresh(),
+      const [studioResponse, treeResponse] = await Promise.all([
+        fetch('/api/sources-studio', { cache: 'no-store' }),
         fetch('/api/workspace/tree', { cache: 'no-store' }).catch(() => null),
       ]);
-      if (treeResponse?.ok) setRoot(await treeResponse.json() as TreeNode);
+      const next = await readJson(studioResponse) as unknown as WorkspaceData;
+      const tree = treeResponse?.ok ? await treeResponse.json() as TreeNode : null;
+      if (requestId !== loadEpoch.current) return;
+      setData({ drafts: next.drafts ?? [], sources: next.sources ?? [], warnings: next.warnings ?? [] });
+      if (tree) setRoot(tree);
       let drafts = next.drafts ?? [];
       if (!drafts.length) {
         const created = await fetch('/api/sources-studio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'draft' }) });
         const result = await readJson(created);
+        if (requestId !== loadEpoch.current) return;
         drafts = [result.draft as StudioDraft];
         setData((current) => ({ ...current, drafts }));
       }
-      const requestedSource = new URLSearchParams(window.location.search).get('source');
-      const draft = drafts[0];
+      if (requestId !== loadEpoch.current) return;
+      const params = new URLSearchParams(window.location.search);
+      const requestedSource = params.get('source');
+      const draft = resolveStudioDraft(drafts, params.get('draft'));
+      if (!draft) throw new Error('개인 초안을 찾지 못했습니다.');
       installDraft(draft);
       if (requestedSource && !initialSourceHandled.current) {
         initialSourceHandled.current = true;
@@ -205,7 +237,10 @@ export function StudioWorkspace() {
           setReferences([...draft.references, referenceFor(source)]);
           editEpoch.current += 1;
         }
-        window.history.replaceState({}, '', '/studio');
+        const url = new URL(window.location.href);
+        url.searchParams.delete('source');
+        url.searchParams.set('draft', draft.id);
+        window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
       }
       const recovery = localStorage.getItem(`${RECOVERY_PREFIX}${draft.id}`);
       if (recovery) {
@@ -220,9 +255,11 @@ export function StudioWorkspace() {
       }
       setLoadError('');
     } catch (error) {
-      setLoadError(error instanceof Error ? error.message : 'Studio 자료를 불러오지 못했습니다.');
+      if (requestId === loadEpoch.current) setLoadError(error instanceof Error ? error.message : '자료를 불러오지 못했습니다.');
+    } finally {
+      if (requestId === loadEpoch.current) setLoading(false);
     }
-  }, [installDraft, refresh]);
+  }, [installDraft]);
 
   useEffect(() => { void load(); }, [load]);
 
@@ -271,6 +308,7 @@ export function StudioWorkspace() {
   const saveDraft = useCallback(async (): Promise<StudioDraft | null> => {
     if (!baseDraft) return null;
     setBusy(true);
+    setDraftSaving(true);
     try {
       const response = await fetch('/api/sources-studio', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -287,7 +325,7 @@ export function StudioWorkspace() {
       setProposalMessage(error instanceof Error ? error.message : '저장하지 못했습니다.');
       if (error instanceof Error && /다른 변경/.test(error.message)) void refresh();
       return null;
-    } finally { setBusy(false); }
+    } finally { setBusy(false); setDraftSaving(false); }
   }, [baseDraft, title, text, references, installDraft, refresh]);
 
   const addReference = (source: StudioSource) => {
@@ -426,7 +464,7 @@ export function StudioWorkspace() {
     try {
       const response = await fetch('/api/sources-studio', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'publish-draft', id: draftToPublish.id, expectedRevision: draftToPublish.revision }) });
       const body = await readJson(response);
-      setPublishResult(`Knowledge 검토함에 ${body.captured ? '새 immutable note' : '기존 동일 note'}로 연결했습니다. 위키 본문은 바뀌지 않았습니다.`);
+      setPublishResult(`지식 검토함에 ${body.captured ? '새 검토 자료' : '기존 자료'}로 보냈습니다. 위키 본문은 바뀌지 않았습니다.`);
       setPublishHref(body.href as string);
       setPublishOpen(false);
     } catch (error) { setProposalMessage(error instanceof Error ? error.message : 'Knowledge 검토함으로 보내지 못했습니다.'); }
@@ -470,34 +508,37 @@ export function StudioWorkspace() {
     <div className="mx-auto flex w-full max-w-[1800px] min-h-0 flex-1 flex-col px-3 py-3 sm:px-5">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-outline-variant/20 bg-surface-container-lowest px-4 py-3">
         <div className="flex min-w-0 flex-1 items-center gap-3">
-          <div className="min-w-0 flex-1"><p className="text-[10px] font-bold text-primary">STUDIO · 로컬 초안</p><label className="sr-only" htmlFor="studio-title">초안 제목</label><input id="studio-title" value={title} maxLength={300} onChange={(event) => { setTitle(event.target.value); editEpoch.current += 1; setUndoContent(null); }} className="mt-0.5 w-full truncate bg-transparent text-base font-bold text-on-surface outline-none" placeholder="초안 제목" /></div>
-          <select value={activeId} onChange={(event) => void selectDraft(event.target.value)} aria-label="초안 선택" className="max-w-48 rounded-lg border border-outline-variant/25 bg-surface-container-low px-2 py-2 text-[10px] font-semibold 2xl:hidden">
-            {data.drafts.map((draft) => <option key={draft.id} value={draft.id}>{draft.title || '제목 없는 초안'}</option>)}
+          <div className="min-w-0 flex-1"><p className="flex flex-wrap items-center gap-1.5"><span className="inline-flex rounded-full bg-tertiary-container px-2.5 py-1 text-[12px] font-semibold text-on-surface">개인 초안 · 검토 전 · 문헌 근거 아님</span><InfoHint label="개인 초안 안내" text="이 글은 이 기기에 저장하는 작업 초안입니다. 지식 위키에 따로 검토를 요청하기 전까지는 게시되지 않습니다." /></p><label className="sr-only" htmlFor="studio-title">초안 제목</label><input id="studio-title" value={title} disabled={!baseDraft || loading} maxLength={300} onChange={(event) => { setTitle(event.target.value); editEpoch.current += 1; setUndoContent(null); }} className="mt-0.5 w-full truncate bg-transparent text-base font-bold text-on-surface outline-none disabled:opacity-60" placeholder={loading ? '초안을 불러오는 중…' : '초안 제목'} /></div>
+          <label className="flex min-w-40 max-w-56 items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2.5 py-2"><Search size={13} className="shrink-0 text-outline" /><input value={draftQuery} disabled={!baseDraft || loading} onChange={(event) => setDraftQuery(event.target.value)} aria-label="저장된 개인 초안 검색" placeholder="초안·본문·출처 찾기" className="min-w-0 flex-1 bg-transparent text-[10px] outline-none disabled:opacity-60" /></label>
+          <select value={activeId} onChange={(event) => void selectDraft(event.target.value)} disabled={!baseDraft || loading} aria-label="초안 선택" className="max-w-48 rounded-lg border border-outline-variant/25 bg-surface-container-low px-2 py-2 text-[10px] font-semibold disabled:opacity-60 2xl:hidden">
+            {!visibleDrafts.some((draft) => draft.id === activeId) && <option value={activeId} disabled>현재 초안 · 검색 결과 밖</option>}
+            {visibleDrafts.map((draft) => <option key={draft.id} value={draft.id}>{draft.title || '제목 없는 초안'} · 개인 초안</option>)}
           </select>
-          <span className={`hidden rounded-full px-2.5 py-1 text-[10px] font-semibold sm:inline ${dirty ? 'bg-tertiary-container text-on-surface' : 'bg-surface-container text-on-surface-variant'}`}>{dirty ? '저장되지 않은 변경' : '저장됨'}</span>
+          <span role="status" className={`rounded-full px-2.5 py-1 text-[10px] font-semibold ${dirty ? 'bg-tertiary-container text-on-surface' : 'bg-surface-container text-on-surface-variant'}`}>{loading && !baseDraft ? '불러오는 중…' : loadError && !baseDraft ? '불러오지 못함' : draftSaving ? '저장 중…' : dirty ? '저장되지 않은 변경' : '저장됨'}</span>
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
-          <button type="button" onClick={() => void saveDraft()} disabled={busy || !dirty} className="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-bold text-on-primary disabled:opacity-45"><ArrowDownToLine size={14} />초안 저장</button>
+          <button type="button" onClick={() => void saveDraft()} disabled={busy || loading || !baseDraft || !dirty} className="flex h-9 items-center gap-1.5 whitespace-nowrap rounded-lg bg-primary px-3 text-xs font-bold text-on-primary disabled:opacity-45"><ArrowDownToLine size={14} />{draftSaving ? '저장 중…' : '초안 저장'}</button>
           {undoContent !== null && <button type="button" onClick={undoProposal} className="flex h-9 items-center gap-1 rounded-lg border border-outline-variant/25 px-2.5 text-[10px] font-semibold"><Undo2 size={13} />적용 취소</button>}
-          <button type="button" onClick={() => setPublishOpen(true)} className="flex h-9 items-center gap-1.5 rounded-lg border border-outline-variant/25 px-3 text-xs font-semibold text-on-surface-variant hover:bg-surface-container"><BookOpen size={14} />위키 검토함으로…</button>
+          <button type="button" onClick={() => setPublishOpen(true)} disabled={busy || loading || !baseDraft} className="flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-outline-variant/25 px-3 text-xs font-semibold text-on-surface-variant hover:bg-surface-container disabled:opacity-50" title="개인 초안을 별도의 검토함에 보냅니다. 위키에는 바로 게시되지 않습니다."><BookOpen size={14} />검토함으로 보내기</button>
         </div>
       </div>
 
-      {loadError && <div role="alert" className="mb-3 rounded-lg bg-error-container px-3 py-2 text-xs text-on-error-container">{loadError}<button type="button" onClick={() => void load()} className="ml-2 underline">다시 불러오기</button></div>}
+      {loading && !baseDraft && <p role="status" aria-live="polite" className="mb-3 rounded-lg bg-surface-container-low px-3 py-2 text-xs text-on-surface-variant">초안을 불러오는 중입니다. 완료될 때까지 편집과 요청 작업은 잠겨 있습니다.</p>}
+      {loadError && <div role="alert" className="mb-3 rounded-lg bg-error-container px-3 py-2 text-xs text-on-error-container">{loadError}<button type="button" onClick={() => void load()} disabled={loading} className="ml-2 underline disabled:opacity-50">{loading ? '다시 불러오는 중…' : '다시 불러오기'}</button></div>}
       {data.warnings.map((warning) => <p key={warning} className="mb-2 rounded-lg bg-tertiary-container/50 px-3 py-2 text-[10px] text-on-surface-variant">{warning}</p>)}
       {recoveryAvailable && <div role="status" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-primary/20 bg-primary-container/50 px-3 py-2"><p className="text-[11px] text-on-surface">저장 전 편집본이 이 장치의 브라우저 복구 사본에 있습니다. 복구 사본은 다른 PC로 이동하지 않습니다.</p><div className="flex gap-1.5"><button type="button" onClick={restoreRecovery} className="rounded-lg bg-primary px-2.5 py-1.5 text-[10px] font-bold text-on-primary">복구</button><button type="button" onClick={discardRecovery} className="rounded-lg px-2.5 py-1.5 text-[10px] hover:bg-surface-container">버리기</button></div></div>}
-      {publishResult && <div role="status" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary-container/55 px-3 py-2 text-[11px] text-on-surface"><span>{publishResult}</span><div className="flex gap-3">{publishHref && <Link href={publishHref} className="font-bold text-primary underline">Knowledge 열기</Link>}<button type="button" onClick={() => setPublishResult('')} className="text-outline">닫기</button></div></div>}
+      {publishResult && <div role="status" className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-lg bg-secondary-container/55 px-3 py-2 text-[12px] text-on-surface"><span>{publishResult}</span><div className="flex gap-3">{publishHref && <Link href={publishHref} className="font-bold text-primary underline">지식 검토함 열기</Link>}<button type="button" onClick={() => setPublishResult('')} className="text-outline">닫기</button></div></div>}
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 xl:grid-cols-[minmax(0,1fr)_320px] 2xl:grid-cols-[190px_minmax(0,1fr)_360px]">
         <aside className={`hidden min-h-0 overflow-y-auto rounded-xl border border-outline-variant/20 bg-surface-container-lowest p-2 2xl:block ${draftListCollapsed ? '2xl:w-14' : ''}`}>
           <div className="flex items-center justify-between px-2 py-1"><span className={`text-[10px] font-bold uppercase tracking-wide text-outline ${draftListCollapsed ? 'hidden' : ''}`}>초안</span><button type="button" onClick={() => setDraftListCollapsed((value) => !value)} className="rounded-lg p-1.5 text-on-surface-variant hover:bg-surface-container" aria-label={draftListCollapsed ? '초안 목록 펼치기' : '초안 목록 접기'}>{draftListCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}</button></div>
-          {!draftListCollapsed && <><button type="button" onClick={() => void createDraft()} disabled={busy} className="mb-2 flex w-full items-center justify-center gap-1 rounded-lg bg-primary-container px-2 py-2 text-[10px] font-bold text-primary"><Plus size={13} />새 초안</button>{data.drafts.map((draft) => <button key={draft.id} type="button" onClick={() => void selectDraft(draft.id)} className={`mb-1 block w-full rounded-lg px-2.5 py-2 text-left ${draft.id === activeId ? 'bg-primary-container text-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}><span className="block truncate text-[11px] font-semibold">{draft.title || '제목 없는 초안'}</span><span className="mt-0.5 block text-[9px] opacity-70">{new Date(draft.updatedAt).toLocaleDateString()}</span></button>)}</>}
+          {!draftListCollapsed && <><button type="button" onClick={() => void createDraft()} disabled={busy || loading || !baseDraft} className="mb-2 flex w-full items-center justify-center gap-1 rounded-lg bg-primary-container px-2 py-2 text-[11px] font-bold text-primary disabled:opacity-50"><Plus size={13} />새 초안</button>{visibleDrafts.map((draft) => <button key={draft.id} type="button" onClick={() => void selectDraft(draft.id)} disabled={loading || !baseDraft} className={`mb-1 block w-full rounded-lg px-2.5 py-2 text-left disabled:opacity-50 ${draft.id === activeId ? 'bg-primary-container text-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}><span className="block truncate text-[12px] font-semibold">{draft.title || '제목 없는 초안'}</span><span className="mt-0.5 block text-[11px] text-on-surface-variant">개인 초안 · 참고 자료 {draft.references.length}개 · {new Date(draft.updatedAt).toLocaleDateString()}</span></button>)}{draftQuery.trim() && !visibleDrafts.length && <p className="px-2 py-3 text-[11px] text-on-surface-variant">제목·본문·출처에서 일치하는 초안이 없습니다.</p>}</>}
         </aside>
 
         <main className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-lowest">
-          <div className="flex items-center justify-between border-b border-outline-variant/15 px-3 py-2"><div><p className="text-[10px] font-bold text-on-surface">초안 본문</p><p className="text-[9px] text-outline">Ctrl+S 저장 · AI 제안은 명시적으로 적용할 때만 본문에 들어갑니다.</p></div><span className="text-[9px] text-outline">{text.length.toLocaleString()}자</span></div>
-          <textarea ref={editorRef} value={text} onChange={(event) => { setText(event.target.value); editEpoch.current += 1; if (undoContent !== null) setUndoContent(null); }} placeholder="참조 없이도 바로 작성할 수 있습니다. 이 초안은 로컬에 저장되며 자동으로 AI에 전송되지 않습니다." className="min-h-0 flex-1 resize-none bg-transparent p-4 text-[13px] leading-7 text-on-surface outline-none sm:p-6 sm:text-sm" aria-label="초안 본문" />
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-outline-variant/15 px-3 py-2"><span className="text-[9px] text-outline">{busy ? '요청 중이어도 편집할 수 있습니다. 늦게 도착한 결과는 변경된 초안에 적용되지 않습니다.' : '원문 미참조 상태로도 작성 가능'}</span><button type="button" onClick={() => void openPreview()} disabled={busy || !baseDraft} className="flex items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2.5 py-1.5 text-[10px] font-bold text-on-surface-variant disabled:opacity-40"><Eye size={13} />요청 검토</button></div>
+          <div className="flex items-center justify-between border-b border-outline-variant/15 px-3 py-2"><div><p className="text-xs font-bold text-on-surface">초안 본문</p><p className="text-[11px] text-on-surface-variant">저장하지 않은 수정은 위 초안 저장을 눌러 보관하세요. AI 제안은 직접 적용할 때만 글에 반영됩니다.</p></div><span className="text-[11px] text-on-surface-variant">{text.length.toLocaleString()}자</span></div>
+          <textarea ref={editorRef} value={text} disabled={!baseDraft || loading} onChange={(event) => { setText(event.target.value); editEpoch.current += 1; if (undoContent !== null) setUndoContent(null); }} placeholder={loading ? '초안을 불러오는 중입니다…' : loadError ? '초안을 불러오지 못했습니다. 다시 불러온 뒤 편집하세요.' : '참조 없이도 쓸 수 있습니다. 이 글은 자동으로 AI에 전송되지 않습니다.'} className="min-h-0 flex-1 resize-none bg-transparent p-4 text-[13px] leading-7 text-on-surface outline-none disabled:cursor-wait disabled:opacity-60 sm:p-6 sm:text-sm" aria-label="초안 본문" aria-busy={loading && !baseDraft} />
+          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-outline-variant/15 px-3 py-2"><span className="text-[9px] text-outline">{loading && !baseDraft ? '초안 불러오는 중' : busy ? '요청 중이어도 편집할 수 있습니다. 늦게 도착한 결과는 변경된 초안에 적용되지 않습니다.' : '원문 미참조 상태로도 작성 가능'}</span><button type="button" onClick={() => void openPreview()} disabled={busy || loading || !baseDraft} className="flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-outline-variant/25 px-2.5 py-1.5 text-[10px] font-bold text-on-surface-variant disabled:opacity-40"><Eye size={13} />저장 후 요청 검토</button></div>
         </main>
 
         <aside className="flex min-h-[260px] flex-col overflow-hidden rounded-xl border border-outline-variant/20 bg-surface-container-lowest">
@@ -506,28 +547,28 @@ export function StudioWorkspace() {
             <button type="button" role="tab" aria-selected={requestTab === 'proposal'} onClick={() => setRequestTab('proposal')} className={`flex-1 rounded-lg px-2 py-2 text-[10px] font-bold ${requestTab === 'proposal' ? 'bg-primary-container text-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>AI 제안</button>
           </div>
           {requestTab === 'references' ? <>
-            <div className="flex items-center justify-between px-3 py-2"><div><p className="text-[10px] font-semibold text-on-surface">선택한 자료</p><p className="text-[9px] text-outline">추가만으로는 AI에 전송되지 않습니다.</p></div><button type="button" onClick={() => setPickerOpen(true)} className="flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-[10px] font-bold text-on-primary"><Plus size={12} />추가</button></div>
+          <div className="flex items-center justify-between px-3 py-2"><div><p className="text-[11px] font-semibold text-on-surface">참고할 자료</p><p className="text-[11px] text-on-surface-variant">추가만으로는 전송되지 않습니다.</p></div><button type="button" onClick={() => setPickerOpen(true)} disabled={loading || !baseDraft} className="flex items-center gap-1 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-bold text-on-primary disabled:opacity-50"><Plus size={12} />자료 추가</button></div>
             <div className="min-h-0 flex-1 overflow-y-auto p-2">
               {references.map((reference) => {
                 const source = data.sources.find((item) => item.id === reference.sourceId);
                 const included = reference.includeInRequest;
                 return <article key={reference.sourceId} className="mb-2 rounded-xl border border-outline-variant/20 bg-surface-container-low p-2.5">
-                  <div className="flex items-start gap-2"><div className="min-w-0 flex-1"><p className="line-clamp-2 break-words text-[11px] font-bold leading-4 text-on-surface" title={reference.title}>{reference.title}</p><p className="mt-0.5 truncate text-[9px] text-outline" title={`${LABELS[reference.kind]} · ${reference.originLabel}`}>{LABELS[reference.kind]} · {reference.originLabel}</p></div><button type="button" onClick={() => { setReferences((current) => current.filter((item) => item.sourceId !== reference.sourceId)); setProposal(null); editEpoch.current += 1; }} aria-label={`${reference.title} 참조 제거`} className="shrink-0 rounded-md p-1 text-outline hover:bg-surface-container-lowest hover:text-on-surface"><X size={13} /></button></div>
-                  <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1"><label className={`flex items-center gap-1.5 text-[9px] font-semibold ${refLimitReached && !included ? 'text-outline' : 'text-on-surface-variant'}`}><input type="checkbox" checked={included} disabled={refLimitReached && !included} onChange={(event) => { const checked = event.target.checked; setReferences((current) => current.map((item) => item.sourceId === reference.sourceId ? { ...item, includeInRequest: checked } : item)); setProposal(null); editEpoch.current += 1; }} />이번 요청에 포함</label>{source && <FocusableSourceLink source={source} root={root} />}</div>
-                  <details className="mt-1.5 border-t border-outline-variant/15 pt-1.5"><summary className="cursor-pointer text-[9px] font-medium text-on-surface-variant">참조 발췌 보기</summary><p className="mt-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap text-[10px] leading-4 text-on-surface-variant">{reference.excerpt || '본문 미리보기 없음'}</p></details>
+                  <div className="flex items-start gap-2"><div className="min-w-0 flex-1"><p className="line-clamp-2 break-words text-[12px] font-bold leading-5 text-on-surface" title={reference.title}>{reference.title}</p><p className="mt-0.5 truncate text-[11px] text-on-surface-variant" title={`${LABELS[reference.kind]} · ${reference.originLabel}`}>{LABELS[reference.kind]} · {sourceOriginForDisplay(reference.originLabel)}</p></div><button type="button" onClick={() => { setReferences((current) => current.filter((item) => item.sourceId !== reference.sourceId)); setProposal(null); editEpoch.current += 1; }} aria-label={`${reference.title} 참조 제거`} className="shrink-0 rounded-md p-1 text-outline hover:bg-surface-container-lowest hover:text-on-surface"><X size={14} /></button></div>
+                  <div className="mt-2 flex flex-wrap items-center justify-between gap-x-2 gap-y-1"><label className={`flex items-center gap-1.5 text-[11px] font-semibold ${refLimitReached && !included ? 'text-outline' : 'text-on-surface-variant'}`}><input type="checkbox" checked={included} disabled={refLimitReached && !included} onChange={(event) => { const checked = event.target.checked; setReferences((current) => current.map((item) => item.sourceId === reference.sourceId ? { ...item, includeInRequest: checked } : item)); setProposal(null); editEpoch.current += 1; }} />이번 요청에 포함</label><FocusableReferenceLink reference={reference} source={source} root={root} /></div>
+                  <details className="mt-1.5 border-t border-outline-variant/15 pt-1.5"><summary className="cursor-pointer text-[11px] font-medium text-on-surface-variant">저장된 발췌 보기</summary><p className="mt-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap text-[11px] leading-5 text-on-surface-variant">{reference.excerpt || '미리 볼 본문이 없습니다.'}</p></details>
                 </article>;
               })}
               {!references.length && <div className="p-5 text-center"><p className="text-xs font-semibold text-on-surface">참조 없이 쓸 수 있습니다.</p><p className="mt-1 text-[10px] leading-4 text-on-surface-variant">원문 근거가 필요하면 자료를 추가하고 전송 여부를 선택하세요.</p><Link href="/sources" className="mt-3 inline-block rounded-lg border border-outline-variant/25 px-2.5 py-1.5 text-[10px] font-semibold">자료함 열기</Link></div>}
             </div>
-            <div className="border-t border-outline-variant/15 px-3 py-2"><p className="text-[9px] text-on-surface-variant">이번 요청에 포함: {includedCount} / {MAX_REQUEST_REFS}</p><p className="mt-0.5 text-[9px] leading-4 text-outline">요청 전 미리보기에서 실제 전송될 초안·자료를 확인합니다.</p></div>
+            <div className="border-t border-outline-variant/15 px-3 py-2"><p className="text-[11px] text-on-surface-variant">이번 요청에 포함: {includedCount}개</p><p className="mt-0.5 text-[11px] leading-4 text-on-surface-variant">보내기 전 미리보기에서 초안과 선택한 발췌를 확인하세요.</p></div>
           </> : <div className="min-h-0 flex-1 overflow-y-auto p-3">
             {proposalMessage && <p role="status" className="mb-2 rounded-lg bg-surface-container-low px-2.5 py-2 text-[10px] leading-4 text-on-surface-variant">{proposalMessage}</p>}
             {liveProposal ? <>
-              <p className="text-[10px] font-bold text-primary">{liveProposal.provider} · {liveProposal.model} · AI 초안 · 검토 전</p><p className="mt-1 text-[9px] leading-4 text-on-surface-variant">{liveProposal.note}</p>
-              {liveProposal.unselectedReferenceIds.length > 0 && <p role="alert" className="mt-2 rounded-lg bg-error-container p-2 text-[10px] text-on-error-container">선택되지 않은 참조 ID를 사용했습니다. 적용 전에 직접 확인하세요: {liveProposal.unselectedReferenceIds.join(', ')}</p>}
+              <p className="text-[12px] font-semibold text-on-surface">AI 제안 · 검토 전</p><p className="mt-1 text-[11px] leading-5 text-on-surface-variant">제안의 사실 여부는 확인되지 않았습니다. 필요한 내용을 직접 살펴보세요.</p>
+              {liveProposal.unselectedReferenceIds.length > 0 && <p role="alert" className="mt-2 flex items-center gap-1 rounded-lg bg-error-container p-2 text-[12px] text-on-error-container">선택하지 않은 자료가 제안에 언급됐습니다. 적용 전에 확인하세요.<InfoHint label="언급된 자료의 고급 정보" text={`자료 식별자: ${liveProposal.unselectedReferenceIds.join(', ')}`} /></p>}
               <div className="mt-3 grid gap-2"><section className="rounded-lg border border-outline-variant/20"><h3 className="border-b border-outline-variant/15 px-2.5 py-1.5 text-[9px] font-bold text-outline">현재 본문</h3><pre className="max-h-36 overflow-auto whitespace-pre-wrap p-2.5 text-[10px] leading-4 text-on-surface-variant">{originalText || '(비어 있음)'}</pre></section><section className="rounded-lg border border-primary/25"><h3 className="border-b border-primary/15 px-2.5 py-1.5 text-[9px] font-bold text-primary">제안 본문</h3><pre className="max-h-48 overflow-auto whitespace-pre-wrap p-2.5 text-[10px] leading-4 text-on-surface">{applyPreview}</pre></section></div>
               <div className="mt-2 flex gap-2"><button type="button" onClick={applyProposal} disabled={!proposalCanApply} className="flex-1 rounded-lg bg-primary px-2.5 py-2 text-[10px] font-bold text-on-primary disabled:opacity-40">본문 전체에 적용</button>{undoContent !== null && <button type="button" onClick={undoProposal} className="rounded-lg border border-outline-variant/25 px-2 py-2 text-[10px] font-semibold"><Undo2 size={13} /></button>}</div>
-              {!proposalCanApply && <p className="mt-1 text-[9px] text-error">초안이 바뀌었습니다. 현재 제안은 적용할 수 없습니다.</p>}
+              {!proposalCanApply && <p className="mt-1 text-[11px] leading-5 text-error">초안이 바뀌었습니다. 현재 제안은 적용할 수 없습니다.</p>}
             </> : <div className="flex h-full flex-col items-center justify-center text-center"><CircleHelp size={22} className="text-outline" /><p className="mt-2 text-xs font-semibold text-on-surface">아직 제안이 없습니다.</p><p className="mt-1 text-[10px] leading-4 text-on-surface-variant">요청 검토에서 선택 범위를 확인한 다음 직접 실행하세요.</p></div>}
           </div>}
         </aside>
@@ -537,19 +578,19 @@ export function StudioWorkspace() {
 
     {pickerOpen && <ReferencePicker sources={data.sources} currentIds={[...selectedIds]} onAdd={addReference} onClose={() => setPickerOpen(false)} />}
     {previewOpen && baseDraft && <ConfirmationDialog title="AI 요청 전송 내용 확인" confirmLabel="확인 후 AI 제안 요청" busy={busy} onCancel={() => setPreviewOpen(false)} onConfirm={() => void requestProposal()}>
-      <p className="font-semibold text-on-surface">실제 전송 범위: 저장된 초안 본문 + {includedCount}개 선택 자료 + 아래 요청 지시문</p>
-      <p className="mt-1">자료를 참조 선반에 추가한 것만으로는 전송되지 않습니다. 이 버튼을 누르면 선택된 텍스트가 {provider === 'codex' ? 'Codex' : 'Claude Code'} provider를 통해 전송됩니다.</p>
+      <p className="font-semibold text-on-surface">AI에 보낼 내용: 저장한 초안 + 직접 고른 자료 {includedCount}개 + 아래 요청</p>
+      <p className="mt-1">자료를 목록에 추가해도 전송되지 않습니다. 이 확인을 누르면 선택한 텍스트가 {provider === 'codex' ? 'Codex' : 'Claude'}로 전송됩니다.</p>
       <label className="mt-3 block font-semibold text-on-surface">요청 내용
         <textarea value={instruction} onChange={(event) => setInstruction(event.target.value)} maxLength={8_000} rows={3} className="mt-1 w-full rounded-lg border border-outline-variant/25 bg-surface-container-low p-2 text-xs font-normal leading-5 outline-none focus:border-primary" />
       </label>
       <label className="mt-3 block font-semibold text-on-surface">기존 provider
         <select value={provider} onChange={(event) => setProvider(event.target.value as 'codex' | 'claude')} className="mt-1 w-full rounded-lg border border-outline-variant/25 bg-surface-container-low px-2 py-2 text-xs"><option value="codex">Codex (자동 모델)</option><option value="claude">Claude Code (자동 모델)</option></select>
       </label>
-      <details className="mt-3 rounded-lg border border-outline-variant/20"><summary className="cursor-pointer px-2.5 py-2 text-[10px] font-bold">전송 프롬프트 전체 보기 · {previewPrompt.length.toLocaleString()}자</summary><pre className="max-h-60 overflow-auto whitespace-pre-wrap border-t border-outline-variant/15 p-2.5 text-[9px] leading-4 text-on-surface-variant">{previewPrompt}</pre></details>
-      <p className="mt-2 text-[9px]">모델의 인용 ID만 요청 집합과 대조합니다. 사실 주장과 원문 간 entailment는 검증되지 않습니다.</p>
+      <details className="mt-3 rounded-lg border border-outline-variant/20"><summary className="cursor-pointer px-2.5 py-2 text-[11px] font-bold">AI에 보낼 전체 내용 보기</summary><pre className="max-h-60 overflow-auto whitespace-pre-wrap border-t border-outline-variant/15 p-2.5 text-[11px] leading-5 text-on-surface-variant">{previewPrompt}</pre></details>
+      <p className="mt-2 text-[12px] leading-5 text-on-surface-variant">AI가 만든 제안은 사실로 검증된 내용이 아닙니다. 필요한 부분을 직접 확인한 뒤 적용하세요.</p>
     </ConfirmationDialog>}
-    {publishOpen && <ConfirmationDialog title="기존 Knowledge 검토함에 연결" confirmLabel="검토함에 저장" busy={busy} onCancel={() => setPublishOpen(false)} onConfirm={() => void publishToKnowledge()}>
-      <p>저장된 Studio 초안과 참조 제목·안정 ID를 하나의 immutable Knowledge 입력으로 캡처합니다. 이는 위키 본문에 반영하는 작업이 아닙니다.</p><p className="mt-2">Knowledge 화면에서 기존 Codex 검토를 명시적으로 실행하고, 변경안을 비교·승인해야 위키가 바뀝니다. 초안 본문·참조 식별자는 선택된 다른 자료로 전송되지 않습니다.</p>
+    {publishOpen && <ConfirmationDialog title="지식 검토함에 보내기" confirmLabel="검토함에 저장" busy={busy} onCancel={() => setPublishOpen(false)} onConfirm={() => void publishToKnowledge()}>
+      <p>저장한 초안과 참고 자료를 지식 검토함으로 별도로 보냅니다. 이 작업만으로는 위키가 바뀌지 않습니다.</p><p className="mt-2">위키에 반영하기 전 검토 화면에서 제안 내용을 확인하고 승인해야 합니다. 초안 본문과 참고 자료는 구분해서 보냅니다.</p>
     </ConfirmationDialog>}
     {unsavedNavigation && <ConfirmationDialog title="저장되지 않은 변경" confirmLabel="저장 후 이동" onCancel={() => setUnsavedNavigation('')} onConfirm={() => void leaveAfterUnsaved(true)}><p>현재 편집은 아직 라이브러리 초안에 저장되지 않았습니다.</p><div className="mt-3 flex flex-wrap gap-2"><button type="button" onClick={() => void leaveAfterUnsaved(false)} className="rounded-lg border border-outline-variant/25 px-3 py-2 text-[10px] font-semibold text-on-surface-variant">이 장치 복구본 남기고 이동</button><button type="button" onClick={() => setUnsavedNavigation('')} className="rounded-lg px-3 py-2 text-[10px] font-semibold">계속 편집</button></div></ConfirmationDialog>}
   </div>;

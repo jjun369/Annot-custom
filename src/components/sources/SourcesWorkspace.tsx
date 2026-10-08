@@ -5,7 +5,9 @@ import Link from 'next/link';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { AppHeader } from '@/components/layout/AppHeader';
+import { ConceptSynthesisDialog } from '@/components/sources/ConceptSynthesisDialog';
 import { buildKnowledgeSourceReaderUrl } from '@/lib/knowledge-retrieval';
+import { sourceOriginForDisplay } from '@/lib/record-display';
 import { shouldCloseStudioEscape, SOURCE_KINDS } from '@/lib/sources-studio-shared';
 import type { StudioSource, StudioSourceKind } from '@/lib/sources-studio';
 import type { TreeNode } from '@/types';
@@ -115,8 +117,8 @@ function SourceDialog({
         {mode === 'edit' && source && <>
           {source.ownsText ? <label className="mt-3 block text-xs font-semibold text-on-surface">내 편집본
             <textarea required maxLength={200_000} value={text} onChange={(event) => setText(event.target.value)} rows={9} className="mt-1 w-full resize-y rounded-lg border border-outline-variant/30 bg-surface-container-low px-3 py-2.5 font-normal leading-6 outline-none focus:border-primary" />
-            <span className="mt-1 block text-[10px] font-normal text-on-surface-variant">수정 전 텍스트는 Sources/Studio revision에 남고, Knowledge의 캡처 원문은 바뀌지 않습니다.</span>
-          </label> : <div className="mt-3 rounded-xl bg-surface-container-low p-3 text-xs leading-5 text-on-surface-variant">원문 본문은 {source.origin === 'research' ? 'Research' : 'Knowledge'}의 기존 레코드에서 읽습니다. 이 화면은 별도 제목·분류·태그만 저장하며 캡처 원문을 덮어쓰지 않습니다.{original ? <span className="mt-2 block max-h-32 overflow-auto whitespace-pre-wrap text-[11px]">{original.slice(0, 1200)}</span> : null}</div>}
+            <span className="mt-1 block text-[10px] font-normal text-on-surface-variant">이전 글은 수정 이력에 남고, 지식 검토함에 보관한 원문은 바뀌지 않습니다.</span>
+        </label> : <div className="mt-3 rounded-xl bg-surface-container-low p-3 text-xs leading-5 text-on-surface-variant">원문은 기존 {source.origin === 'research' ? '리서치 자료' : '지식 메모'}에 보관됩니다. 여기서는 제목·분류·태그만 바꾸며 원문은 그대로 둡니다.{original ? <span className="mt-2 block max-h-32 overflow-auto whitespace-pre-wrap text-[11px]">{original.slice(0, 1200)}</span> : null}</div>}
         </>}
         {error && <p role="alert" className="mt-3 rounded-lg bg-error-container px-3 py-2 text-xs text-on-error-container">{error}</p>}
         <div className="mt-5 flex justify-end gap-2"><button type="button" onClick={onClose} disabled={busy} className="rounded-lg px-3 py-2 text-xs font-semibold text-on-surface-variant hover:bg-surface-container">취소</button><button type="submit" disabled={busy} className="flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-xs font-bold text-on-primary disabled:opacity-50">{busy && <LoaderCircle size={14} className="animate-spin" />}{busy ? '저장 중…' : '저장'}</button></div>
@@ -136,6 +138,7 @@ export function SourcesWorkspace() {
   const [filterRailCollapsed, setFilterRailCollapsed] = useState(false);
   const [dialog, setDialog] = useState<ComposeKind>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [synthesisOpen, setSynthesisOpen] = useState(false);
   const [loadError, setLoadError] = useState('');
   const importRef = useRef<HTMLDivElement>(null);
 
@@ -197,20 +200,23 @@ export function SourcesWorkspace() {
     return null;
   };
   const originalTarget = selected ? openOriginal(selected) : null;
+  const selectedOriginLabel = selected?.kind === 'memo' && selected.originLabel === `Sources 개인 메모 · ${selected.title}`
+    ? '내 기록'
+    : selected?.originLabel ? sourceOriginForDisplay(selected.originLabel) : undefined;
 
   return <div className="flex h-dvh min-h-[620px] flex-col bg-surface">
     <AppHeader active="sources" actions={<div className="flex items-center gap-1.5">
       <div ref={importRef} className="relative"><button type="button" onClick={() => setImportOpen((value) => !value)} aria-expanded={importOpen} className="flex h-9 items-center gap-1.5 rounded-lg border border-outline-variant/25 px-3 text-xs font-semibold text-on-surface-variant hover:bg-surface-container"><FolderOpen size={14} />가져오기</button>
-        {importOpen && <div className="absolute right-0 top-full z-50 mt-1 w-64 rounded-xl border border-outline-variant/25 bg-surface-container-lowest p-1 shadow-ambient"><Link href="/" onClick={() => setImportOpen(false)} className="block rounded-lg px-3 py-2 text-xs hover:bg-surface-container">라이브러리 파일·PDF 추가</Link><Link href="/research" onClick={() => setImportOpen(false)} className="block rounded-lg px-3 py-2 text-xs hover:bg-surface-container">Research 검색·프로젝트 자료</Link><Link href="/knowledge" onClick={() => setImportOpen(false)} className="block rounded-lg px-3 py-2 text-xs hover:bg-surface-container">Knowledge 파일·이미지·폴더 가져오기</Link></div>}
+        {importOpen && <div className="absolute right-0 top-full z-50 mt-1 w-64 rounded-xl border border-outline-variant/25 bg-surface-container-lowest p-1 shadow-ambient"><Link href="/" onClick={() => setImportOpen(false)} className="block rounded-lg px-3 py-2 text-xs hover:bg-surface-container">라이브러리 파일·PDF 추가</Link><Link href="/research" onClick={() => setImportOpen(false)} className="block rounded-lg px-3 py-2 text-xs hover:bg-surface-container">리서치 자료·프로젝트 찾기</Link><Link href="/knowledge" onClick={() => setImportOpen(false)} className="block rounded-lg px-3 py-2 text-xs hover:bg-surface-container">지식 메모·이미지·폴더 가져오기</Link></div>}
       </div>
       <button type="button" onClick={() => setDialog('clip')} className="flex h-9 items-center gap-1.5 rounded-lg px-2.5 text-xs font-semibold text-on-surface-variant hover:bg-surface-container"><Link2 size={14} />클립 추가</button>
+      <button type="button" onClick={() => setSynthesisOpen(true)} aria-label="기록을 바탕으로 개념 초안 만들기" title="선택한 기록을 확인한 뒤 개인 초안으로 정리합니다" className="flex h-9 items-center gap-1.5 rounded-lg border border-primary/25 px-2.5 text-xs font-semibold text-primary hover:bg-primary-container/40"><Search size={14} />개념 초안 만들기</button>
       <button type="button" onClick={() => setDialog('memo')} className="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-xs font-bold text-on-primary"><Plus size={14} />새 메모</button>
     </div>} />
     <div className="mx-auto flex w-full max-w-[1600px] flex-1 min-h-0 flex-col px-3 py-3 sm:px-5">
       <div className="mb-3 flex items-center justify-between border-b border-outline-variant/20 px-1">
-        <nav aria-label="자료함 메뉴" className="flex gap-5"><span className="border-b-2 border-primary px-1 pb-2 text-xs font-bold text-primary">내 자료</span><Link href="/research" className="px-1 pb-2 text-xs font-medium text-on-surface-variant hover:text-on-surface">리서치 검색·프로젝트</Link></nav>
+        <nav aria-label="자료함 메뉴" className="flex items-center gap-4"><span className="pb-2 text-[11px] text-on-surface-variant">수집한 자료와 내 기록</span><Link href="/research" className="px-1 pb-2 text-xs font-medium text-on-surface-variant hover:text-on-surface">리서치 검색·프로젝트</Link></nav>
         <div className="flex items-center gap-2">
-          <span className="hidden pb-2 text-[10px] text-outline sm:block">Research·Knowledge 원문은 기존 저장소에서 읽습니다.</span>
           <button type="button" aria-controls="sources-filter-rail" aria-expanded={!filterRailCollapsed} onClick={() => setFilterRailCollapsed((value) => !value)} className="hidden rounded-lg border border-outline-variant/25 px-2.5 py-1.5 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container xl:inline-flex">{filterRailCollapsed ? '필터 펼치기' : '필터 접기'}</button>
         </div>
       </div>
@@ -251,10 +257,10 @@ export function SourcesWorkspace() {
           {selected ? <>
             <div className="mx-auto max-w-[78ch]">
               <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0"><p className="text-[10px] font-semibold text-primary">{KIND_LABELS[selected.kind]} · {selected.originLabel}</p><h1 className="mt-1 break-words text-xl font-bold text-on-surface">{selected.title}</h1><p className="mt-1 break-all text-[10px] text-outline">{selected.id}</p></div>
+                <div className="min-w-0"><p className="text-[11px] font-semibold text-primary">{KIND_LABELS[selected.kind]}{selectedOriginLabel ? ` · ${selectedOriginLabel}` : ''}</p><h1 className="mt-1 break-words text-xl font-bold text-on-surface">{selected.title}</h1></div>
                 <div className="flex shrink-0 flex-wrap gap-1.5">
                   {originalTarget && <a href={originalTarget.href} target={originalTarget.external ? '_blank' : undefined} rel={originalTarget.external ? 'noreferrer' : undefined} className="flex h-8 items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2.5 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"><ExternalLink size={13} />원문 열기</a>}
-                  <Link href={`/studio?source=${encodeURIComponent(selected.id)}`} className="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-bold text-on-primary"><Pencil size={13} />글에 활용</Link>
+                  <Link href={`/studio?source=${encodeURIComponent(selected.id)}`} className="flex h-8 items-center gap-1.5 rounded-lg bg-primary px-2.5 text-[10px] font-bold text-on-primary"><Pencil size={13} />초안에 쓰기</Link>
                   <button type="button" onClick={() => setDialog('edit')} className="flex h-8 items-center gap-1.5 rounded-lg border border-outline-variant/25 px-2.5 text-[10px] font-semibold text-on-surface-variant hover:bg-surface-container"><Pencil size={13} />편집</button>
                 </div>
               </div>
@@ -262,13 +268,13 @@ export function SourcesWorkspace() {
               {selected.url && <a href={selected.url} target="_blank" rel="noreferrer" className="mt-3 inline-flex max-w-full items-center gap-1 break-all text-[11px] text-primary hover:underline"><ExternalLink size={12} />{selected.url}</a>}
               {selected.ownsText && selected.text !== selected.originalText && <p className="mt-4 rounded-lg bg-tertiary-container/50 px-3 py-2 text-[10px] leading-4 text-on-surface-variant">아래는 사용자가 편집한 버전입니다. 캡처 당시 원문은 별도 탭에 보존되어 있습니다.</p>}
               <SourceText text={selected.text} original={selected.originalText} ownsText={selected.ownsText} />
-              <div className="mt-5 border-t border-outline-variant/20 pt-3 text-[10px] text-outline">Stable ID: {selected.id} · 원문 기록 {new Date(selected.sourceUpdatedAt).toLocaleString()}</div>
             </div>
           </> : <div className="flex h-full flex-col items-center justify-center text-center text-on-surface-variant"><FolderOpen size={28} /><p className="mt-2 text-sm font-semibold">자료를 선택해 주세요</p><p className="mt-1 text-xs">새 메모는 PDF 없이도 만들 수 있습니다.</p></div>}
         </section>
       </div>
     </div>
     {dialog && <SourceDialog key={`${dialog}-${selected?.id ?? 'new'}`} mode={dialog} source={dialog === 'edit' ? selected ?? undefined : undefined} onClose={() => setDialog(null)} onCreated={(source) => { newSource(source); void refresh(); }} onUpdated={(source) => { setSources((items) => items.map((item) => item.id === source.id ? source : item)); }} />}
+    <ConceptSynthesisDialog open={synthesisOpen} root={root} onClose={() => setSynthesisOpen(false)} />
   </div>;
 }
 
@@ -280,6 +286,6 @@ function SourceText({ text, original, ownsText }: { text: string; original: stri
       <button type="button" role="tab" aria-selected={!showOriginal} onClick={() => setShowOriginal(false)} className={`rounded-lg px-3 py-1.5 text-[10px] font-semibold ${!showOriginal ? 'bg-primary-container text-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>편집본</button>
       <button type="button" role="tab" aria-selected={showOriginal} onClick={() => setShowOriginal(true)} className={`rounded-lg px-3 py-1.5 text-[10px] font-semibold ${showOriginal ? 'bg-primary-container text-primary' : 'text-on-surface-variant hover:bg-surface-container'}`}>캡처 원문</button>
     </div>}
-    <article className="selectable-text mt-5 min-h-64 whitespace-pre-wrap break-words rounded-xl bg-surface-container-low p-4 text-[13px] leading-7 text-on-surface">{displayed || '저장된 본문이 없습니다.'}</article>
+    <article className="selectable-text mt-4 min-h-24 whitespace-pre-wrap break-words rounded-xl bg-surface-container-low p-3.5 text-[13px] leading-6 text-on-surface">{displayed || '저장된 본문이 없습니다.'}</article>
   </>;
 }

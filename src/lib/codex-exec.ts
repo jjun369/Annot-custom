@@ -13,8 +13,8 @@ import {
 } from '@/lib/command-runtime';
 import { isAutoModel } from '@/lib/ai-providers/model-policy';
 import { isAutoReasoningEffort, normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
-import { buildProviderSourceContextBlock } from '@/lib/ai-providers/source-context';
-import type { ChatSourceContext, ReasoningEffort, SessionKind } from '@/types';
+import { buildProviderRecordContextBlock, buildProviderSourceContextBlock } from '@/lib/ai-providers/source-context';
+import type { ChatRecordContextSnapshot, ChatSourceContext, ReasoningEffort, SessionKind } from '@/types';
 
 export interface ExecResult {
   codexSessionId: string;
@@ -44,6 +44,7 @@ interface RunTurnInput {
   prompt: string;
   currentPdfPath?: string | null;
   sourceContext?: ChatSourceContext;
+  recordContext?: ChatRecordContextSnapshot;
   ephemeral?: boolean;
 }
 
@@ -125,6 +126,7 @@ function buildPrompt({
   prompt,
   currentPdfPath,
   sourceContext,
+  recordContext,
 }: Omit<RunTurnInput, 'codexSessionId' | 'model'>): string {
   const workspaceRoot = getWorkspaceRoot();
   const contextLines = sessionKind === 'sidechat'
@@ -151,6 +153,7 @@ function buildPrompt({
     '- In your final answer to the user, do not include progress updates, tool narration, or chain-of-thought.',
     '- The final answer should contain only the user-facing result.',
     ...buildProviderSourceContextBlock(sourceContext),
+    ...buildProviderRecordContextBlock(recordContext),
     '',
     'User request:',
     prompt,

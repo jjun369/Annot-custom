@@ -18,8 +18,8 @@ interface AppHeaderProps {
 const PRIMARY_NAV_ITEMS = [
   { id: 'library' as const, href: '/', label: '라이브러리', icon: BookOpen },
   { id: 'sources' as const, href: '/sources', label: '자료함', icon: BookOpenText },
-  { id: 'knowledge' as const, href: '/knowledge', label: '지식 위키', icon: BookOpenText },
-  { id: 'studio' as const, href: '/studio', label: '글쓰기', icon: PencilLine },
+  { id: 'knowledge' as const, href: '/knowledge', label: '지식 노트', icon: BookOpenText },
+  { id: 'studio' as const, href: '/studio', label: '정리 초안', icon: PencilLine },
 ];
 
 const SECONDARY_NAV_ITEMS = [

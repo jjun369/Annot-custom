@@ -1,5 +1,5 @@
 import { getClaudeAuthStatus, probeClaudeConnection, runClaudeTurn } from '@/lib/claude-code';
-import { buildProviderSourceContextBlock } from '@/lib/ai-providers/source-context';
+import { buildProviderRecordContextBlock, buildProviderSourceContextBlock } from '@/lib/ai-providers/source-context';
 import { fetchCodexModels, getCodexAuthStatus, sendCodexChat } from '@/lib/codex-auth';
 import {
   getCodexCliAuthStatus,
@@ -137,6 +137,7 @@ const codexRuntime: ProviderRuntime = {
           prompt: input.prompt,
           currentPdfPath: input.currentPdfPath,
           sourceContext: input.sourceContext,
+          recordContext: input.recordContext,
         },
         options,
       );
@@ -165,7 +166,9 @@ const codexRuntime: ProviderRuntime = {
           { role: 'user', content: input.prompt },
         ],
         input.model,
-        input.sourceContext ? buildProviderSourceContextBlock(input.sourceContext).join('\n') : undefined,
+        [...buildProviderSourceContextBlock(input.sourceContext), ...buildProviderRecordContextBlock(input.recordContext)].length
+          ? [...buildProviderSourceContextBlock(input.sourceContext), ...buildProviderRecordContextBlock(input.recordContext)].join('\n')
+          : undefined,
       );
 
       return {

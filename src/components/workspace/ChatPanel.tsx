@@ -13,6 +13,7 @@ import {
   writeStoredReasoningEffort,
 } from '@/lib/ai-providers/reasoning-policy';
 import { MarkdownPreviewDialog } from '@/components/common/MarkdownPreviewDialog';
+import { InfoHint } from '@/components/common/InfoHint';
 import { KnowledgePromotionDialog, type KnowledgePromotionCandidate } from '@/components/knowledge/KnowledgePromotionDialog';
 import { DeepSeekActions, DeepSeekComparisonDialog, DeepSeekImportDialog, DeepSeekPromptDialog } from '@/components/workspace/DeepSeekWebDialogs';
 import { buildSessionSummaryMarkdown, getSessionSummaryMarkdownFileName } from '@/lib/session-summary-markdown';
@@ -20,7 +21,7 @@ import { useWorkspace } from '@/lib/workspace-store';
 import { canRequestDeepSeekWebPerspective } from '@/lib/deepseek-web-bridge';
 import { useDeepSeekBridge } from '@/components/workspace/useDeepSeekBridge';
 import { AI_PROVIDER_EVENT, readStoredAIProvider } from '@/lib/provider-preferences';
-import { AIProvider, ChatMessage, ChatSourceContext, ReasoningEffort, Session, SessionKind, SessionTurnSummary } from '@/types';
+import { AIProvider, ChatMessage, ChatRecordContextSnapshot, ChatSourceContext, ReasoningEffort, Session, SessionKind, SessionTurnSummary } from '@/types';
 import { useFeedback } from '@/components/common/FeedbackProvider';
 import {
   CHAT_FONT_SIZE_EVENT,
@@ -28,6 +29,9 @@ import {
   readStoredChatFontSize,
 } from '@/lib/chat-preferences';
 import { shouldSubmitChatOnEnter } from '@/lib/chat-keyboard';
+import { buildKnowledgeSourceReaderUrl } from '@/lib/knowledge-retrieval';
+import { studioDraftHrefFromRecordId } from '@/lib/studio-draft-search';
+import { recordOriginForDisplay, recordProvenanceForDisplay } from '@/lib/record-display';
 
 const MAX_INPUT_HEIGHT = 180;
 const FALLBACK_CODEX_REASONING_LEVELS: ReasoningEffort[] = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
@@ -95,6 +99,7 @@ interface SendPromptOptions {
   prompt: string;
   sourceContext?: ChatSourceContext;
   displayContent?: string;
+  recordLookup?: { enabled: true; scope: 'document' | 'library'; page?: number; includeIds: string[]; snapshotHash: string };
 }
 
 interface SessionUiState {
@@ -142,6 +147,7 @@ export function ChatPanel() {
     activeSessionPdfPath,
     activeSessionId,
     activePdf,
+    treeRoot,
     openSession,
     toggleChat,
     activePdfPage,
@@ -174,6 +180,16 @@ export function ChatPanel() {
   const [summaryExportOpen, setSummaryExportOpen] = useState(false);
   const [chatFontSize, setChatFontSize] = useState(DEFAULT_CHAT_FONT_SIZE);
   const [pdfScope, setPdfScope] = useState<'pdf' | 'page'>('pdf');
+  const [recordLookupEnabled, setRecordLookupEnabled] = useState(false);
+  const [recordLookupScope, setRecordLookupScope] = useState<'document' | 'library'>('document');
+  const [recordPreview, setRecordPreview] = useState<ChatRecordContextSnapshot | null>(null);
+  const [recordCandidates, setRecordCandidates] = useState<ChatRecordContextSnapshot | null>(null);
+  const [recordPreviewQuery, setRecordPreviewQuery] = useState('');
+  const [recordPreviewLoading, setRecordPreviewLoading] = useState(false);
+  const [recordPreviewError, setRecordPreviewError] = useState('');
+  const [includedRecordIds, setIncludedRecordIds] = useState<string[]>([]);
+  const [recordPreviewHash, setRecordPreviewHash] = useState('');
+  const recordSearchEpochRef = useRef(0);
   const [composerSelectionSourceContext, setComposerSelectionSourceContext] = useState<ChatSourceContext | undefined>();
   const [deepSeekDirectComposer, setDeepSeekDirectComposer] = useState(false);
   const [knowledgePromotionCandidate, setKnowledgePromotionCandidate] = useState<KnowledgePromotionCandidate | null>(null);
@@ -831,6 +847,7 @@ export function ChatPanel() {
     prompt,
     sourceContext,
     displayContent,
+    recordLookup,
   }: SendPromptOptions) => {
     if (!prompt.trim() || isLoading || !activeSessionFolder || !activeSessionKind) return;
     let targetSessionId: string | null = null;
@@ -874,6 +891,7 @@ export function ChatPanel() {
             ? (activeSessionPdfPath || activePdf?.path || null)
             : (activePdf?.path || null),
           sourceContext,
+          ...(recordLookup ? { recordLookup } : {}),
         }),
       });
 
@@ -951,9 +969,81 @@ export function ChatPanel() {
   };
   sendPromptRef.current = sendPrompt;
 
+  useEffect(() => {
+    recordSearchEpochRef.current += 1;
+    setRecordPreview(null);
+    setRecordCandidates(null);
+    setRecordPreviewQuery('');
+    setRecordPreviewHash('');
+    setIncludedRecordIds([]);
+    setRecordPreviewError('');
+  }, [activePdf?.documentId, activeSessionFolder, activeSessionKind, pdfScope, activePdfPage, input, recordLookupScope]);
+
+  useEffect(() => {
+    setRecordLookupEnabled(false);
+    setRecordLookupScope('document');
+  }, [activePdf?.documentId, activeSessionFolder, activeSessionKind]);
+
+  const prepareSelectedRecords = useCallback(async (query: string, ids: string[], epoch: number) => {
+    if (!ids.length) { setRecordPreviewHash(''); return; }
+    const sessionId = recordLookupScope === 'document' ? await ensureSessionIdRef.current() : undefined;
+    if (recordSearchEpochRef.current !== epoch) return;
+    const response = await fetch('/api/records', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'chat-prepare', scope: recordLookupScope, folderPath: activeSessionFolder,
+        sessionId, query, recordIds: ids, page: recordLookupScope === 'document' && pdfScope === 'page' ? activePdfPage : undefined }) });
+    const body = await response.json() as ChatRecordContextSnapshot & { error?: string };
+    if (!response.ok) throw new Error(body.error || '전송할 기록을 준비하지 못했습니다.');
+    if (recordSearchEpochRef.current !== epoch || inputRef.current?.value.trim() !== query) return;
+    setRecordPreview(body); setRecordPreviewHash(body.snapshotHash || ''); setRecordPreviewQuery(query);
+  }, [activeSessionFolder, activePdfPage, pdfScope, recordLookupScope]);
+
+  const refreshSelectedRecords = async (ids: string[]) => {
+    setIncludedRecordIds(ids); setRecordPreviewHash('');
+    if (!recordLookupEnabled || !recordPreviewQuery || !ids.length) return;
+    const epoch = ++recordSearchEpochRef.current;
+    setRecordPreviewLoading(true); setRecordPreviewError('');
+    try { await prepareSelectedRecords(recordPreviewQuery, ids, epoch); }
+    catch (error) { if (recordSearchEpochRef.current === epoch) setRecordPreviewError(error instanceof Error ? error.message : '기록을 다시 준비하지 못했습니다.'); }
+    finally { if (recordSearchEpochRef.current === epoch) setRecordPreviewLoading(false); }
+  };
+
+  useEffect(() => {
+    const query = input.trim();
+    const epoch = ++recordSearchEpochRef.current;
+    setRecordPreview(null); setRecordCandidates(null); setRecordPreviewHash(''); setRecordPreviewQuery(''); setIncludedRecordIds([]); setRecordPreviewError('');
+    if (!recordLookupEnabled || !query || activeSessionKind !== 'pdf') { setRecordPreviewLoading(false); return; }
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        setRecordPreviewLoading(true);
+        try {
+          const sessionId = recordLookupScope === 'document' ? await ensureSessionIdRef.current() : undefined;
+          if (recordSearchEpochRef.current !== epoch) return;
+          const response = await fetch('/api/records', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'chat-search', scope: recordLookupScope, folderPath: activeSessionFolder,
+              sessionId, query, page: recordLookupScope === 'document' && pdfScope === 'page' ? activePdfPage : undefined }) });
+          const found = await response.json() as ChatRecordContextSnapshot & { error?: string };
+          if (!response.ok) throw new Error(found.error || '기록을 검색하지 못했습니다.');
+          if (recordSearchEpochRef.current !== epoch || inputRef.current?.value.trim() !== query) return;
+          const ids = found.records.slice(0, 8).map((record) => record.id);
+          setRecordCandidates(found);
+          setIncludedRecordIds(ids);
+          if (!ids.length) { setRecordPreview(found); setRecordPreviewQuery(query); return; }
+          await prepareSelectedRecords(query, ids, epoch);
+        } catch (error) {
+          if (recordSearchEpochRef.current === epoch) setRecordPreviewError(error instanceof Error ? error.message : '기록을 검색하지 못했습니다.');
+        } finally { if (recordSearchEpochRef.current === epoch) setRecordPreviewLoading(false); }
+      })();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [recordLookupEnabled, activeSessionKind, activeSessionFolder, activePdf?.documentId, recordLookupScope, pdfScope, activePdfPage, input, prepareSelectedRecords]);
+
   const handleSend = () => {
     const prompt = input.trim();
     if (!prompt || isLoading) return;
+    if (recordLookupEnabled && (!recordPreview || recordPreviewQuery !== prompt || !recordPreviewHash || recordPreviewLoading)) {
+      notify('질문과 포함할 기록을 먼저 확인해 주세요.', 'error');
+      return;
+    }
     const sourceContext = activeSessionKind === 'pdf'
       ? {
         id: crypto.randomUUID(),
@@ -965,7 +1055,12 @@ export function ChatPanel() {
     setInput('');
     setComposerSelectionSourceContext(undefined);
     setDeepSeekDirectComposer(false);
-    void sendPrompt({ prompt, sourceContext });
+    const recordLookup = recordLookupEnabled && recordPreviewHash
+      ? { enabled: true as const, scope: recordLookupScope, page: recordLookupScope === 'document' && pdfScope === 'page' ? activePdfPage : undefined, includeIds: includedRecordIds, snapshotHash: recordPreviewHash }
+      : undefined;
+    setRecordPreview(null);
+    setIncludedRecordIds([]);
+    void sendPrompt({ prompt, sourceContext, recordLookup });
   };
 
   const handleDirectDeepSeek = () => {
@@ -1188,6 +1283,21 @@ export function ChatPanel() {
         {getSourceChipLabel(sourceContext)}
       </button>
     );
+  };
+  const renderRecordContext = (snapshot: ChatRecordContextSnapshot | undefined) => {
+    if (!snapshot?.records.length) return null;
+    return <div className="mt-2 space-y-1 border-t border-current/10 pt-1.5" aria-label="이번 질문에 전송한 내 기록">
+      <p className="text-[9px] font-semibold opacity-80">이번 질문에 참고한 기록 · {snapshot.scope === 'document' ? '현재 PDF' : '내 자료'}</p>
+      {snapshot.records.map((record) => {
+        const draftHref = studioDraftHrefFromRecordId(record.id);
+        const href = draftHref ?? buildKnowledgeSourceReaderUrl(treeRoot, record.anchor ? { documentId: record.anchor.documentId, page: record.anchor.page, rects: record.anchor.rects } : null);
+        return <div key={record.id} className="rounded-md bg-black/5 px-2 py-1 text-[9px] leading-4">
+          <div className="flex items-center justify-between gap-2"><span className="min-w-0"><span className="block truncate font-semibold">{record.title}</span><span className="block truncate opacity-80">{recordOriginForDisplay(record)} · {recordProvenanceForDisplay(record)}</span></span>{href && <button type="button" onClick={() => { window.location.href = href; }} className="shrink-0 underline">{draftHref ? '개인 초안 열기' : '원문'}</button>}</div>
+          <p className="line-clamp-2 whitespace-pre-wrap opacity-80">{record.excerpt}</p>
+        </div>;
+      })}
+      {snapshot.omittedCount > 0 && <p className="text-[9px] opacity-70">추가 일치 기록 {snapshot.omittedCount}개는 분량 한도로 제외됨</p>}
+    </div>;
   };
   const canCreateStudyCard = (message: ChatMessage): boolean => Boolean(
     message.role === 'assistant'
@@ -1439,6 +1549,7 @@ export function ChatPanel() {
                 <div className="max-w-[90%] bg-primary text-on-primary px-3.5 py-2.5 rounded-2xl rounded-tr-sm">
                   <p className="selectable-text whitespace-pre-wrap break-words" style={userFontStyle}>{msg.content}</p>
                   {renderSourceChip(msg.sourceContext)}
+                  {renderRecordContext(msg.recordContext)}
                   {deepSeek.buildTarget(msg) && (
                     <DeepSeekActions
                       message={msg}
@@ -1573,6 +1684,36 @@ export function ChatPanel() {
             </button>
           ))}
         </div>
+        {activeSessionKind === 'pdf' && <section className="mb-2 rounded-xl border border-outline-variant/20 bg-surface-container-lowest px-3 py-2" aria-label="내 기록 참고 설정">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <label className="flex items-center gap-2 text-[10px] font-semibold text-on-surface-variant">
+              <input type="checkbox" checked={recordLookupEnabled} disabled={isLoading} onChange={(event) => {
+                setRecordLookupEnabled(event.target.checked);
+                recordSearchEpochRef.current += 1;
+                setRecordPreview(null); setRecordPreviewQuery(''); setIncludedRecordIds([]); setRecordPreviewError('');
+              }} />
+              내 기록 참고
+            </label>
+            <InfoHint label="내 기록 참고 안내" text="기본은 꺼져 있습니다. 켜면 질문과 관련된 기록을 이 기기에서 찾습니다. 현재 PDF가 기본 범위이고, 다른 자료까지 찾으려면 범위를 직접 바꾸세요. 선택한 발췌만 AI 요청에 포함되며 원본 PDF와 이미지는 보내지 않습니다. 한 번에 최대 8개 기록, 발췌 전체 8,000자까지입니다." />
+            {recordLookupEnabled && <>
+              <select aria-label="내 기록 검색 범위" value={recordLookupScope} disabled={isLoading} onChange={(event) => setRecordLookupScope(event.target.value === 'library' ? 'library' : 'document')} className="rounded-md border border-outline-variant/25 bg-white px-2 py-1 text-[10px]">
+                <option value="document">현재 PDF 기록</option><option value="library">내 자료 전체에서 찾기</option>
+              </select>
+              <span className="inline-flex items-center gap-1 text-[11px] text-on-surface-variant">{recordPreviewLoading && <Loader2 size={12} className="animate-spin" />}{recordPreviewLoading ? '관련 기록을 찾는 중…' : recordPreviewHash ? '보낼 발췌를 확인할 수 있습니다' : '질문을 입력하면 관련 기록을 찾습니다'}</span>
+            </>}
+            {!recordLookupEnabled && <span className="text-[11px] text-on-surface-variant">기본 꺼짐 · 켜면 관련 기록을 찾고, 선택한 부분만 함께 보냅니다.</span>}
+          </div>
+          {recordLookupEnabled && <p className="mt-1 text-[11px] leading-4 text-on-surface-variant">끄면 다음 질문부터 찾지 않습니다. 이미 보낸 내용은 이전 대화에 남습니다.</p>}
+          {recordPreviewError && <p role="alert" className="mt-1 text-[10px] text-error">{recordPreviewError}</p>}
+          {recordCandidates && recordPreviewQuery === input.trim() && <div className="mt-2 max-h-32 space-y-1 overflow-y-auto border-t border-outline-variant/15 pt-2">
+            {!recordCandidates.records.length && <p className="text-[10px] text-outline">질문과 일치하는 기록이 없습니다.</p>}
+            {recordCandidates.records.map((record) => <label key={record.id} className="flex cursor-pointer gap-2 rounded-md px-1.5 py-1 hover:bg-surface-container-low">
+              <input type="checkbox" checked={includedRecordIds.includes(record.id)} disabled={isLoading || recordPreviewLoading} onChange={(event) => void refreshSelectedRecords(event.target.checked ? [...includedRecordIds, record.id].slice(0, 8) : includedRecordIds.filter((id) => id !== record.id))} className="mt-0.5" />
+              <span className="min-w-0"><span className="block truncate text-[11px] font-semibold text-on-surface">{record.title}</span>{studioDraftHrefFromRecordId(record.id) ? <span className="my-0.5 inline-flex rounded-full bg-tertiary-container px-2 py-0.5 text-[11px] font-semibold text-on-surface">개인 초안 · 검토 전 · 문헌 근거 아님</span> : <span className="block text-[11px] text-on-surface-variant">{record.provenanceLabel}</span>}<span className="line-clamp-2 block whitespace-pre-wrap text-[11px] leading-5 text-on-surface-variant">{record.excerpt}</span></span>
+            </label>)}
+            {!!recordCandidates.records.length && <><p className="flex items-center gap-1 px-1.5 text-[11px] text-on-surface-variant">검색 결과 {recordCandidates.records.length}개 · 선택 {includedRecordIds.length}개{recordCandidates.omittedCount ? ` · ${recordCandidates.omittedCount}개 더 있음` : ''} · {recordLookupScope === 'library' ? '내 자료 전체' : '현재 PDF'}<InfoHint label="검색 및 발췌 한도 안내" text="한 질문에 최대 8개 기록과 발췌 8,000자까지 포함됩니다. 표시되는 미리보기에서 실제로 보낼 제목, 출처 성격, 내용을 확인하세요." /></p><details className="mx-1.5 rounded border border-outline-variant/15 px-2 py-1"><summary className="cursor-pointer text-[11px] font-semibold">{recordPreviewHash ? '실제 보낼 발췌 확인' : '발췌 미리보기 준비 중'}</summary>{recordPreview?.records.map((record) => <div key={record.id} className="mt-2 whitespace-pre-wrap text-[11px] leading-5"><b>{record.title}</b><span className="block text-on-surface-variant">{studioDraftHrefFromRecordId(record.id) ? '개인 초안 · 검토 전 · 문헌 근거 아님' : `${recordOriginForDisplay(record)} · ${recordProvenanceForDisplay(record)}`}</span><span className="block">{record.excerpt}</span><details className="mt-1"><summary className="cursor-pointer text-[10px] text-outline">고급 정보 · 자료 식별자</summary><code className="block break-all text-[10px] text-outline">{record.id}</code></details></div>)}</details></>}
+          </div>}
+        </section>}
         <div className="flex items-end gap-2 bg-surface-container-low rounded-xl px-3 py-2.5">
           {activeSessionKind === 'pdf' && (
             <select
@@ -1601,7 +1742,7 @@ export function ChatPanel() {
           />
           <button
             onClick={handleSend}
-            disabled={isLoading || !selectedModel || !activeSessionFolder || !activeSessionKind}
+            disabled={isLoading || !selectedModel || !activeSessionFolder || !activeSessionKind || (recordLookupEnabled && (!recordPreview || recordPreviewQuery !== input.trim() || !recordPreviewHash || recordPreviewLoading))}
             className="w-7 h-7 rounded-lg bg-primary text-on-primary flex items-center justify-center hover:opacity-90 transition-opacity disabled:opacity-50 shrink-0"
           >
             <Send size={13} strokeWidth={2} />

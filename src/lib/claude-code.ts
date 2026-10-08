@@ -10,8 +10,8 @@ import {
   resolveExecutable,
 } from '@/lib/command-runtime';
 import { AUTO_MODEL_ID, isAutoModel } from '@/lib/ai-providers/model-policy';
-import { buildProviderSourceContextBlock } from '@/lib/ai-providers/source-context';
-import type { ChatSourceContext, SessionKind } from '@/types';
+import { buildProviderRecordContextBlock, buildProviderSourceContextBlock } from '@/lib/ai-providers/source-context';
+import type { ChatRecordContextSnapshot, ChatSourceContext, SessionKind } from '@/types';
 
 export interface ClaudeCodeAuthStatus {
   authenticated: boolean;
@@ -47,6 +47,7 @@ interface ClaudeRunTurnInput {
   prompt: string;
   currentPdfPath?: string | null;
   sourceContext?: ChatSourceContext;
+  recordContext?: ChatRecordContextSnapshot;
 }
 
 interface ClaudeStreamEvent {
@@ -96,6 +97,7 @@ function buildPrompt({
   prompt,
   currentPdfPath,
   sourceContext,
+  recordContext,
 }: Omit<ClaudeRunTurnInput, 'providerSessionId' | 'model'>): string {
   const workspaceRoot = getWorkspaceRoot();
   const contextLines = sessionKind === 'sidechat'
@@ -122,6 +124,7 @@ function buildPrompt({
     '- In your final answer to the user, do not include progress updates, tool narration, or chain-of-thought.',
     '- The final answer should contain only the user-facing result.',
     ...buildProviderSourceContextBlock(sourceContext),
+    ...buildProviderRecordContextBlock(recordContext),
     '',
     'User request:',
     prompt,

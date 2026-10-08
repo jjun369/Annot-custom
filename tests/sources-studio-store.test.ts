@@ -115,6 +115,21 @@ describe('Sources/Studio persistence', () => {
     });
   });
 
+  test('creates a new synthesis proposal draft with immutable bounded source snapshots', async () => {
+    const draft = await studio.createStudioDraft({ title: 'Synthetic synthesis', text: 'Unverified proposal.', references: [{
+      sourceId: 'reader:doc:highlight', title: 'p.2 · concept', kind: 'memo', originLabel: 'PDF Reader record',
+      sourceUpdatedAt: '2026-10-02', excerpt: 'Synthetic source excerpt.', includeInRequest: false,
+      evidenceSnapshot: { provenanceLabel: 'AI 합성 제안 · 문헌 주장', anchor: { id: 'h1', scope: 'selection', documentId: 'doc-a', page: 2, text: 'Source', rects: [{ x: 0.1, y: 0.1, width: 0.2, height: 0.1 }] } },
+    }] });
+    expect(draft).toMatchObject({ title: 'Synthetic synthesis', text: 'Unverified proposal.', references: [{
+      sourceId: 'reader:doc:highlight', includeInRequest: false,
+      evidenceSnapshot: { provenanceLabel: 'AI 합성 제안 · 문헌 주장', anchor: { documentId: 'doc-a', page: 2 } },
+    }] });
+    vi.resetModules();
+    studio = await import('@/lib/sources-studio');
+    await expect(studio.getStudioSnapshot()).resolves.toMatchObject({ drafts: [expect.objectContaining({ id: draft.id, references: draft.references })] });
+  });
+
   test('preserves malformed store bytes and rejects a mutation instead of replacing them', async () => {
     const storeFile = path.join(fixtureRoot, '.annot', 'sources-studio.json');
     await import('node:fs/promises').then(({ mkdir }) => mkdir(path.dirname(storeFile), { recursive: true }));
