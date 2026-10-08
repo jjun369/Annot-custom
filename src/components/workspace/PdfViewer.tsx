@@ -9,6 +9,7 @@ import { applyWorkKind, getWorkKindLabel, getWorkNotePlaceholder, isWorkActionKi
 import { normalizeVisualRegionRect } from '@/lib/visual-regions';
 import { MAX_SELECTION_CONTEXT_CHARS } from '@/lib/ai-providers/source-context';
 import { normalizeReadingPosition } from '@/lib/reading-position';
+import { getPdfAnnotationReadNotice } from '@/lib/pdf-annotation-status';
 import { notifyReaderSummaryChanged } from '@/lib/reader-summary-events';
 import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
 import { readStoredReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
@@ -187,6 +188,7 @@ export function PdfViewer() {
   } | null>(null);
   const [selectionSnapshot, setSelectionSnapshot] = useState<PdfSelectionSnapshot | null>(null);
   const [annotationSyncing, setAnnotationSyncing] = useState(false);
+  const [annotationReadNotice, setAnnotationReadNotice] = useState<string | null>(null);
   const [selectedHighlightKey, setSelectedHighlightKey] = useState<string | null>(null);
   const [draftNote, setDraftNote] = useState('');
   const [noteSaving, setNoteSaving] = useState(false);
@@ -530,6 +532,7 @@ export function PdfViewer() {
   useEffect(() => {
     if (!activePdfPath) {
       setHighlights([]);
+      setAnnotationReadNotice(null);
       setSelectedHighlightKey(null);
       setDraftNote('');
       setRecordTabRequest(null);
@@ -542,6 +545,7 @@ export function PdfViewer() {
 
     const loadPdfHighlights = async () => {
       setAnnotationSyncing(true);
+      setAnnotationReadNotice(null);
 
       const legacyHighlights = getStoredHighlights(activePdfPath);
 
@@ -593,12 +597,14 @@ export function PdfViewer() {
 
         if (!cancelled) {
           setHighlights(nextHighlights);
+          setAnnotationReadNotice(getPdfAnnotationReadNotice(data));
         }
       } catch (error) {
         if (!cancelled) {
           console.warn('Failed to load PDF annotations.', error);
           const fallbackHighlights = legacyHighlights.length > 0 ? legacyHighlights : [];
           setHighlights(mergeHighlights(fallbackHighlights));
+          setAnnotationReadNotice(null);
           setSelectionNotice(PDF_TEXT_ANALYSIS_UNAVAILABLE);
         }
       } finally {
@@ -2312,7 +2318,7 @@ export function PdfViewer() {
 
         <div ref={containerRef} className="min-w-0 flex-1 overflow-auto bg-surface-dim">
         <div className="mx-auto min-w-full w-max px-6 py-5">
-          <div className="mb-3 flex min-h-7 items-center gap-2 px-2 text-[12px] text-on-surface-variant" aria-live="polite">
+          <div className="mb-3 flex min-h-7 flex-wrap items-center gap-2 px-2 text-[12px] text-on-surface-variant" aria-live="polite">
               {eraseMode ? (
                 <span>지우개 모드입니다. 지울 하이라이트에 걸치도록 텍스트를 선택하세요.</span>
               ) : visualCaptureMode ? (
@@ -2328,6 +2334,14 @@ export function PdfViewer() {
               )}
               {annotationSyncing && (
                 <span className="text-outline">주석 저장 중...</span>
+              )}
+              {annotationReadNotice && (
+                <span className="inline-flex flex-wrap items-center gap-x-1 text-on-surface-variant">
+                  <span>{annotationReadNotice}</span>
+                  <a href="/settings#pdf-engine" className="font-semibold text-primary underline-offset-2 hover:underline">
+                    PDF 도구 설정
+                  </a>
+                </span>
               )}
               {selectionNotice && (
                 typeof selectionNotice === 'string' ? (

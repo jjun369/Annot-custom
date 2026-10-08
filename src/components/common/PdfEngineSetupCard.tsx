@@ -44,7 +44,7 @@ export function PdfEngineSetupCard() {
   };
 
   return (
-    <div className="rounded-xl border border-outline-variant/25 bg-surface p-4">
+    <div id="pdf-engine" className="rounded-xl border border-outline-variant/25 bg-surface p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="flex items-center gap-2">
