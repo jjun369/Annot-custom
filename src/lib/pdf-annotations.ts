@@ -382,6 +382,10 @@ function getPythonCandidates(): string[] {
 
 async function resolvePythonCommand(): Promise<ResolvedPythonCommand> {
   const candidates = [
+    // Prefer the normal Python command and known installations before trying
+    // `python3` from PATH. On Windows, that name may resolve to the inert
+    // Microsoft Store app-execution alias even when `python.exe` is installed.
+    ...getPythonCandidates(),
     ...buildExecutableCandidates(
       [
         process.env.PAGEDOCK_PYTHON_BIN,
@@ -391,7 +395,6 @@ async function resolvePythonCommand(): Promise<ResolvedPythonCommand> {
       'python3',
       [],
     ),
-    ...getPythonCandidates(),
     ...buildExecutableCandidates(
       [
         process.env.ANNOT_PYTHON_LAUNCHER,
@@ -401,7 +404,7 @@ async function resolvePythonCommand(): Promise<ResolvedPythonCommand> {
         path.join(process.env.SystemRoot || 'C:\\Windows', 'py'),
       ],
     ),
-  ];
+  ].filter((candidate) => process.platform !== 'win32' || !/\\WindowsApps\\python(?:3)?\.exe$/i.test(candidate));
 
   const executable = await resolveExecutable([...new Set(candidates)]);
   if (!executable) {

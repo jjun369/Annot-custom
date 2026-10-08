@@ -36,6 +36,15 @@ function friendlyAnnotationError(error: unknown, fallback: string): string {
   return raw.includes('Traceback') || !raw ? fallback : raw;
 }
 
+function isPythonExecutableUnavailable(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : '';
+  const details = error && typeof error === 'object' ? error as NodeJS.ErrnoException : undefined;
+  const missingPythonCommand = details?.code === 'ENOENT'
+    && /(?:^|[\\/ ])(?:python(?:3)?|py)(?:\.exe)?(?:$|[ ])/i.test(`${details.path ?? ''} ${details.syscall ?? ''}`);
+  return missingPythonCommand
+    || /Could not find a Python 3 executable|Python was not found; run without arguments to install from the Microsoft Store/i.test(message);
+}
+
 export async function GET(req: NextRequest) {
   try {
     const pdfPath = req.nextUrl.searchParams.get('path')?.trim();
@@ -56,13 +65,15 @@ export async function GET(req: NextRequest) {
         },
       });
     } catch (error) {
-      if (sidecarHighlights.length === 0) {
+      if (!isPythonExecutableUnavailable(error)) {
         throw new Error(friendlyAnnotationError(error, 'PDF 주석을 읽지 못했습니다.'));
       }
       return NextResponse.json({
         highlights: sidecarHighlights,
         embedded: false,
-        warning: 'PDF 원본 주석을 읽지 못해 PageDock 기록을 표시합니다.',
+        partial: true,
+        nativeAnnotationsRead: false,
+        warning: 'Python 실행 파일을 찾지 못해 PDF 원본 주석은 확인하지 못했습니다. PageDock 기록만 표시한 부분 결과입니다.',
       }, {
         headers: {
           'Cache-Control': 'no-store',
