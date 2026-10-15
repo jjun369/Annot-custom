@@ -12,7 +12,11 @@ import { READER_SUMMARY_CHANGED_EVENT } from '@/lib/reader-summary-events';
 
 export const REQUEST_PDF_UPLOAD_EVENT = 'pagedock:request-pdf-upload';
 
-export function TreeExplorer({ forceCompact = false }: { forceCompact?: boolean }) {
+export function TreeExplorer({
+  forceCompact = false,
+  loadError = false,
+  onRetry,
+}: { forceCompact?: boolean; loadError?: boolean; onRetry?: () => void }) {
   const {
     treeRoot,
     treeLoading,
@@ -236,7 +240,7 @@ export function TreeExplorer({ forceCompact = false }: { forceCompact?: boolean 
         <div className="flex items-center gap-0.5">
           <button
             onClick={() => setCreateDialogOpen(true)}
-            disabled={isCreatingFolder || treeLoading}
+            disabled={isCreatingFolder || treeLoading || loadError || !treeRoot}
             className="flex h-7 w-7 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface disabled:opacity-50"
             title="폴더 만들기"
           >
@@ -244,7 +248,7 @@ export function TreeExplorer({ forceCompact = false }: { forceCompact?: boolean 
           </button>
           <button
             onClick={handleUploadClick}
-            disabled={isUploading || treeLoading}
+            disabled={isUploading || treeLoading || loadError || !treeRoot}
             className="flex h-7 w-7 items-center justify-center rounded-lg text-on-surface-variant transition-colors hover:bg-surface-container-high hover:text-on-surface disabled:opacity-50"
             title="PDF 추가"
           >
@@ -270,8 +274,20 @@ export function TreeExplorer({ forceCompact = false }: { forceCompact?: boolean 
           }
         }}
       >
-        {treeLoading ? (
+        {treeLoading && !treeRoot ? (
           <div className="px-3 py-2 text-xs text-on-surface-variant">라이브러리를 불러오는 중...</div>
+        ) : loadError && !treeRoot?.children?.length ? (
+          <div role="alert" className="mx-1 mt-2 rounded-xl border border-amber-500/30 bg-surface-container-low px-3 py-5 text-center">
+            <p className="text-xs font-medium text-on-surface">라이브러리를 불러오지 못했습니다</p>
+            <p className="mt-1 text-[11px] leading-4 text-on-surface-variant">파일을 비어 있다고 판단하지 않았습니다. 다시 연결해 보세요.</p>
+            <button
+              type="button"
+              onClick={onRetry}
+              className="mt-3 rounded-lg border border-outline-variant/30 px-3 py-2 text-xs font-semibold text-on-surface hover:bg-surface-container-high"
+            >
+              다시 시도
+            </button>
+          </div>
         ) : treeRoot?.children?.length ? (
           treeRoot.children.map((node) => (
             <TreeItem
@@ -282,7 +298,9 @@ export function TreeExplorer({ forceCompact = false }: { forceCompact?: boolean 
               readerSummaries={readerSummaries}
             />
           ))
-        ) : (
+        ) : treeLoading ? (
+          <div role="status" className="px-3 py-2 text-xs text-on-surface-variant">목록을 새로 고치는 중입니다. 기존 문서는 유지됩니다.</div>
+        ) : treeRoot ? (
           <div className="mx-1 mt-2 rounded-xl border border-dashed border-outline-variant/35 bg-surface-container-low px-3 py-5 text-center">
             <p className="text-xs font-medium text-on-surface">라이브러리가 비어 있습니다</p>
             <p className="mt-1 text-[11px] leading-4 text-on-surface-variant">첫 PDF를 복사해 공부를 시작해 보세요.</p>
@@ -290,13 +308,15 @@ export function TreeExplorer({ forceCompact = false }: { forceCompact?: boolean 
               <FilePlus size={13} /> PDF 추가
             </button>
           </div>
+        ) : (
+          <div className="px-3 py-2 text-xs text-on-surface-variant">라이브러리를 확인하는 중입니다.</div>
         )}
       </nav>
 
       {/* Footer stats */}
       <div className="shrink-0 border-t border-outline-variant/15 px-3 py-2.5">
         <div className="text-[10px] text-outline">
-          폴더 {stats.folders}개 &middot; PDF {stats.pdfs}개
+          {loadError ? (treeRoot ? '새로고침 실패 · 기존 목록 유지' : '라이브러리 상태 확인 필요') : treeLoading && treeRoot ? '새로고침 중 · 기존 목록 유지' : treeRoot ? `폴더 ${stats.folders}개 · PDF ${stats.pdfs}개` : '라이브러리 불러오는 중'}
         </div>
       </div>
 

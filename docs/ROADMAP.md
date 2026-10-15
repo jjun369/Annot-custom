@@ -1,8 +1,19 @@
 # Roadmap
 
-## Windows installer refresh (2026-10-08)
+## Completed first-use recovery follow-up (2026-10-09)
 
-- Refresh the local Windows x64 NSIS installer to PageDock 0.9.4 so the latest Reader annotation fallback, Studio-draft retrieval, and study-workflow UI updates are available in the installed app. This verification build is not a public release.
+- Let a first-run reader enter the local Library without installing optional PDF tools or connecting AI. Keep both setup steps explicitly available when requested.
+- Separate Library loading/error from a confirmed empty state; provide retry without discarding a loaded tree or active Reader. Synthetic localhost QA verified failed initial load → retry → synthetic PDF → readable Reader text. Popularity and end-to-end professional learning impact are not established without human user testing.
+
+## Completed Knowledge and record retrieval follow-up (2026-10-09, working tree)
+
+- Use the query-matching Knowledge source anchor for both its preview and return-to-Reader action, preserving stable document identity, page, and validated saved rectangles without editing the canonical note.
+- Rank Library record matches before the 300-candidate/100-result display caps and disclose incomplete coverage, failures, unavailable PDFs, and scan caps. Explicitly selected canonical IDs are prioritized across those discovery caps for exact preview resolution. The deliberate per-request ceiling remains 5,000 records across 200 PDFs; larger libraries are not exhaustively searched. Existing hashed exact preview and outbound limits remain unchanged.
+- Focused retrieval tests cover the later matching anchor, records beyond the old 300-before-query cutoff, coverage metadata, and synthesis-route disclosure. No new storage or provider behavior.
+
+## Completed Windows installer refresh (2026-10-09)
+
+- Refreshed and installed the local Windows x64 NSIS package at PageDock 0.9.5 so the first-use, Library recovery, Knowledge-anchor, and bounded record-search fixes are available in the per-user app. Installed version/hash and packaged server smoke passed. This verification build is not a public release; renderer/PDF visual behavior was not revalidated in the installed app.
 
 ## Completed UI clarity follow-up (2026-10-08)
 

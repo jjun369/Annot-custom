@@ -44,6 +44,28 @@ describe('Knowledge retrieval', () => {
     expect(searchKnowledgeRecords(fixture, 'work observation', 'work_observation')).toHaveLength(1);
   });
 
+  test('keeps the query-matching second source anchor for the preview and exact reader return', () => {
+    const original = fixture.notes[0];
+    const secondAnchor = {
+      id: 'anchor-2', scope: 'selection' as const, documentId: 'doc-2', page: 27,
+      text: 'A synthetic catalyst anneal observation for the second source.',
+      rects: [{ x: 0.3, y: 0.4, width: 0.2, height: 0.05 }],
+    };
+    const note = { ...original, sourceAnchors: [...(original.sourceAnchors ?? []), secondAnchor] };
+    const result = searchKnowledgeRecords({ ...fixture, notes: [note] }, 'catalyst anneal', 'sources')[0];
+    expect(result).toMatchObject({ kind: 'source', id: original.id, readerAnchor: secondAnchor,
+      detail: expect.stringContaining('p.27'), preview: expect.stringContaining('catalyst anneal') });
+    if (result.kind !== 'source' || !result.readerAnchor) throw new Error('Expected an anchored source search result.');
+    const multiDocumentTree: TreeNode = { ...tree, children: [...(tree.children ?? []), {
+      id: 'document:doc-2', documentId: 'doc-2', name: 'second.pdf', type: 'pdf', path: 'second.pdf',
+    }] };
+    const url = buildKnowledgeSourceReaderUrl(multiDocumentTree, result.readerAnchor);
+    expect(parseKnowledgeReaderNavigation(new URL(url!, 'http://localhost').search)).toEqual({
+      documentId: 'doc-2', page: 27, rects: secondAnchor.rects,
+    });
+    expect(fixture.notes[0].sourceAnchors).toHaveLength(1);
+  });
+
   test('resolves current renamed PDF by stable document id and encodes Korean paths and query characters', () => {
     const target = findKnowledgeReaderTarget(tree, 'doc-1', 12);
     expect(target).toEqual({ path: '논문 폴더/a #1.pdf', page: 12, documentId: 'doc-1' });

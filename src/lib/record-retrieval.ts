@@ -9,6 +9,8 @@ export const MAX_RECORD_CONTEXT_ITEMS = 8;
 export const MAX_RECORD_CONTEXT_CHARS = 8_000;
 const MAX_RECORD_CONTEXT_SNIPPET = 1_600;
 const MAX_RECORD_CONTEXT_CANDIDATES = 300;
+const MAX_LIBRARY_SEARCH_RECORDS_SCANNED = 5_000;
+const MAX_LIBRARY_SEARCH_DOCUMENTS = 200;
 
 export interface LocalRecordCandidate {
   id: string;
@@ -20,6 +22,26 @@ export interface LocalRecordCandidate {
   anchor?: ChatSourceContext;
   sourceId?: string;
   kind: 'sidecar' | 'knowledge' | 'wiki' | 'personal' | 'research' | 'studio-draft';
+}
+
+export interface LibraryRecordSearchStatus {
+  incomplete: boolean;
+  recordScanLimitReached: boolean;
+  documentListFailed: boolean;
+  scannedRecordCount: number;
+  scannedDocumentCount: number;
+  totalDocumentCount: number;
+  unscannedDocumentCount: number;
+  unavailableDocumentCount: number;
+  failedDocumentCount: number;
+  matchingRecordCount: number;
+  candidateLimitReached: boolean;
+  resultLimitReached: boolean;
+}
+
+export interface LibraryRecordSearchResult {
+  records: LocalRecordCandidate[];
+  status: LibraryRecordSearchStatus;
 }
 
 const PROVENANCE_LABELS: Record<string, string> = {
@@ -230,70 +252,125 @@ export async function retrieveDocumentRecords(input: { documentId: string; query
   return result;
 }
 
-async function collectLibraryRecords(options?: { includeStudioDrafts?: boolean }): Promise<LocalRecordCandidate[]> {
+async function collectLibraryRecords(
+  query: string,
+  options?: { includeStudioDrafts?: boolean },
+  pinnedIds: string[] = [],
+): Promise<LibraryRecordSearchResult> {
   const [studio, knowledge] = await Promise.all([getStudioSnapshot(), getKnowledgeSnapshot()]);
-  const candidates = studio.sources.flatMap((source) => {
-    const candidate = studioCandidate(source);
-    return candidate ? [candidate] : [];
-  });
-  if (options?.includeStudioDrafts) {
-    for (const draft of studio.drafts) {
-      const candidate = studioDraftCandidate(draft);
-      if (candidate) candidates.push(candidate);
+  let scannedDocumentCount = 0;
+  let totalDocumentCount = 0;
+  let unavailableDocumentCount = 0;
+  let failedDocumentCount = 0;
+  let scanLimitReached = false;
+  let documentListFailed = false;
+  const pinned = new Set(pinnedIds);
+  const candidates: LocalRecordCandidate[] = [];
+  const addCandidate = (candidate: LocalRecordCandidate): boolean => {
+    if (candidates.length >= MAX_LIBRARY_SEARCH_RECORDS_SCANNED) {
+      scanLimitReached = true;
+      if (!pinned.has(candidate.id)) return pinned.size > 0;
     }
+    candidates.push(candidate);
+    return true;
+  };
+  for (const source of studio.sources) {
+    const candidate = studioCandidate(source);
+    if (candidate && !addCandidate(candidate)) break;
+  }
+  if ((!scanLimitReached || pinned.size > 0) && options?.includeStudioDrafts) for (const draft of studio.drafts) {
+    const candidate = studioDraftCandidate(draft);
+    if (candidate && !addCandidate(candidate)) break;
   }
   const studioIds = new Set(studio.sources.map((source) => source.id));
-  for (const topic of knowledge.topics) {
-    candidates.push({ id: `wiki:${topic.id}:r${topic.revision}`, title: topic.title, originLabel: `Knowledge 위키 · revision ${topic.revision}`,
+  if (!scanLimitReached || pinned.size > 0) for (const topic of knowledge.topics) {
+    if (!addCandidate({ id: `wiki:${topic.id}:r${topic.revision}`, title: topic.title, originLabel: `Knowledge 위키 · revision ${topic.revision}`,
       provenanceLabel: PROVENANCE_LABELS[topic.provenance?.kind ?? ''] ?? '위키 종합 · 원출처 확인 필요', text: topic.bodyMarkdown,
-      sourceUpdatedAt: topic.updatedAt, kind: 'wiki' });
+      sourceUpdatedAt: topic.updatedAt, kind: 'wiki' })) break;
   }
-  for (const note of knowledge.notes) {
+  if (!scanLimitReached || pinned.size > 0) for (const note of knowledge.notes) {
     if (studioIds.has(`knowledge:${note.id}`)) continue;
-    candidates.push({ id: `knowledge:${note.id}`, title: note.title || note.sourceName, originLabel: `Knowledge 수집 메모 · ${note.sourceName}`,
+    if (!addCandidate({ id: `knowledge:${note.id}`, title: note.title || note.sourceName, originLabel: `Knowledge 수집 메모 · ${note.sourceName}`,
       provenanceLabel: PROVENANCE_LABELS[note.provenance?.kind ?? ''] ?? '출처 유형 미지정', text: note.rawText,
-      sourceUpdatedAt: note.updatedAt, ...(note.sourceAnchors?.[0] ? { anchor: note.sourceAnchors[0] } : {}), kind: 'knowledge' });
+      sourceUpdatedAt: note.updatedAt, ...(note.sourceAnchors?.[0] ? { anchor: note.sourceAnchors[0] } : {}), kind: 'knowledge' })) break;
   }
   try {
-    const documents = (await listDocuments()).filter((document) => document.currentPath && !document.missing).slice(0, 200);
+    const allDocuments = await listDocuments();
+    totalDocumentCount = allDocuments.length;
+    unavailableDocumentCount = allDocuments.filter((document) => !document.currentPath || document.missing).length;
+    const availableDocuments = allDocuments.filter((document) => document.currentPath && !document.missing);
+    const selectedDocumentIds = new Set(pinnedIds.flatMap((id) => {
+      const match = /^(?:reader|region):([^:]+):/.exec(id);
+      return match ? [match[1]] : [];
+    }));
+    const documents = [
+      ...availableDocuments.filter((document) => selectedDocumentIds.has(document.id)),
+      ...availableDocuments.filter((document) => !selectedDocumentIds.has(document.id)),
+    ].slice(0, MAX_LIBRARY_SEARCH_DOCUMENTS);
     for (const document of documents) {
+      if (scanLimitReached && pinned.size === 0) break;
+      if (scanLimitReached && !selectedDocumentIds.has(document.id)) continue;
       try {
         const [highlights, regions] = await Promise.all([
           listSidecarHighlights(document.currentPath!), listSidecarVisualRegions(document.currentPath!),
         ]);
+        scannedDocumentCount += 1;
         for (const highlight of highlights) {
           const text = [highlight.text, highlight.note?.trim() ? `사용자 메모: ${highlight.note.trim()}` : ''].filter(Boolean).join('\n');
           if (!text.trim()) continue;
           const id = `reader:${document.id}:${highlight.annotationId || highlight.id}`;
-          candidates.push({ id, title: `${document.displayTitle} · p.${highlight.page}`, originLabel: 'PDF Reader 기록',
+          if (!addCandidate({ id, title: `${document.displayTitle} · p.${highlight.page}`, originLabel: 'PDF Reader 기록',
             provenanceLabel: `${highlight.studyKind || '중요'} · ${highlight.note?.trim() ? '사용자 메모 포함' : '문헌 발췌'}`, text,
-            sourceUpdatedAt: highlight.updatedAt || highlight.createdAt || '', anchor: anchorForHighlight(highlight, document.id), kind: 'sidecar' });
+            sourceUpdatedAt: highlight.updatedAt || highlight.createdAt || '', anchor: anchorForHighlight(highlight, document.id), kind: 'sidecar' })) break;
         }
-        for (const region of regions) if (region.memo.trim()) candidates.push({
-          id: `region:${document.id}:${region.id}`, title: `${document.displayTitle} · p.${region.page} · ${region.kind}`,
-          originLabel: 'PDF 영역 기록', provenanceLabel: '사용자 작성 메모 · 이미지는 전송되지 않음', text: region.memo,
-          sourceUpdatedAt: region.updatedAt, anchor: { id: `region:${region.id}`, scope: 'page', documentId: document.id, page: region.page }, kind: 'sidecar',
-        });
-      } catch { /* One unreadable sidecar does not hide other local records. */ }
-      if (candidates.length >= MAX_RECORD_CONTEXT_CANDIDATES) break;
+        if (!scanLimitReached || pinned.size > 0) for (const region of regions) {
+          if (region.memo.trim() && !addCandidate({
+            id: `region:${document.id}:${region.id}`, title: `${document.displayTitle} · p.${region.page} · ${region.kind}`,
+            originLabel: 'PDF 영역 기록', provenanceLabel: '사용자 작성 메모 · 이미지는 전송되지 않음', text: region.memo,
+            sourceUpdatedAt: region.updatedAt, anchor: { id: `region:${document.id}:${region.id}`, scope: 'page', documentId: document.id, page: region.page }, kind: 'sidecar',
+          })) break;
+        }
+      } catch { failedDocumentCount += 1; /* One unreadable sidecar does not hide other local records. */ }
+      if (scanLimitReached && pinned.size === 0) break;
     }
-  } catch { /* A local index problem leaves Knowledge and personal memos searchable. */ }
-  return candidates;
+  } catch { documentListFailed = true; /* A local index problem leaves Knowledge and personal memos searchable. */ }
+
+  const scannedRecordCount = candidates.length;
+  const ranked = candidates.map((item, index) => ({ item, score: relevance(query, item), index }))
+    .filter((row) => row.score > 0 || pinned.has(row.item.id))
+    .sort((a, b) => Number(pinned.has(b.item.id)) - Number(pinned.has(a.item.id)) || b.score - a.score || a.index - b.index);
+  const matchingRecordCount = ranked.filter((row) => row.score > 0).length;
+  const unscannedDocumentCount = Math.max(0, totalDocumentCount - unavailableDocumentCount - scannedDocumentCount - failedDocumentCount);
+  const status: LibraryRecordSearchStatus = {
+    incomplete: scanLimitReached || unscannedDocumentCount > 0 || unavailableDocumentCount > 0 || failedDocumentCount > 0 || documentListFailed,
+    recordScanLimitReached: scanLimitReached,
+    documentListFailed,
+    scannedRecordCount, scannedDocumentCount, totalDocumentCount, unscannedDocumentCount,
+    unavailableDocumentCount, failedDocumentCount, matchingRecordCount,
+    candidateLimitReached: matchingRecordCount > MAX_RECORD_CONTEXT_CANDIDATES,
+    resultLimitReached: matchingRecordCount > 100,
+  };
+  return { records: ranked.slice(0, MAX_RECORD_CONTEXT_CANDIDATES).map(({ item }) => item), status };
 }
 
 export async function searchLibraryRecords(query: string, options?: { includeStudioDrafts?: boolean }): Promise<LocalRecordCandidate[]> {
+  return (await searchLibraryRecordsWithStatus(query, options)).records;
+}
+
+export async function searchLibraryRecordsWithStatus(query: string, options?: { includeStudioDrafts?: boolean }): Promise<LibraryRecordSearchResult> {
   const needle = query.trim();
-  if (!needle) return [];
-  const candidates = await collectLibraryRecords(options);
-  const ranked = candidates.map((item, index) => ({ item, score: relevance(needle, item), index }))
-    .filter((row) => row.score > 0).sort((a, b) => b.score - a.score || a.index - b.index).slice(0, 100);
-  return ranked.map(({ item }) => item);
+  if (!needle) return { records: [], status: { incomplete: false, scannedRecordCount: 0, scannedDocumentCount: 0,
+    recordScanLimitReached: false, documentListFailed: false,
+    totalDocumentCount: 0, unscannedDocumentCount: 0, unavailableDocumentCount: 0, failedDocumentCount: 0,
+    matchingRecordCount: 0, candidateLimitReached: false, resultLimitReached: false } };
+  const collection = await collectLibraryRecords(needle, options);
+  return { records: collection.records.filter((candidate) => relevance(needle, candidate) > 0).slice(0, 100), status: collection.status };
 }
 
 export async function selectLibraryRecordSnapshot(query: string, ids: string[], options?: { includeStudioDrafts?: boolean }): Promise<ChatRecordContextSnapshot> {
   const requestedIds = [...new Set(ids)];
-  const candidates = await collectLibraryRecords(options);
-  const byId = new Map(candidates.map((candidate) => [candidate.id, candidate]));
+  const collection = await collectLibraryRecords(query, options, requestedIds);
+  const byId = new Map(collection.records.map((candidate) => [candidate.id, candidate]));
   const selected = requestedIds.flatMap((id) => {
     const candidate = byId.get(id);
     return candidate ? [candidate] : [];

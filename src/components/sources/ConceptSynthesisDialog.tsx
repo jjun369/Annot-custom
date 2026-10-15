@@ -12,6 +12,7 @@ import { studioDraftHrefFromRecordId, studioDraftIdFromRecordId } from '@/lib/st
 import type { ChatRecordContextSnapshot, TreeNode } from '@/types';
 
 type SearchRecord = ChatRecordContextSnapshot['records'][number];
+type SearchCoverage = { incomplete: boolean; recordScanLimitReached: boolean; documentListFailed: boolean; scannedRecordCount: number; scannedDocumentCount: number; totalDocumentCount: number; unscannedDocumentCount: number; unavailableDocumentCount: number; failedDocumentCount: number; candidateLimitReached: boolean; resultLimitReached: boolean };
 
 async function readJson(response: Response): Promise<Record<string, unknown>> {
   const body = await response.json() as Record<string, unknown>;
@@ -27,6 +28,7 @@ export function ConceptSynthesisDialog({ open, root, onClose }: { open: boolean;
   const [selectedRecords, setSelectedRecords] = useState<SearchRecord[]>([]);
   const [searchResultCount, setSearchResultCount] = useState<number | null>(null);
   const [searchOmittedCount, setSearchOmittedCount] = useState(0);
+  const [searchStatus, setSearchStatus] = useState<SearchCoverage | null>(null);
   const [provider, setProvider] = useState<'codex' | 'claude'>('codex');
   const [searching, setSearching] = useState(false);
   const [generating, setGenerating] = useState(false);
@@ -88,7 +90,7 @@ export function ConceptSynthesisDialog({ open, root, onClose }: { open: boolean;
     if (!requestedQuery || searching || generating || saving) return;
     const requestedEpoch = ++searchEpoch.current;
     setSearching(true); setError(''); resetProposal();
-    setSearchResultCount(null); setSearchOmittedCount(0);
+    setSearchResultCount(null); setSearchOmittedCount(0); setSearchStatus(null);
     try {
       const response = await fetch('/api/records', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'library-search', query: requestedQuery, includeStudioDrafts }) });
@@ -99,6 +101,7 @@ export function ConceptSynthesisDialog({ open, root, onClose }: { open: boolean;
       replaceSelection(selectedRef.current.map((item) => found.find((record) => record.id === item.id) ?? item));
       setSearchResultCount(typeof body.totalCount === 'number' ? body.totalCount : found.length);
       setSearchOmittedCount(typeof body.omittedCount === 'number' ? body.omittedCount : 0);
+      setSearchStatus(body.searchStatus && typeof body.searchStatus === 'object' ? body.searchStatus as SearchCoverage : null);
     } catch (cause) { if (requestedEpoch === searchEpoch.current) setError(cause instanceof Error ? cause.message : '자료를 검색하지 못했습니다.'); }
     finally { if (requestedEpoch === searchEpoch.current) setSearching(false); }
   };
@@ -207,7 +210,7 @@ export function ConceptSynthesisDialog({ open, root, onClose }: { open: boolean;
             <h3 className="text-sm font-bold text-on-surface">내 기록 찾기</h3><p className="mt-0.5 text-[11px] leading-4 text-on-surface-variant">검색어는 질문과 다르게 적어도 됩니다. 자료를 선택한 뒤 검색어를 바꿔도 선택은 유지됩니다.</p>
             <div className="mt-2 flex items-start gap-2 text-[12px] leading-5 text-on-surface-variant"><label className="flex items-start gap-2"><input type="checkbox" checked={includeStudioDrafts} disabled={searching || generating || preparing || saving} onChange={(event) => changeStudioDraftSearch(event.target.checked)} className="mt-1" /><span className="font-medium">저장한 초안도 검색</span></label><InfoHint label="저장한 초안 검색 안내" text="초안은 아직 검토되지 않은 개인 작업 메모입니다. 문헌의 근거로 검증된 내용이 아니며, 이 선택을 끄면 다음 검색뿐 아니라 선택 목록에서도 제외됩니다. 초안 문구와 원래 연결한 자료는 구분해서 표시합니다." /></div>
             <div className="mt-2 flex gap-2"><input value={searchQuery} maxLength={500} disabled={saving} onChange={(event) => changeSearchQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void search(); }} aria-label="관련 기록 검색어" placeholder="예: 열화 원인, 측정 조건" className="min-w-0 flex-1 rounded-lg border border-outline-variant/25 px-3 py-2.5 text-[12px] outline-none focus:border-primary disabled:opacity-60" /><button type="button" onClick={() => void search()} disabled={!searchQuery.trim() || searching || generating || saving} className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-secondary-container px-3 py-2.5 text-[12px] font-bold text-on-surface disabled:opacity-40">{searching ? <LoaderCircle size={14} className="animate-spin" /> : <Search size={14} />}검색</button></div>
-            {searchResultCount !== null && <p role="status" aria-live="polite" className="mt-2 text-[11px] text-on-surface-variant">{searchResultCount === 0 ? '관련 기록을 찾지 못했습니다. 다른 검색어를 입력해 보세요.' : `검색 결과 ${records.length}개 표시${searchOmittedCount ? ` · ${searchOmittedCount}개 더 있음` : ''}`}</p>}
+            {searchResultCount !== null && <p role="status" aria-live="polite" className="mt-2 text-[11px] text-on-surface-variant">{searchResultCount === 0 ? '관련 기록을 찾지 못했습니다. 다른 검색어를 입력해 보세요.' : `검색 결과 ${records.length}개 표시${searchOmittedCount ? ` · ${searchOmittedCount}개 더 있음` : ''}`}{(searchStatus?.incomplete || searchStatus?.candidateLimitReached || searchStatus?.resultLimitReached) && ` · ${searchStatus.documentListFailed ? '자료 목록 읽기 실패' : ''}${searchStatus.unscannedDocumentCount ? `PDF ${searchStatus.scannedDocumentCount}/${searchStatus.totalDocumentCount}개 검색 완료·${searchStatus.unscannedDocumentCount}개 미검색` : ''}${searchStatus.failedDocumentCount ? ` · PDF ${searchStatus.failedDocumentCount}개 읽기 실패` : ''}${searchStatus.unavailableDocumentCount ? ` · 원본을 찾을 수 없는 PDF ${searchStatus.unavailableDocumentCount}개 제외` : ''}${searchStatus.recordScanLimitReached ? ` · 기록 ${searchStatus.scannedRecordCount}개 검색 완료·5,000개 탐색 한도` : ''}${searchStatus.candidateLimitReached ? ' · 검색 후보 300개 한도' : ''}${searchStatus.resultLimitReached ? ' · 결과 표시 100개 한도' : ''} — 범위를 좁히려면 Reader에서 현재 PDF를 검색하세요.`}</p>}
             <div className="mt-2 min-h-24 flex-1 space-y-1 overflow-y-auto rounded-lg border border-outline-variant/15 p-2">
               {records.map((record) => { const draftHref = studioDraftHrefFromRecordId(record.id); return <label key={record.id} className="flex cursor-pointer gap-2 rounded-md px-2 py-2 hover:bg-surface-container-low"><input type="checkbox" checked={selectedIds.includes(record.id)} disabled={generating || preparing || saving || (selectedIds.length >= 8 && !selectedIds.includes(record.id))} onChange={(event) => toggleRecord(record, event.target.checked)} className="mt-1" /><span className="min-w-0 flex-1"><span className="block truncate text-[12px] font-semibold">{record.title}</span><span className="mt-0.5 block text-[11px] text-on-surface-variant">{recordOriginForDisplay(record)}</span>{draftHref && <span className="mt-1 inline-flex rounded-full bg-tertiary-container px-2.5 py-1 text-[12px] font-semibold text-on-surface">개인 초안 · 검토 전 · 문헌 근거 아님</span>}{!draftHref && <span className="block text-[11px] text-on-surface-variant">{recordProvenanceForDisplay(record)}</span>}<span className="mt-1 line-clamp-2 block whitespace-pre-wrap text-[11px] leading-5 text-on-surface-variant">{record.excerpt}</span></span>{draftHref ? <Link href={draftHref} target="_blank" rel="noreferrer" onClick={(event) => event.stopPropagation()} className="self-start whitespace-nowrap text-[11px] font-semibold text-primary" aria-label="초안 열기">초안 보기</Link> : record.anchor?.page && <a href={buildKnowledgeSourceReaderUrl(root, { documentId: record.anchor.documentId, page: record.anchor.page, rects: record.anchor.rects }) ?? undefined} target="_blank" onClick={(event) => event.stopPropagation()} className="self-start text-primary" aria-label="원문 열기"><ExternalLink size={14} /></a>}</label>; })}
               {!records.length && <p className="p-3 text-center text-[10px] text-outline">검색어를 입력하고 로컬 검색을 눌러 주세요.</p>}

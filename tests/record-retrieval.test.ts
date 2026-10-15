@@ -1,10 +1,11 @@
-import { describe, expect, test, vi } from 'vitest';
+import { afterEach, describe, expect, test, vi } from 'vitest';
 
 const fixtures = vi.hoisted(() => ({
   highlightReads: vi.fn(async () => [{ id: 'h-1', annotationId: 'annotation-1', documentId: 'doc-a', pdfPath: 'a.pdf', page: 1,
     type: 'important', studyKind: 'concept', text: 'oxide migration mechanism', note: 'my hypothesis about interface traps',
     rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.1 }], position: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 }, updatedAt: '2026-10-01' }]),
   regionReads: vi.fn(async () => [{ id: 'region-1', documentId: 'doc-a', page: 2, kind: 'figure', memo: 'oxide migration diagram notes', rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, updatedAt: '2026-10-02' }]),
+  documents: [{ id: 'doc-a', currentPath: 'a.pdf', missing: false, displayTitle: 'Paper A' }],
   knowledge: {
     version: 2,
     notes: [{ id: 'note-1', rawText: 'OLD oxide migration memo', title: 'old', sourceName: 'old', updatedAt: '2026-09-01',
@@ -37,12 +38,20 @@ vi.mock('@/lib/highlight-sidecar', () => ({
 }));
 vi.mock('@/lib/research-db', () => ({
   getDocumentById: vi.fn(async (id: string) => id === 'doc-a' ? { id, currentPath: 'a.pdf', missing: false, displayTitle: 'Paper A' } : null),
-  listDocuments: vi.fn(async () => [{ id: 'doc-a', currentPath: 'a.pdf', missing: false, displayTitle: 'Paper A' }]),
+  listDocuments: vi.fn(async () => fixtures.documents),
 }));
 vi.mock('@/lib/knowledge-store', () => ({ getKnowledgeSnapshot: vi.fn(async () => fixtures.knowledge) }));
 vi.mock('@/lib/sources-studio', () => ({ getStudioSnapshot: vi.fn(async () => fixtures.studio) }));
 
-import { excerptFor, previewLibraryRecords, retrieveDocumentRecords, searchLibraryRecords, selectBoundedRecords, selectLibraryRecordSnapshot } from '@/lib/record-retrieval';
+import { excerptFor, previewLibraryRecords, retrieveDocumentRecords, searchLibraryRecords, searchLibraryRecordsWithStatus, selectBoundedRecords, selectLibraryRecordSnapshot } from '@/lib/record-retrieval';
+
+afterEach(() => {
+  fixtures.documents = [{ id: 'doc-a', currentPath: 'a.pdf', missing: false, displayTitle: 'Paper A' }];
+  fixtures.highlightReads.mockImplementation(async () => [{ id: 'h-1', annotationId: 'annotation-1', documentId: 'doc-a', pdfPath: 'a.pdf', page: 1,
+    type: 'important', studyKind: 'concept', text: 'oxide migration mechanism', note: 'my hypothesis about interface traps',
+    rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.1 }], position: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 }, updatedAt: '2026-10-01' }]);
+  fixtures.regionReads.mockImplementation(async () => [{ id: 'region-1', documentId: 'doc-a', page: 2, kind: 'figure', memo: 'oxide migration diagram notes', rect: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, updatedAt: '2026-10-02' }]);
+});
 
 describe('bounded local record retrieval', () => {
   test('search previews center the query term and disclose how many ranked results are hidden', () => {
@@ -71,6 +80,52 @@ describe('bounded local record retrieval', () => {
     expect(results.some((record) => record.id === 'region:doc-a:region-1' && record.text === 'oxide migration diagram notes')).toBe(true);
     expect(results.some((record) => record.id === 'memo:free')).toBe(true);
     expect(results.some((record) => record.text.includes('OLD oxide migration memo'))).toBe(false);
+  });
+
+  test('searches past 300 earlier records before selecting query matches and reports result caps separately', async () => {
+    fixtures.highlightReads.mockImplementation(async () => Array.from({ length: 301 }, (_, index) => ({
+      id: `h-${index}`, annotationId: `annotation-${index}`, documentId: 'doc-a', pdfPath: 'a.pdf', page: index + 1,
+      type: 'important', studyKind: 'concept', text: index === 300 ? 'unrelated record rare-tail-query-marker' : `unrelated record ${index}`,
+      note: '', rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.1 }], position: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 }, updatedAt: '2026-10-01',
+    })));
+    const lateHit = await searchLibraryRecordsWithStatus('rare-tail-query-marker');
+    expect(lateHit.records.map((record) => record.id)).toContain('reader:doc-a:annotation-300');
+    expect(lateHit.status).toMatchObject({ incomplete: false, scannedRecordCount: expect.any(Number), candidateLimitReached: false });
+
+    const manyMatches = await searchLibraryRecordsWithStatus('unrelated record');
+    expect(manyMatches.records).toHaveLength(100);
+    expect(manyMatches.status).toMatchObject({ resultLimitReached: true, candidateLimitReached: true, matchingRecordCount: expect.any(Number) });
+  });
+
+  test('preserves explicitly selected canonical IDs beyond discovery caps for the exact preview', async () => {
+    fixtures.highlightReads.mockImplementation(async () => Array.from({ length: 5_001 }, (_, index) => ({
+      id: `h-${index}`, annotationId: `annotation-${index}`, documentId: 'doc-a', pdfPath: 'a.pdf', page: index + 1,
+      type: 'important', studyKind: 'concept', text: index === 5_000 ? 'a pinned source unrelated to the new question' : `unrelated source ${index}`,
+      note: '', rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.1 }], position: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 }, updatedAt: '2026-10-01',
+    })));
+    const snapshot = await selectLibraryRecordSnapshot('different follow-up question', ['reader:doc-a:annotation-5000']);
+    expect(snapshot.records).toHaveLength(1);
+    expect(snapshot.records[0]).toMatchObject({ id: 'reader:doc-a:annotation-5000', excerpt: expect.stringContaining('pinned source') });
+    expect(snapshot.snapshotHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(snapshot.records.reduce((total, record) => total + record.excerpt.length, 0)).toBeLessThanOrEqual(8_000);
+
+    fixtures.documents = Array.from({ length: 201 }, (_, index) => ({ id: `doc-${index}`, currentPath: `${index}.pdf`, missing: false, displayTitle: `Paper ${index}` }));
+    fixtures.highlightReads.mockImplementation(async () => [{ id: 'h-selected', annotationId: 'selected-beyond-document-cap', documentId: 'doc-0', pdfPath: '0.pdf', page: 1,
+      type: 'important', studyKind: 'concept', text: 'explicitly selected source', note: '',
+      rects: [{ x: 0.1, y: 0.2, width: 0.3, height: 0.1 }], position: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 }, updatedAt: '2026-10-01' }]);
+    const selectedBeyondDocumentCap = await selectLibraryRecordSnapshot('unrelated follow-up', ['reader:doc-200:selected-beyond-document-cap']);
+    expect(selectedBeyondDocumentCap.records.map((record) => record.id)).toEqual(['reader:doc-200:selected-beyond-document-cap']);
+  });
+
+  test('reports skipped documents and sidecar read failures instead of presenting a complete Library search', async () => {
+    fixtures.documents = Array.from({ length: 201 }, (_, index) => ({ id: `doc-${index}`, currentPath: `${index}.pdf`, missing: false, displayTitle: `Paper ${index}` }));
+    const bounded = await searchLibraryRecordsWithStatus('oxide migration');
+    expect(bounded.status).toMatchObject({ incomplete: true, scannedDocumentCount: 200, totalDocumentCount: 201, unscannedDocumentCount: 1 });
+
+    fixtures.documents = [{ id: 'doc-fail', currentPath: 'synthetic.pdf', missing: false, displayTitle: 'Synthetic' }];
+    fixtures.regionReads.mockRejectedValueOnce(new Error('synthetic sidecar read failure'));
+    const failed = await searchLibraryRecordsWithStatus('oxide migration');
+    expect(failed.status).toMatchObject({ incomplete: true, failedDocumentCount: 1, unscannedDocumentCount: 0 });
   });
 
   test('keeps saved Studio drafts opt-in for synthesis search and labels them as unverified working material', async () => {

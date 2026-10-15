@@ -28,13 +28,13 @@ export function OnboardingDialog() {
     return () => { cancelled = true; };
   }, []);
 
-  const finish = async () => {
-    await fetch('/api/library/preferences', {
+  const finish = () => {
+    setOpen(false);
+    void fetch('/api/library/preferences', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ onboardingCompleted: true, libraryImportExplained: true }),
     }).catch(() => undefined);
-    setOpen(false);
   };
 
   const preparePdfEngine = async () => {
@@ -78,15 +78,24 @@ export function OnboardingDialog() {
               <PageDockMark size={68} className="mx-auto rounded-2xl" />
               <h1 id="pagedock-onboarding-title" className="mt-5 text-2xl font-bold tracking-tight text-on-surface">PageDock에 오신 것을 환영합니다</h1>
               <p className="mx-auto mt-3 max-w-md text-sm leading-6 text-on-surface-variant">
-                흩어진 PDF를 한곳에 모아 읽고, 표시하고, 필요할 때 AI와 함께 공부하는 로컬 작업 공간입니다.
+                PDF를 로컬에서 읽고 표시해 보세요. 기본 읽기와 메모는 추가 설정이나 AI 연결 없이 바로 시작할 수 있습니다.
               </p>
-              <button
-                type="button"
-                onClick={() => setStep(1)}
-                className="mt-7 inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary"
-              >
-                시작하기 <ArrowRight size={15} />
-              </button>
+              <div className="mt-7 flex flex-wrap justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void finish()}
+                  className="inline-flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-on-primary"
+                >
+                  PDF 읽기 시작 <ArrowRight size={15} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setStep(1)}
+                  className="rounded-xl border border-outline-variant/30 px-5 py-2.5 text-sm font-semibold text-on-surface-variant hover:bg-surface-container"
+                >
+                  선택 설정 보기
+                </button>
+              </div>
             </div>
           )}
 

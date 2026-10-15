@@ -94,6 +94,8 @@ type ChatStreamEvent =
   | ErrorEvent;
 
 type SummaryStatus = 'idle' | 'generating' | 'saved' | 'error';
+type RecordSearchCoverage = { incomplete: boolean; recordScanLimitReached: boolean; documentListFailed: boolean; scannedRecordCount: number; scannedDocumentCount: number; totalDocumentCount: number; unscannedDocumentCount: number; unavailableDocumentCount: number; failedDocumentCount: number; matchingRecordCount: number; candidateLimitReached: boolean; resultLimitReached: boolean };
+type RecordSearchSnapshot = ChatRecordContextSnapshot & { searchStatus?: RecordSearchCoverage };
 
 interface SendPromptOptions {
   prompt: string;
@@ -183,7 +185,7 @@ export function ChatPanel() {
   const [recordLookupEnabled, setRecordLookupEnabled] = useState(false);
   const [recordLookupScope, setRecordLookupScope] = useState<'document' | 'library'>('document');
   const [recordPreview, setRecordPreview] = useState<ChatRecordContextSnapshot | null>(null);
-  const [recordCandidates, setRecordCandidates] = useState<ChatRecordContextSnapshot | null>(null);
+  const [recordCandidates, setRecordCandidates] = useState<RecordSearchSnapshot | null>(null);
   const [recordPreviewQuery, setRecordPreviewQuery] = useState('');
   const [recordPreviewLoading, setRecordPreviewLoading] = useState(false);
   const [recordPreviewError, setRecordPreviewError] = useState('');
@@ -1021,7 +1023,7 @@ export function ChatPanel() {
           const response = await fetch('/api/records', { method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ action: 'chat-search', scope: recordLookupScope, folderPath: activeSessionFolder,
               sessionId, query, page: recordLookupScope === 'document' && pdfScope === 'page' ? activePdfPage : undefined }) });
-          const found = await response.json() as ChatRecordContextSnapshot & { error?: string };
+          const found = await response.json() as RecordSearchSnapshot & { error?: string };
           if (!response.ok) throw new Error(found.error || '기록을 검색하지 못했습니다.');
           if (recordSearchEpochRef.current !== epoch || inputRef.current?.value.trim() !== query) return;
           const ids = found.records.slice(0, 8).map((record) => record.id);
@@ -1707,6 +1709,7 @@ export function ChatPanel() {
           {recordPreviewError && <p role="alert" className="mt-1 text-[10px] text-error">{recordPreviewError}</p>}
           {recordCandidates && recordPreviewQuery === input.trim() && <div className="mt-2 max-h-32 space-y-1 overflow-y-auto border-t border-outline-variant/15 pt-2">
             {!recordCandidates.records.length && <p className="text-[10px] text-outline">질문과 일치하는 기록이 없습니다.</p>}
+            {(recordCandidates.searchStatus?.incomplete || recordCandidates.searchStatus?.candidateLimitReached || recordCandidates.searchStatus?.resultLimitReached) && <p role="status" className="rounded-md bg-amber-50 px-2 py-1 text-[10px] leading-4 text-amber-900">{recordCandidates.searchStatus?.documentListFailed ? '자료 목록 읽기 실패' : ''}{recordCandidates.searchStatus?.unscannedDocumentCount ? `PDF ${recordCandidates.searchStatus.scannedDocumentCount}/${recordCandidates.searchStatus.totalDocumentCount}개 검색 완료·${recordCandidates.searchStatus.unscannedDocumentCount}개 미검색` : ''}{recordCandidates.searchStatus?.failedDocumentCount ? ` · PDF ${recordCandidates.searchStatus.failedDocumentCount}개 읽기 실패` : ''}{recordCandidates.searchStatus?.unavailableDocumentCount ? ` · 원본을 찾을 수 없는 PDF ${recordCandidates.searchStatus.unavailableDocumentCount}개 제외` : ''}{recordCandidates.searchStatus?.recordScanLimitReached ? ` · 기록 ${recordCandidates.searchStatus.scannedRecordCount}개 검색 완료·5,000개 탐색 한도` : ''}{recordCandidates.searchStatus?.candidateLimitReached ? ' · 검색 후보 300개 한도' : ''}{recordCandidates.searchStatus?.resultLimitReached ? ' · 결과 표시 100개 한도' : ''} — 범위를 좁히려면 ‘현재 PDF 기록’을 선택하세요.</p>}
             {recordCandidates.records.map((record) => <label key={record.id} className="flex cursor-pointer gap-2 rounded-md px-1.5 py-1 hover:bg-surface-container-low">
               <input type="checkbox" checked={includedRecordIds.includes(record.id)} disabled={isLoading || recordPreviewLoading} onChange={(event) => void refreshSelectedRecords(event.target.checked ? [...includedRecordIds, record.id].slice(0, 8) : includedRecordIds.filter((id) => id !== record.id))} className="mt-0.5" />
               <span className="min-w-0"><span className="block truncate text-[11px] font-semibold text-on-surface">{record.title}</span>{studioDraftHrefFromRecordId(record.id) ? <span className="my-0.5 inline-flex rounded-full bg-tertiary-container px-2 py-0.5 text-[11px] font-semibold text-on-surface">개인 초안 · 검토 전 · 문헌 근거 아님</span> : <span className="block text-[11px] text-on-surface-variant">{record.provenanceLabel}</span>}<span className="line-clamp-2 block whitespace-pre-wrap text-[11px] leading-5 text-on-surface-variant">{record.excerpt}</span></span>

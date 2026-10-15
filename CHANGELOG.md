@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.9.5 — 2026-10-09 (local verification build; not publicly released)
+
+- First-run onboarding now offers direct entry to the Library without PDF-engine installation or AI setup; those optional setup steps remain accessible from the welcome screen.
+- Library load failures no longer masquerade as an empty collection. Users can retry, and failed refreshes retain the loaded tree and active Reader state. No document, sidecar, database, backup, or provider format changed.
+- Knowledge source search now previews and returns through the anchor matching the query, including stable PDF identity, page, and valid saved rectangles; the canonical note is untouched.
+- Local Library record search ranks matches before its result caps and clearly reports unavailable/failed PDFs, incomplete scans, and both the 300-candidate and 100-result caps in chat and concept synthesis. Discovery still scans at most 5,000 records across 200 PDFs, so larger libraries are not fully covered; explicitly selected canonical IDs are prioritized for hash-checked preview without changing the eight-record/8,000-character outbound limit.
+- These targeted usability/retrieval changes improve specialist-workflow readiness; market popularity and end-to-end professional learning outcomes remain unvalidated by human research.
+
 ## 0.9.4 — Current Windows app refresh
 
 - Package the latest Reader annotation fallback, Studio-draft retrieval, and study-workflow UI clarity changes in a freshly built Windows x64 NSIS installer. This local verification build is not a public release.

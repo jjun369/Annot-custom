@@ -1,11 +1,11 @@
 import type { KnowledgeNote, KnowledgeProvenanceKind, KnowledgeSnapshot, KnowledgeTopic } from '@/lib/knowledge-store';
-import type { TreeNode } from '@/types';
+import type { ChatSourceContext, TreeNode } from '@/types';
 
 export type KnowledgeRetrievalFilter = 'all' | 'topics' | 'sources' | KnowledgeProvenanceKind;
 
 export type KnowledgeSearchResult =
   | { kind: 'topic'; id: string; title: string; detail: string; preview: string; topic: KnowledgeTopic }
-  | { kind: 'source'; id: string; title: string; detail: string; preview: string; note: KnowledgeNote };
+  | { kind: 'source'; id: string; title: string; detail: string; preview: string; note: KnowledgeNote; readerAnchor?: ChatSourceContext };
 
 export interface KnowledgeReaderTarget {
   path: string;
@@ -130,15 +130,19 @@ export function searchKnowledgeRecords(
       if (filter !== 'all' && filter !== 'sources' && note.provenance?.kind !== filter) continue;
       const searchable = noteSearchableText(note);
       if (!matches(searchable, query)) continue;
-      const snippetSource = [...(note.sourceAnchors ?? []).map((item) => item.text ?? ''), note.rawText, note.summary, note.title, note.sourceName]
-        .find((text) => matches(text, query)) || note.rawText;
-      const anchor = note.sourceAnchors?.find((item) => item.text?.trim());
+      const anchor = note.sourceAnchors?.find((item) => item.text?.trim() && item.documentId && item.page && matches(item.text, query))
+        ?? note.sourceAnchors?.find((item) => item.text?.trim() && matches(item.text, query))
+        ?? note.sourceAnchors?.find((item) => item.text?.trim());
+      const snippetSource = anchor?.text?.trim()
+        ? anchor.text
+        : [note.rawText, note.summary, note.title, note.sourceName].find((text) => matches(text, query)) || note.rawText;
       results.push({
         kind: 'source',
         id: note.id,
         title: note.title || note.sourceName,
         detail: `${knowledgeProvenanceLabel(note.provenance?.kind)} · ${note.sourceName}${anchor?.page ? ` · p.${anchor.page}` : ''}`,
         preview: previewFor(snippetSource || anchor?.text || note.rawText, query),
+        ...(anchor?.documentId && anchor.page ? { readerAnchor: anchor } : {}),
         note,
       });
     }

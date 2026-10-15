@@ -231,8 +231,10 @@ export default function KnowledgePage() {
     return true;
   }
 
-  async function openSourceNote(note: KnowledgeNote): Promise<void> {
-    const anchor = note.sourceAnchors?.find((item) => item.documentId && item.page);
+  async function openSourceNote(note: KnowledgeNote, preferredAnchor?: ChatSourceContext): Promise<void> {
+    const anchor = preferredAnchor?.documentId && preferredAnchor.page
+      ? preferredAnchor
+      : note.sourceAnchors?.find((item) => item.documentId && item.page);
     if (!anchor) {
       setMessage({ text: '이 메모에는 PDF 페이지 연결이 없습니다. 저장된 메모와 출처 정보는 그대로 확인할 수 있습니다.', error: true });
       return;
@@ -776,10 +778,12 @@ export default function KnowledgePage() {
                 const note = data.notes.find((item) => item.id === selectedSourceNoteId);
                 if (!note) return <article className="rounded-2xl border border-outline-variant/25 bg-white p-6 text-xs text-on-surface-variant">이 원본 메모를 찾을 수 없습니다.</article>;
                 const linkedTopics = data.topics.filter((topic) => topic.sourceNoteIds.includes(note.id));
-                const anchor = note.sourceAnchors?.find((item) => item.documentId && item.page);
+                const matchedAnchor = retrievalResults.find((result) => result.kind === 'source' && result.note.id === note.id);
+                const anchor = matchedAnchor?.kind === 'source' ? matchedAnchor.readerAnchor
+                  : note.sourceAnchors?.find((item) => item.documentId && item.page);
                 return <article className="rounded-2xl border border-outline-variant/25 bg-white p-6 lg:p-8">
                   <div className="text-[10px] font-semibold text-outline">원본 메모 · {note.sourceName} · {dateLabel(note.createdAt)} · {knowledgeProvenanceLabel(note.provenance?.kind)}</div><h3 className="mt-2 text-xl font-bold">{note.title || note.sourceName}</h3>{note.summary && <p className="mt-2 text-sm leading-6 text-on-surface-variant">{note.summary}</p>}
-                  {anchor ? <div className="mt-4 rounded-xl bg-surface-container-low p-3"><p className="text-[10px] font-semibold text-on-surface-variant">저장된 원문 위치 · p.{anchor.page} — 저장된 영역 좌표가 유효하면 Reader에서 잠시 강조합니다. 텍스트 선택 자체를 재생성하지는 않습니다.</p>{anchor.text && <blockquote className="mt-2 border-l-2 border-primary/40 pl-3 text-xs leading-5">{anchor.text}</blockquote>}<button type="button" onClick={() => void openSourceNote(note)} className="mt-3 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary">원문 PDF p.{anchor.page} 열기</button></div> : <p className="mt-4 rounded-xl bg-surface-container-low p-3 text-xs text-on-surface-variant">이 메모에는 연결된 PDF 페이지가 없습니다. 메모와 출처 정보는 확인할 수 있지만 원문 PDF로 바로 이동할 수 없습니다.</p>}
+                  {anchor ? <div className="mt-4 rounded-xl bg-surface-container-low p-3"><p className="text-[10px] font-semibold text-on-surface-variant">저장된 원문 위치 · p.{anchor.page} — 저장된 영역 좌표가 유효하면 Reader에서 잠시 강조합니다. 텍스트 선택 자체를 재생성하지는 않습니다.</p>{anchor.text && <blockquote className="mt-2 border-l-2 border-primary/40 pl-3 text-xs leading-5">{anchor.text}</blockquote>}<button type="button" onClick={() => void openSourceNote(note, anchor)} className="mt-3 rounded-lg bg-primary px-3 py-2 text-[10px] font-bold text-on-primary">원문 PDF p.{anchor.page} 열기</button></div> : <p className="mt-4 rounded-xl bg-surface-container-low p-3 text-xs text-on-surface-variant">이 메모에는 연결된 PDF 페이지가 없습니다. 메모와 출처 정보는 확인할 수 있지만 원문 PDF로 바로 이동할 수 없습니다.</p>}
                   <div className="mt-5"><h4 className="text-xs font-bold">이 메모를 근거로 한 정리</h4>{linkedTopics.length ? <div className="mt-2 flex flex-wrap gap-2">{linkedTopics.map((topic) => <button key={topic.id} onClick={() => { setSelectedTopicId(topic.id); setSelectedSourceNoteId(null); }} className="rounded-lg bg-primary-container px-3 py-2 text-[10px] font-bold text-primary">{topic.title} · Rev.{topic.revision}</button>)}</div> : <p className="mt-2 text-xs text-on-surface-variant">아직 이 원본을 포함한 정리된 주제가 없습니다.</p>}</div>
                   <details className="mt-5 rounded-xl bg-surface-container-low p-4"><summary className="cursor-pointer text-xs font-bold">저장된 원본 메모 전체 보기</summary><p className="mt-3 whitespace-pre-wrap text-xs leading-6">{note.rawText}</p></details>
                 </article>;

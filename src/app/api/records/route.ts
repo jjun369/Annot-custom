@@ -3,7 +3,7 @@ import { getSession } from '@/lib/annot-sessions';
 import { getProviderRuntime } from '@/lib/ai-providers';
 import { normalizeModelPreference } from '@/lib/ai-providers/model-policy';
 import { normalizeReasoningEffort } from '@/lib/ai-providers/reasoning-policy';
-import { previewLibraryRecords, retrieveDocumentRecords, searchLibraryRecords, selectBoundedRecords, selectLibraryRecordSnapshot } from '@/lib/record-retrieval';
+import { previewLibraryRecords, retrieveDocumentRecords, searchLibraryRecords, searchLibraryRecordsWithStatus, selectBoundedRecords, selectLibraryRecordSnapshot } from '@/lib/record-retrieval';
 import { buildConceptSynthesisPrompt } from '@/lib/concept-synthesis-prompt';
 import { createStudioDraft, type StudioReference } from '@/lib/sources-studio';
 import type { AIProvider, ReasoningEffort } from '@/types';
@@ -44,8 +44,8 @@ export async function POST(request: NextRequest) {
       const query = typeof body.query === 'string' ? body.query.trim().slice(0, 4_000) : '';
       if (!query) return NextResponse.json({ error: '검색어가 필요합니다.' }, { status: 400 });
       if (body.scope === 'library') {
-        const records = await searchLibraryRecords(query, { includeStudioDrafts: true });
-        return NextResponse.json(selectBoundedRecords(query, records, { scope: 'library' }), { headers: { 'Cache-Control': 'no-store' } });
+        const search = await searchLibraryRecordsWithStatus(query, { includeStudioDrafts: true });
+        return NextResponse.json({ ...selectBoundedRecords(query, search.records, { scope: 'library' }), searchStatus: search.status }, { headers: { 'Cache-Control': 'no-store' } });
       }
       if (!folderPath || !sessionId) return NextResponse.json({ error: 'PDF 대화가 필요합니다.' }, { status: 400 });
       const session = await getSession(folderPath, sessionId);
@@ -57,8 +57,10 @@ export async function POST(request: NextRequest) {
     if (action === 'library-search') {
       const query = typeof body.query === 'string' ? body.query.trim().slice(0, 2_000) : '';
       if (!query) return NextResponse.json({ records: [] }, { headers: { 'Cache-Control': 'no-store' } });
-      const candidates = await searchLibraryRecords(query, { includeStudioDrafts: body.includeStudioDrafts === true });
-      return NextResponse.json(previewLibraryRecords(query, candidates), { headers: { 'Cache-Control': 'no-store' } });
+      const search = await searchLibraryRecordsWithStatus(query, { includeStudioDrafts: body.includeStudioDrafts === true });
+      const preview = previewLibraryRecords(query, search.records);
+      return NextResponse.json({ ...preview, totalCount: search.status.matchingRecordCount,
+        omittedCount: Math.max(0, search.status.matchingRecordCount - preview.records.length), searchStatus: search.status }, { headers: { 'Cache-Control': 'no-store' } });
     }
     if (action === 'save-synthesis-draft') {
       const question = typeof body.question === 'string' ? body.question.trim().slice(0, 2_000) : '';

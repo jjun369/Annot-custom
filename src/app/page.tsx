@@ -97,6 +97,8 @@ export default function AppPage() {
   const [preferencesHydrated, setPreferencesHydrated] = useState(false);
   const [isResizingChat, setIsResizingChat] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(0);
+  const [treeLoadError, setTreeLoadError] = useState<string | null>(null);
+  const [treeLoadAttempt, setTreeLoadAttempt] = useState(0);
   const mainContentRef = useRef<HTMLDivElement>(null);
   const chatOverlayRef = useRef<HTMLDivElement>(null);
   const chatFocusReturnRef = useRef<HTMLElement | null>(null);
@@ -333,6 +335,7 @@ export default function AppPage() {
     }
 
     const nextTree = data as TreeNode;
+    setTreeLoadError(null);
 
     setState((current) => {
       const nextSelectedNode = current.selectedNode
@@ -430,6 +433,8 @@ export default function AppPage() {
     let cancelled = false;
 
     const loadTree = async () => {
+      setState((current) => ({ ...current, treeLoading: true }));
+      setTreeLoadError(null);
       try {
         const res = await fetch('/api/workspace/tree', { cache: 'no-store' });
         const data = await res.json();
@@ -491,17 +496,8 @@ export default function AppPage() {
         }
       } catch {
         if (!cancelled) {
-          setState((current) => ({
-            ...current,
-            treeRoot: {
-              id: 'root',
-              name: 'PageDock Library',
-              type: 'folder',
-              path: '',
-              children: [],
-            },
-            treeLoading: false,
-          }));
+          setState((current) => ({ ...current, treeLoading: false }));
+          setTreeLoadError('연결 상태를 확인하고 다시 시도해 주세요.');
         }
       }
     };
@@ -511,7 +507,12 @@ export default function AppPage() {
     return () => {
       cancelled = true;
     };
-  }, [openPdfInContext]);
+  }, [openPdfInContext, treeLoadAttempt]);
+
+  const retryTreeLoad = useCallback(() => {
+    setTreeLoadError(null);
+    setTreeLoadAttempt((attempt) => attempt + 1);
+  }, []);
 
   useEffect(() => {
     if (!isResizingChat) {
@@ -653,10 +654,18 @@ export default function AppPage() {
         <Topbar />
         <div className="flex-1 flex overflow-hidden">
           {/* Tree Explorer */}
-          <TreeExplorer forceCompact={forceCompactExplorer} />
+          <TreeExplorer forceCompact={forceCompactExplorer} loadError={Boolean(treeLoadError)} onRetry={retryTreeLoad} />
 
           {/* Main Content Area */}
           <div ref={mainContentRef} className="relative flex min-w-0 flex-1 bg-surface">
+            {treeLoadError && state.treeRoot && (state.activePdf || state.selectedNode?.type === 'folder') && (
+              <div role="alert" className="absolute left-4 right-4 top-4 z-30 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-500/30 bg-surface-container-lowest px-4 py-3 text-sm text-on-surface shadow-lg">
+                <span>라이브러리를 새로 불러오지 못했습니다. 현재 화면과 기존 문서는 그대로 유지됩니다. ({treeLoadError})</span>
+                <button type="button" onClick={retryTreeLoad} className="rounded-lg border border-outline-variant/30 px-3 py-1.5 font-semibold hover:bg-surface-container">
+                  다시 시도
+                </button>
+              </div>
+            )}
             {state.activePdf ? (
               // PDF is open — show viewer
               <div className="flex min-w-0 flex-1 overflow-hidden">
@@ -666,6 +675,25 @@ export default function AppPage() {
               // Folder selected — show folder overview
               <div className="flex-1 min-w-0">
                 <FolderView />
+              </div>
+            ) : !state.treeRoot && state.treeLoading ? (
+              <div role="status" className="flex flex-1 items-center justify-center p-8 text-sm text-on-surface-variant">
+                라이브러리를 불러오는 중…
+              </div>
+            ) : treeLoadError ? (
+              <div className="flex flex-1 items-center justify-center p-8">
+                <div role="alert" className="w-full max-w-sm rounded-2xl border border-amber-500/30 bg-surface-container-lowest px-8 py-9 text-center shadow-sm">
+                  <PageDockMark size={48} className="mx-auto mb-4 rounded-xl opacity-90 shadow-sm" />
+                  <h2 className="text-base font-semibold text-on-surface">라이브러리를 불러오지 못했습니다</h2>
+                  <p className="mt-2 break-words text-xs leading-5 text-on-surface-variant">
+                    {state.treeRoot
+                      ? '새로 고친 목록을 읽지 못했습니다. 현재 라이브러리 데이터는 유지했습니다.'
+                      : '목록을 읽지 못해 비어 있다고 판단하지 않았습니다.'}
+                  </p>
+                  <button type="button" onClick={retryTreeLoad} className="mt-5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-on-primary">
+                    다시 시도
+                  </button>
+                </div>
               </div>
             ) : (
               // Nothing selected — distinguish an empty library from an unselected document.

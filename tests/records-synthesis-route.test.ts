@@ -5,6 +5,10 @@ const fixtures = vi.hoisted(() => ({
   selectSnapshot: vi.fn(),
   createDraft: vi.fn(),
   searchRecords: vi.fn(async () => []),
+  searchRecordsWithStatus: vi.fn(async () => ({ records: [], status: { incomplete: false, recordScanLimitReached: false,
+    documentListFailed: false, scannedRecordCount: 0, scannedDocumentCount: 0, totalDocumentCount: 0,
+    unscannedDocumentCount: 0, unavailableDocumentCount: 0, failedDocumentCount: 0, matchingRecordCount: 0,
+    candidateLimitReached: false, resultLimitReached: false } })),
 }));
 
 vi.mock('@/lib/annot-sessions', () => ({ getSession: vi.fn() }));
@@ -13,7 +17,7 @@ vi.mock('@/lib/ai-providers/model-policy', () => ({ normalizeModelPreference: vi
 vi.mock('@/lib/ai-providers/reasoning-policy', () => ({ normalizeReasoningEffort: vi.fn(() => 'auto') }));
 vi.mock('@/lib/concept-synthesis-prompt', () => ({ buildConceptSynthesisPrompt: vi.fn(() => 'prompt') }));
 vi.mock('@/lib/record-retrieval', () => ({
-  previewLibraryRecords: vi.fn(() => ({ records: [], totalCount: 0, omittedCount: 0 })), retrieveDocumentRecords: vi.fn(), searchLibraryRecords: fixtures.searchRecords, selectBoundedRecords: vi.fn(),
+  previewLibraryRecords: vi.fn(() => ({ records: [], totalCount: 0, omittedCount: 0 })), retrieveDocumentRecords: vi.fn(), searchLibraryRecords: fixtures.searchRecords, searchLibraryRecordsWithStatus: fixtures.searchRecordsWithStatus, selectBoundedRecords: vi.fn(),
   selectLibraryRecordSnapshot: fixtures.selectSnapshot,
 }));
 vi.mock('@/lib/sources-studio', () => ({ createStudioDraft: fixtures.createDraft }));
@@ -53,14 +57,25 @@ describe('synthesis draft freshness boundary', () => {
     fixtures.selectSnapshot.mockResolvedValue(snapshot);
     fixtures.createDraft.mockResolvedValue({ id: 'draft-new' });
     fixtures.searchRecords.mockResolvedValue([]);
+    fixtures.searchRecordsWithStatus.mockResolvedValue({ records: [], status: { incomplete: false, recordScanLimitReached: false,
+      documentListFailed: false, scannedRecordCount: 0, scannedDocumentCount: 0, totalDocumentCount: 0,
+      unscannedDocumentCount: 0, unavailableDocumentCount: 0, failedDocumentCount: 0, matchingRecordCount: 0,
+      candidateLimitReached: false, resultLimitReached: false } });
   });
 
   test('keeps Studio drafts out of synthesis search unless the explicit opt-in is true', async () => {
     expect((await POST(librarySearchRequest())).status).toBe(200);
-    expect(fixtures.searchRecords).toHaveBeenLastCalledWith('prior synthesis', { includeStudioDrafts: false });
+    expect(fixtures.searchRecordsWithStatus).toHaveBeenLastCalledWith('prior synthesis', { includeStudioDrafts: false });
 
+    fixtures.searchRecordsWithStatus.mockResolvedValue({ records: [], status: { incomplete: true, recordScanLimitReached: false,
+      documentListFailed: false, scannedRecordCount: 410, scannedDocumentCount: 7, totalDocumentCount: 9,
+      unscannedDocumentCount: 2, unavailableDocumentCount: 0, failedDocumentCount: 0, matchingRecordCount: 125,
+      candidateLimitReached: false, resultLimitReached: true } });
     expect((await POST(librarySearchRequest(true))).status).toBe(200);
-    expect(fixtures.searchRecords).toHaveBeenLastCalledWith('prior synthesis', { includeStudioDrafts: true });
+    expect(fixtures.searchRecordsWithStatus).toHaveBeenLastCalledWith('prior synthesis', { includeStudioDrafts: true });
+    const body = await (await POST(librarySearchRequest(true))).json();
+    expect(body).toMatchObject({ totalCount: 125, omittedCount: 125, searchStatus: { incomplete: true,
+      scannedDocumentCount: 7, totalDocumentCount: 9, unscannedDocumentCount: 2, resultLimitReached: true } });
   });
 
   test('creates a new Studio draft using only the fresh server-resolved source snapshots', async () => {
